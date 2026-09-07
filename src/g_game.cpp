@@ -715,7 +715,7 @@ static inline int joyint(double val)
 	}
 }
 
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
 extern void Mobile_IN_Move(ticcmd_t* cmd );
 #endif
 
@@ -879,7 +879,7 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 		forward += (int)((float)mousey * m_forward);
 	}
 
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
     Mobile_IN_Move(cmd);
 #endif
 

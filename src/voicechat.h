@@ -56,7 +56,10 @@
 #include "i_soundinternal.h"
 #include "v_font.h"
 
+#ifndef NO_SOUND
 #define NO_SOUND
+#define ZANDRONUM_VOICECHAT_LOCAL_NO_SOUND
+#endif
 
 
 // [AK] Only include FMOD, Opus, and RNNoise files if compiling with sound.
@@ -368,6 +371,9 @@ EXTERN_CVAR( Bool, sv_proximityvoicechat )
 EXTERN_CVAR( Float, sv_minproximityrolloffdist )
 EXTERN_CVAR( Float, sv_maxproximityrolloffdist )
 
+#ifdef ZANDRONUM_VOICECHAT_LOCAL_NO_SOUND
+#undef ZANDRONUM_VOICECHAT_LOCAL_NO_SOUND
 #undef NO_SOUND
+#endif
 
 #endif // __VOICECHAT_H__

@@ -68,10 +68,6 @@
 #include "gl/utility/gl_templates.h"
 #include "gl/models/gl_models.h"
 
-#ifdef __ANDROID__
-#include "Framebuffer.h"
-#endif
-
 //===========================================================================
 // 
 // Renderer interface
@@ -236,9 +232,6 @@ void FGLRenderer::EndOffscreen()
 	if (gl.flags & RFL_FRAMEBUFFER)
 	{
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-#ifdef __ANDROID__
-		touchcontrols::R_FrameBufferStart();
-#endif
 	}
 }
 

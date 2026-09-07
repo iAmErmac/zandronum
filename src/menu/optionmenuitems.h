@@ -393,7 +393,7 @@ public:
 #ifndef NO_IMP
 IMPLEMENT_ABSTRACT_CLASS(DEnterKey)
 #endif
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
 extern bool g_bindingbutton;
 #endif
 //=============================================================================
@@ -446,7 +446,7 @@ public:
 		if (mkey == MKEY_Input)
 		{
 			mWaiting = false;
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
             g_bindingbutton = false;
 #endif
 			mBindings->SetBind(mInput, mAction);
@@ -460,7 +460,7 @@ public:
 		else if (mkey == MKEY_Abort)
 		{
 			mWaiting = false;
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
             g_bindingbutton = false;
 #endif
 			return true;
@@ -472,7 +472,7 @@ public:
 	{
 		S_Sound (CHAN_VOICE | CHAN_UI, "menu/choose", snd_menuvolume, ATTN_NONE);
 		mWaiting = true;
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
         g_bindingbutton = true;
 #endif
 		DMenu *input = new DEnterKey(DMenu::CurrentMenu, &mInput);

@@ -74,7 +74,6 @@
 #define NO_IMP
 #include "menu/optionmenuitems.h"
 
-#define NO_SOUND
 //*****************************************************************************
 //	CONSOLE VARIABLES
 

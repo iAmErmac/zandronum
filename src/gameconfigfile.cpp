@@ -67,6 +67,10 @@ extern HWND Window;
 // [RC] For name cleaning
 #include "v_text.h"
 
+#ifdef __ANDROID__
+extern "C" const char *userFilesPath_c;
+#endif
+
 EXTERN_CVAR (Bool, con_centernotify)
 EXTERN_CVAR (Int, msg0color)
 EXTERN_CVAR (Color, color)
@@ -111,6 +115,13 @@ FGameConfigFile::FGameConfigFile ()
 		SetSection ("IWADSearch.Directories", true);
 		SetValueForKey ("Path", ".", true);
 		SetValueForKey ("Path", "$DOOMWADDIR", true);
+#ifdef __ANDROID__
+		FString androidRootPath = userFilesPath_c;
+		SetValueForKey ("Path", androidRootPath, true);
+		FString androidWadPath = androidRootPath;
+		androidWadPath += "/wads";
+		SetValueForKey ("Path", androidWadPath, true);
+#endif
 #ifdef __APPLE__
 		char cpath[PATH_MAX];
 		FSRef folder;
@@ -163,6 +174,13 @@ FGameConfigFile::FGameConfigFile ()
 		SetValueForKey ("Path", SHARE_DIR, true);
 #endif
 		SetValueForKey ("Path", "$DOOMWADDIR", true);
+#ifdef __ANDROID__
+		FString androidRootPath = userFilesPath_c;
+		SetValueForKey ("Path", androidRootPath, true);
+		FString androidWadPath = androidRootPath;
+		androidWadPath += "/wads";
+		SetValueForKey ("Path", androidWadPath, true);
+#endif
 	}
 
 	// Create auto-load sections, so users know what's available.

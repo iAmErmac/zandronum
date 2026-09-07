@@ -478,16 +478,15 @@ FString GetUserFile (const char *file)
 	struct stat info;
 #ifdef __ANDROID__
 	path = userFilesPath_c;
-	path += "/zandronum_3.1/";
-
-    if (stat (path, &info) == -1)
-    {
-        if (mkdir (path, S_IRUSR | S_IWUSR | S_IXUSR) == -1)
-        {
-            I_FatalError ("Failed to create ~/.config directory:\n%s", strerror(errno));
-        }
-    }
-    return path + file;
+	if (stat (path, &info) == -1)
+	{
+		CreatePath (path);
+	}
+	else if (!S_ISDIR (info.st_mode))
+	{
+		I_FatalError ("%s must be a directory", path.GetChars ());
+	}
+	return path + "/" + file;
 #else
 	path = NicePath("~/" GAME_DIR "/");
 #endif
@@ -554,11 +553,13 @@ FString GetUserFile (const char *file)
 
 FString M_GetCachePath(bool create)
 {
+#ifdef __ANDROID__
+	FString path = userFilesPath_c;
+	path += "/cache";
+#else
 	// Don't use GAME_DIR and such so that ZDoom and its child ports can
 	// share the node cache.
 	FString path = NicePath("~/.config/zdoom/cache");
-#ifdef __ANDROID__
-    path = "./user_files/zandronum_3.1/";
 #endif
 	if (create)
 	{
@@ -647,7 +648,7 @@ FString M_GetScreenshotsPath()
 {
 #ifdef __ANDROID__
 	FString path = userFilesPath_c;
-    path += "/zandronum_3.1/screenshots/";
+    path += "/screenshots/";
 
     return NicePath(path.GetChars());
 #else
@@ -667,7 +668,7 @@ FString M_GetSavegamesPath()
 {
 #ifdef __ANDROID__
 	FString path = userFilesPath_c;
-	path += "/zandronum_3.1/saves/";
+	path += "/saves/";
 
 	return NicePath(path.GetChars());
 #else

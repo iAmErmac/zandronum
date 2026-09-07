@@ -2,8 +2,6 @@
 
 // HEADER FILES ------------------------------------------------------------
 
-#include <iostream>
-
 #include "doomtype.h"
 
 #include "templates.h"
@@ -286,9 +284,6 @@ bool SDLGLVideo::SetResolution (int width, int height, int bits)
 // 
 //
 //==========================================================================
-#ifdef __ANDROID__
-extern int glesLoad;
-#endif
 bool SDLGLVideo::SetupPixelFormat(bool allowsoftware, int multisample)
 {
 	SDL_GL_SetAttribute( SDL_GL_RED_SIZE,  8 );
@@ -308,18 +303,9 @@ bool SDLGLVideo::SetupPixelFormat(bool allowsoftware, int multisample)
 	}
 
 #ifdef __ANDROID__
-    const char *version = Args->CheckValue("-glversion");
-    if( !strcmp(version, "gles1") )
-    {
-        glesLoad = 1;
-    }
-    else if ( !strcmp(version, "gles2") )
-    {
-        glesLoad = 2;
-    }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, glesLoad);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+	// The Android host owns the EGL context; request the renderer baseline.
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
 #endif
 	return true;
 }

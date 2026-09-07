@@ -3,16 +3,16 @@ LOCAL_PATH := $(call my-dir)/../src
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE    := zan_3.2
+LOCAL_MODULE    := main
 
 
-LOCAL_CFLAGS   :=  -DNO_CLOCK_GETTIME -D__MOBILE__ -DNO_SERVER_GUI -DSDL2_COMPAT -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
-LOCAL_CPPFLAGS := -DNOASM -DFMOD_STUDIO -DDISABLE_SSE -DHAVE_FLUIDSYNTH  -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DHAVE_JWZGLES -DUSE_GLES  -Wno-format-security  -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
+LOCAL_CFLAGS   :=  -DNO_CLOCK_GETTIME -D__MOBILE__ -DNO_SERVER_GUI -DNO_SOUND -DZANDRONUM_NO_LEGACY_TOUCH -DSDL2_COMPAT -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
+LOCAL_CPPFLAGS := -DNOASM -DDISABLE_SSE -DHAVE_FLUIDSYNTH -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DHAVE_JWZGLES -DUSE_GLES -Wno-format-security -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
 #-std=gnu++1y -DHAVE_FLUIDSYNTH
 
 LOCAL_C_INCLUDES := \
  $(TOP_DIR)/ \
- $(TOP_DIR)/AudioLibs_OpenTouch/fluidsynth/src/main/jni/fluidsynth-android/include \
+ $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/fluidsynth-lite/include \
  $(GZDOOM_TOP_PATH)/src/  \
  $(GZDOOM_TOP_PATH)/mobile/src/extrafiles  \
  $(GZDOOM_TOP_PATH)/mobile/src/sqlite \
@@ -36,18 +36,14 @@ LOCAL_C_INCLUDES := \
  $(GZDOOM_TOP_PATH)/src/sdl \
  $(GZDOOM_TOP_PATH)/rnnoise \
  $(SDL_INCLUDE_PATHS) \
- $(TOP_DIR)/AudioLibs_OpenTouch/openal-soft/src/main/jni/openal/include/AL \
- $(TOP_DIR)/AudioLibs_OpenTouch/timidity/opus/include \
- $(TOP_DIR)/AudioLibs_OpenTouch/libsndfile-android/jni/ \
- $(TOP_DIR)/AudioLibs_OpenTouch/libmpg123 \
- $(TOP_DIR)/AudioLibs_OpenTouch/FMOD_studio/api/lowlevel/inc \
- $(TOP_DIR)/jpeg8d \
+ $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/openal/include/AL \
+ $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/timidity/opus/include \
+ $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/libsndfile-android/jni/ \
+ $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/libmpg123 \
+ $(TOP_DIR)/legacy-mobile/doom/src/main/jni/jpeg8d \
  $(TOP_DIR)/Clibs_OpenTouch \
- $(TOP_DIR)/Clibs_OpenTouch/idtech1 \
  $(TOP_DIR)/jwzgles \
- $(TOP_DIR)/gl4es/include \
- $(TOP_DIR)/MobileTouchControls  \
- $(TOP_DIR)/secure/openssl/include \
+ $(TOP_DIR)/openssl/openssl-1.1.1k-clang/include \
  $(GZDOOM_TOP_PATH)/mobile/src
 
 
@@ -57,11 +53,9 @@ LOCAL_C_INCLUDES := \
 
 
 ANDROID_SRC_FILES = \
-    ../../../Clibs_OpenTouch/idtech1/touch_interface.cpp \
-    ../../../Clibs_OpenTouch/idtech1/android_jni.cpp \
-    ../../../Clibs_OpenTouch/idtech1/zan_game_interface.cpp \
     ../mobile/src/sqlite/sqlite3.c \
     ../mobile/src/extrafiles/gl_load.c \
+    ../mobile/src/zandronum_sdl_main.cpp \
     ../GeoIP/GeoIP.c
 
 PLAT_SDL_SOURCES = \
@@ -416,8 +410,8 @@ GAME_ALL = \
 	resourcefiles/file_pak.cpp \
 	resourcefiles/file_directory.cpp \
 	resourcefiles/resourcefile.cpp \
+	voicechat.cpp \
 	sfmt/SFMT.cpp \
-	sound/fmodsound_studio.cpp \
 	sound/i_music.cpp \
 	sound/i_sound.cpp \
 	sound/music_cd.cpp \
@@ -486,7 +480,6 @@ GAME_ALL = \
 	r_data/renderstyle.cpp \
 	r_data/r_interpolate.cpp \
 	r_data/r_translate.cpp \
-    voicechat.cpp \
 	zzautozend.cpp \
 
 LOCAL_SRC_FILES = \
@@ -497,11 +490,11 @@ LOCAL_SRC_FILES = \
     $(PLAT_SDL_SOURCES) \
 
 
-LOCAL_LDLIBS := -ldl -llog -lOpenSLES  -lGLESv1_CM
+LOCAL_LDLIBS := -ldl -llog -lOpenSLES -lGLESv1_CM -lGLESv2
 LOCAL_LDLIBS +=  -lEGL
 
-LOCAL_STATIC_LIBRARIES := sndfile mpg123 SDL2_net libjpeg zlib_zan31 lzma_zan31 gdtoa_zan31 dumb_zan31 gme_zan31 bzip2_zan31 logwritter opus #ssl_static crypto_static
-LOCAL_SHARED_LIBRARIES := touchcontrols openal-soft  SDL2 jwzgles_shared fmod core_shared fluidsynth saffal
+LOCAL_STATIC_LIBRARIES := sndfile mpg123 fluidsynth-static libjpeg zlib_zan31 lzma_zan31 gdtoa_zan31 dumb_zan31 gme_zan31 bzip2_zan31 logwritter opus opencrypto_static
+LOCAL_SHARED_LIBRARIES := openal SDL jwzgles_shared
 
 #Strip unused functions/data
 LOCAL_CFLAGS += -fvisibility=hidden

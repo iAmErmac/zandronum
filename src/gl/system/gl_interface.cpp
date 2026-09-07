@@ -55,20 +55,10 @@ char myGlBeginCharArray[4] = {0,0,0,0};
 #define LPCSTR const char*
 
 #ifdef __ANDROID__
-#include <dlfcn.h>
+#include <SDL.h>
 void * wglGetProcAddress(const char * name)
 {
-	static void* h = NULL;
-
-	if (h == NULL)
-	{
-		h = dlopen("libGL4ES.so", RTLD_LAZY | RTLD_LOCAL);
-	}
-
-	void * ret = 0;
-	ret =  dlsym(h, (const char*)name);
-
-	return ret;
+	return SDL_GL_GetProcAddress(name);
 }
 #else
 #include <SDL.h>

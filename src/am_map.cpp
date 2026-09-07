@@ -1607,7 +1607,7 @@ void AM_doFollowPlayer ()
 	}
 }
 
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
 void Mobile_AM_controls(double *zoom, double *pan_x, double *pan_y );
 #endif
 
@@ -1637,7 +1637,7 @@ void AM_Ticker ()
 		if (Button_AM_PanDown.bDown) m_paninc.y -= FTOM(F_PANINC);
 	}
 
-#ifdef __MOBILE__
+#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
     double zoom=0;
     double px=0;
     double py=0;
@@ -1721,9 +1721,9 @@ bool AM_clipMline (mline_t *ml, fline_t *fl)
 		TOP		=8
 	};
 
-	register int outcode1 = 0;
-	register int outcode2 = 0;
-	register int outside;
+	int outcode1 = 0;
+	int outcode2 = 0;
+	int outside;
 
 	fpoint_t tmp = { 0, 0 };
 	int dx;
