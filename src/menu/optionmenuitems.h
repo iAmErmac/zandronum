@@ -393,9 +393,6 @@ public:
 #ifndef NO_IMP
 IMPLEMENT_ABSTRACT_CLASS(DEnterKey)
 #endif
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-extern bool g_bindingbutton;
-#endif
 //=============================================================================
 //
 // // Edit a key binding, Action is the CCMD to bind
@@ -446,9 +443,6 @@ public:
 		if (mkey == MKEY_Input)
 		{
 			mWaiting = false;
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-            g_bindingbutton = false;
-#endif
 			mBindings->SetBind(mInput, mAction);
 			return true;
 		}
@@ -460,9 +454,6 @@ public:
 		else if (mkey == MKEY_Abort)
 		{
 			mWaiting = false;
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-            g_bindingbutton = false;
-#endif
 			return true;
 		}
 		return false;
@@ -472,9 +463,6 @@ public:
 	{
 		S_Sound (CHAN_VOICE | CHAN_UI, "menu/choose", snd_menuvolume, ATTN_NONE);
 		mWaiting = true;
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-        g_bindingbutton = true;
-#endif
 		DMenu *input = new DEnterKey(DMenu::CurrentMenu, &mInput);
 		M_ActivateMenu(input);
 		return true;

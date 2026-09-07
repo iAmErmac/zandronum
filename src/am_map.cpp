@@ -1220,7 +1220,6 @@ void AM_changeWindowLoc ()
 	AM_ScrollParchment (m_x != oldmx ? oincx : 0, m_y != oldmy ? -oincy : 0);
 }
 
-
 //=============================================================================
 //
 //
@@ -1607,9 +1606,6 @@ void AM_doFollowPlayer ()
 	}
 }
 
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-void Mobile_AM_controls(double *zoom, double *pan_x, double *pan_y );
-#endif
 
 //=============================================================================
 //
@@ -1637,16 +1633,6 @@ void AM_Ticker ()
 		if (Button_AM_PanDown.bDown) m_paninc.y -= FTOM(F_PANINC);
 	}
 
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-    double zoom=0;
-    double px=0;
-    double py=0;
-
-	Mobile_AM_controls(&zoom,&px,&py);
-	am_zoomdir += zoom;
-	m_paninc.x += px * 8000;
-	m_paninc.y += py * 8000;
-#endif
 
 	// Change the zoom if necessary
 	if (Button_AM_ZoomIn.bDown || Button_AM_ZoomOut.bDown || am_zoomdir != 0)

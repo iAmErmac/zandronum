@@ -72,6 +72,9 @@
 #include "c_console.h"
 #include "c_dispatch.h"
 #include "i_system.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "i_sound.h"
 #include "i_video.h"
 #include "g_game.h"
@@ -860,6 +863,14 @@ CVAR (Flag, compat_noobituaries, zacompatflags, ZACOMPATF_NO_OBITUARIES);
 
 void D_Display ()
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		screen->Update();
+		return;
+	}
+#endif
+
 	bool wipe;
 	bool hw2d;
 

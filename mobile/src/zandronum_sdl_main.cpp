@@ -4,6 +4,10 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <android/log.h>
+#include "gl/system/gl_android.h"
+#include "zandronum_android_lifecycle.h"
+#include "zandronum_android_input.h"
 
 extern int main_android(int argc, char **argv);
 extern "C" void SDL_Android_Init(JNIEnv *, jclass);
@@ -20,6 +24,7 @@ extern "C" void Java_com_beloko_libsdl_SDLLib_onNativeKeyUp(JNIEnv *, jclass, ji
 extern "C" void Java_com_beloko_libsdl_SDLLib_onNativeTouch(JNIEnv *, jclass, jint, jint, jint, jfloat, jfloat, jfloat);
 extern "C" void Java_com_beloko_libsdl_SDLLib_onNativeAccel(JNIEnv *, jclass, jfloat, jfloat, jfloat);
 extern "C" void Java_com_beloko_libsdl_SDLLib_nativeRunAudioThread(JNIEnv *, jclass);
+extern "C" void Android_JNI_PollSurfaceState(int *, int *);
 #if defined(__GNUC__)
 #define ZANDRONUM_JNI_EXPORT __attribute__((visibility("default"), used))
 #else
@@ -79,6 +84,36 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_org_libsdl_app_SDLActivity_onNativeAcc
 extern "C" ZANDRONUM_JNI_EXPORT void Java_org_libsdl_app_SDLActivity_nativeRunAudioThread(JNIEnv *env, jclass cls)
 {
     Java_com_beloko_libsdl_SDLLib_nativeRunAudioThread(env, cls);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputKey(
+    JNIEnv *, jclass, jint keycode, jboolean pressed)
+{
+    Zandronum_AndroidInput_Key(static_cast<int>(keycode), pressed != 0);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputText(
+    JNIEnv *, jclass, jint codepoint)
+{
+    Zandronum_AndroidInput_Text(static_cast<int>(codepoint));
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputPointer(
+    JNIEnv *, jclass, jint pointerId, jint action, jfloat x, jfloat y)
+{
+    Zandronum_AndroidInput_Pointer(static_cast<int>(pointerId), static_cast<int>(action), x, y);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputAxis(
+    JNIEnv *, jclass, jint axis, jfloat value)
+{
+    Zandronum_AndroidInput_Axis(static_cast<int>(axis), value);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputAction(
+    JNIEnv *, jclass, jint action, jboolean pressed)
+{
+    Zandronum_AndroidInput_Action(static_cast<int>(action), pressed != 0);
 }
 static std::vector<std::string> ReadArguments()
 {
@@ -141,4 +176,22 @@ extern "C" int SDL_main(int, char **)
         argv.push_back(const_cast<char *>(argument.c_str()));
     }
     return main_android(static_cast<int>(argv.size()), argv.data());
+}
+
+void Zandronum_Android_ProcessSurfaceState(int width, int height)
+{
+    int surfaceLost = 0;
+    int surfaceRestored = 0;
+    Android_JNI_PollSurfaceState(&surfaceLost, &surfaceRestored);
+    if (surfaceLost || surfaceRestored)
+        __android_log_print(ANDROID_LOG_INFO, "Zandronum", "surface state lost=%d restored=%d",
+                            surfaceLost, surfaceRestored);
+    if (surfaceLost)
+    {
+        gl_AndroidNativeGLES_OnContextLost();
+    }
+    if (surfaceRestored)
+    {
+        gl_AndroidNativeGLES_OnContextRestored(width, height);
+    }
 }

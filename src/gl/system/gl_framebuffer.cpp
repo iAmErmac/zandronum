@@ -52,6 +52,9 @@
 #include "farchive.h"
 
 #include "gl/system/gl_interface.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "gl/system/gl_framebuffer.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_lightdata.h"
@@ -93,6 +96,17 @@ OpenGLFrameBuffer::OpenGLFrameBuffer(void *hMonitor, int width, int height, int 
 	LastCamera = NULL;
 
 	InitializeState();
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		DoSetGamma();
+		needsetgamma = true;
+		swapped = false;
+		Accel2D = false;
+		SetVSync(vid_vsync);
+		return;
+	}
+	#endif
 	gl_SetupMenu();
 	gl_GenerateGlobalBrightmapFromColormap();
 	DoSetGamma();
@@ -119,6 +133,19 @@ void OpenGLFrameBuffer::InitializeState()
 	static bool first=true;
 
 	gl_LoadExtensions();
+
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_InitializeBootstrap(GetWidth(), GetHeight()))
+	{
+		if (first)
+		{
+			first = false;
+			gl_AndroidNativeGLES_PrintStartupLog();
+		}
+		return;
+	}
+#endif
+
 	Super::InitializeState();
 	if (first)
 	{
@@ -196,6 +223,15 @@ CVAR(Bool, gl_draw_sync, true, 0) //false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 void OpenGLFrameBuffer::Update()
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		Swap();
+		Unlock();
+		return;
+	}
+	#endif
+
 	if (!CanUpdate()) 
 	{
 		GLRenderer->Flush();
@@ -230,8 +266,22 @@ void OpenGLFrameBuffer::Update()
 //
 //==========================================================================
 #include "gl/renderer/gl_renderstate.h"
+#ifdef __ANDROID__
+#include "../../../mobile/src/zandronum_android_lifecycle.h"
+#endif
 void OpenGLFrameBuffer::Swap()
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		Zandronum_Android_ProcessSurfaceState(GetWidth(), GetHeight());
+		gl_AndroidNativeGLES_RenderBootstrap(GetWidth(), GetHeight());
+		SwapBuffers();
+		swapped = true;
+		return;
+	}
+	#endif
+
 	Finish.Reset();
 	Finish.Clock();
 #ifndef __ANDROID__
@@ -406,6 +456,11 @@ FNativePalette *OpenGLFrameBuffer::CreatePalette(FRemapTable *remap)
 //==========================================================================
 bool OpenGLFrameBuffer::Begin2D(bool)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+		return false;
+	#endif
+
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	glMatrixMode(GL_PROJECTION);

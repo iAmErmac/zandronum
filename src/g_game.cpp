@@ -77,6 +77,9 @@
 #include "d_event.h"
 #include "p_acs.h"
 #include "m_joy.h"
+#ifdef __ANDROID__
+#include "../mobile/src/zandronum_android_input.h"
+#endif
 #include "farchive.h"
 #include "r_renderer.h"
 #include "r_data/colormaps.h"
@@ -715,10 +718,6 @@ static inline int joyint(double val)
 	}
 }
 
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-extern void Mobile_IN_Move(ticcmd_t* cmd );
-#endif
-
 //
 // G_BuildTiccmd
 // Builds a ticcmd from all of the available inputs
@@ -845,6 +844,10 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 
 	I_GetAxes(joyaxes);
 
+#ifdef __ANDROID__
+	Zandronum_AndroidInput_ApplyAxes(joyaxes);
+#endif
+
 	// [Leo] Clamp JOYAXIS_Side.
 	joyaxes[JOYAXIS_Side] = clamp<float>(joyaxes[JOYAXIS_Side], -1.f, 1.f);
 
@@ -878,10 +881,6 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 	{
 		forward += (int)((float)mousey * m_forward);
 	}
-
-#if defined(__MOBILE__) && !defined(ZANDRONUM_NO_LEGACY_TOUCH)
-    Mobile_IN_Move(cmd);
-#endif
 
 	cmd->ucmd.pitch = LocalViewPitch >> 16;
 

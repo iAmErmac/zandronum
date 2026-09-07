@@ -6,8 +6,8 @@ include $(CLEAR_VARS)
 LOCAL_MODULE    := main
 
 
-LOCAL_CFLAGS   :=  -DNO_CLOCK_GETTIME -D__MOBILE__ -DNO_SERVER_GUI -DNO_SOUND -DZANDRONUM_NO_LEGACY_TOUCH -DSDL2_COMPAT -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
-LOCAL_CPPFLAGS := -DNOASM -DDISABLE_SSE -DHAVE_FLUIDSYNTH -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DHAVE_JWZGLES -DUSE_GLES -Wno-format-security -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
+LOCAL_CFLAGS   :=  -DNO_CLOCK_GETTIME -D__MOBILE__ -DNO_SERVER_GUI -DNO_SOUND -DSDL2_COMPAT -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
+LOCAL_CPPFLAGS := -DNOASM -DDISABLE_SSE -DHAVE_FLUIDSYNTH -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DUSE_GLES -Wno-format-security -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
 #-std=gnu++1y -DHAVE_FLUIDSYNTH
 
 LOCAL_C_INCLUDES := \
@@ -42,7 +42,6 @@ LOCAL_C_INCLUDES := \
  $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/libmpg123 \
  $(TOP_DIR)/legacy-mobile/doom/src/main/jni/jpeg8d \
  $(TOP_DIR)/Clibs_OpenTouch \
- $(TOP_DIR)/jwzgles \
  $(TOP_DIR)/openssl/openssl-1.1.1k-clang/include \
  $(GZDOOM_TOP_PATH)/mobile/src
 
@@ -55,6 +54,8 @@ LOCAL_C_INCLUDES := \
 ANDROID_SRC_FILES = \
     ../mobile/src/sqlite/sqlite3.c \
     ../mobile/src/extrafiles/gl_load.c \
+    ../src/gl/system/gl_android.cpp \
+    ../mobile/src/zandronum_android_input.cpp \
     ../mobile/src/zandronum_sdl_main.cpp \
     ../GeoIP/GeoIP.c
 
@@ -490,11 +491,11 @@ LOCAL_SRC_FILES = \
     $(PLAT_SDL_SOURCES) \
 
 
-LOCAL_LDLIBS := -ldl -llog -lOpenSLES -lGLESv1_CM -lGLESv2
+LOCAL_LDLIBS := -llog -lOpenSLES -lGLESv2 -lGLESv3
 LOCAL_LDLIBS +=  -lEGL
 
 LOCAL_STATIC_LIBRARIES := sndfile mpg123 fluidsynth-static libjpeg zlib_zan31 lzma_zan31 gdtoa_zan31 dumb_zan31 gme_zan31 bzip2_zan31 logwritter opus opencrypto_static
-LOCAL_SHARED_LIBRARIES := openal SDL jwzgles_shared
+LOCAL_SHARED_LIBRARIES := openal SDL
 
 #Strip unused functions/data
 LOCAL_CFLAGS += -fvisibility=hidden

@@ -18,66 +18,13 @@ static void* AppleGLGetProcAddress (const char *name)
 #endif /* __APPLE__ */
 
 #ifdef __MOBILE__
-#include <dlfcn.h>
-#include <android/log.h>
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"JNITouchControlsUtils", __VA_ARGS__))
-
-static void CATCH(int a, int b, int c, int d, int e)
-{
-	LOGI("CAUGHT BAD");
-}
-
-int glesLoad = 1; // TODO fix this!
+#include <EGL/egl.h>
 
 static void* PosixGetProcAddressMobile (const GLubyte* name)
 {
-  static void* h = NULL;
-  static void* gpa = NULL;
-
-    if (h == NULL)
-    {
-        if( glesLoad == 1 )
-        {
-            h = dlopen("libjwzgles_shared.so", RTLD_LAZY | RTLD_LOCAL);
-        }
-        else if( glesLoad == 2 )
-        {
-            h = dlopen("libGL4ES.so", RTLD_LAZY | RTLD_LOCAL);
-            void (*initialize_gl4es)( void )  = dlsym(h, "initialize_gl4es");
-            initialize_gl4es();
-        }
-
-        if (h == NULL)
-        {
-            LOGI("ERROR loading GL SHIM");
-            return NULL;
-        }
-    }
-
-  char newName[64];
-  memset(newName,0,64);
-
-    if( glesLoad == 1 )
-        sprintf(newName,"jwzgles_%s",name);
-    else if( glesLoad == 2 )
-        sprintf(newName,"%s",name);
-
-  void * ret = 0;
-  if (gpa != NULL)
-    ret =  ((void*(*)(const GLubyte*))gpa)(newName);
-  else
-    ret =  dlsym(h, (const char*)newName);
-
-  if( !ret )
-  {
-    //LOGI("Loading.. %s    FAIL", newName);
-    ret = CATCH;
-  }
-  else
-  {
-    //LOGI("Loading.. %s    OK", newName);
-  }
-  return ret;
+	// Core GLES entry points are linked directly. This lookup is retained for
+	// optional extension entry points used by the desktop loader on other paths.
+	return (void *)eglGetProcAddress((const char *)name);
 }
 #endif
 
@@ -2114,12 +2061,6 @@ int ogl_LoadFunctions(int glVersion)
 {
 	int numFailed = 0;
 	ClearExtensionVars();
-
-#ifdef __MOBILE__
-    void jwzgles_reset (void);
-    jwzgles_reset();
-#endif
-
 
 	_ptrc_glGetString = (const GLubyte * (CODEGEN_FUNCPTR *)(GLenum))IntGetProcAddress("glGetString");
 	if(!_ptrc_glGetString) return ogl_LOAD_FAILED;

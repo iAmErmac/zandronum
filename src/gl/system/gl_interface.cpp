@@ -45,6 +45,9 @@
 #include "v_text.h"
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 #ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
 char myGlBeginCharArray[4] = {0,0,0,0};
@@ -146,9 +149,6 @@ static void InitContext()
 		myGlBeginCharArray[i] = reinterpret_cast<char *>(glBegin)[i];
 #endif
 }
-#ifdef __ANDROID__
-extern int glesLoad;
-#endif
 //==========================================================================
 //
 // 
@@ -159,40 +159,23 @@ void gl_LoadExtensions()
 {
 	InitContext();
 
+#ifdef __ANDROID__
+	// Android uses the native GLES 3.2 entry points. The generated desktop
+	// loader remains available to other targets but is not selected here.
+	if (!gl_AndroidNativeGLES_CollectCapabilities())
+		I_FatalError("Unable to query the Android GLES capabilities.");
+	const FAndroidGLESInfo &caps = gl_AndroidNativeGLES_GetCapabilities();
+	gl.shadermodel = 0;
+	gl.flags = 0;
+	gl.vendorstring = const_cast<char *>(caps.vendor);
+	gl.max_texturesize = caps.maxTextureSize;
+	gl.maxuniforms = caps.maxFragmentUniformVectors;
+	return;
+#else
+
 	ogl_LoadFunctions();
 
 	CollectExtensions();
-#ifdef __ANDROID__
-    if( glesLoad == 1)
-    {
-	    gl.shadermodel = 0;	// assume no shader support
-	    gl.vendorstring =(char*)glGetString(GL_VENDOR);
-
-        if (CheckExtension("GL_OES_texture_npot")) gl.flags|=RFL_NPOT_TEXTURE;
-    }
-    else if( glesLoad == 2)
-    {
-
-        gl.shadermodel = 2;
-        if( Args->CheckParm("-sm3") )
-        {
-            Printf("Enableing shaders for GLES2");
-            gl.shadermodel = 3; // UNCOMMENT THIS TO ENABLE SHADERS
-        }
-        gl.flags|=RFL_GL_20;
-        gl.flags|=RFL_GL_21;
-
-        gl.flags |= RFL_VBO;
-        gl.flags |= RFL_MAP_BUFFER_RANGE;
-        gl.flags |= RFL_FRAMEBUFFER;
-    }
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE,&gl.max_texturesize);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    //This is needed to the fix the brutal doom white lines?!
-    glDisable(GL_CLIP_PLANE0);
-    glEnable(GL_CLIP_PLANE0);
-#else
 	const char *version = (const char*)glGetString(GL_VERSION);
 
 	// Don't even start if it's lower than 1.3
@@ -397,13 +380,16 @@ void gl_LoadExtensions()
 
 void gl_PrintStartupLog()
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		gl_AndroidNativeGLES_PrintStartupLog();
+		return;
+	}
+#endif
 	Printf ("GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	Printf ("GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 	Printf ("GL_VERSION: %s\n", glGetString(GL_VERSION));
-#ifdef __ANDROID__
-    if( glesLoad == 2)
-    {
-#endif
 	Printf ("GL_SHADING_LANGUAGE_VERSION: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
 	// [TDRR] Make GL extension printing optional (using the developer CVAR).
 	DPrintf ("GL_EXTENSIONS: %s\n", glGetString(GL_EXTENSIONS));
@@ -422,9 +408,6 @@ void gl_PrintStartupLog()
 	Printf ("Max. combined uniforms: %d\n", v);
 	glGetIntegerv(GL_MAX_COMBINED_UNIFORM_BLOCKS, &v);
 	Printf ("Max. combined uniform blocks: %d\n", v);
-#ifdef __ANDROID__
-    }
-#endif
 }
 
 //==========================================================================
