@@ -52,6 +52,26 @@ private:
 	TArray<TranslatedTexture> glTexID_Translated;
 	unsigned int glDepthID;	// only used by camera textures
 
+#ifdef __ANDROID__
+	struct AndroidTextureSource
+	{
+		int cm;
+		int translation;
+		int width;
+		int height;
+		bool wrap;
+		unsigned char *pixels;
+	};
+	TArray<AndroidTextureSource> android_sources;
+	static TArray<FHardwareTexture *> android_textures;
+	void RememberAndroidSource(const unsigned char *buffer, int w, int h, bool wrap, int cm, int translation);
+	bool RestoreAndroidSource(int cm, int translation, unsigned int &texture, int texunit);
+	void ClearAndroidSources();
+	void AndroidContextLost();
+public:
+	static void AndroidContextLostAll();
+#endif
+
 	void LoadImage(unsigned char * buffer,int w, int h, unsigned int & glTexID,int wrapparam, bool alphatexture, int texunit);
 	unsigned * GetTexID(int cm, int translation);
 

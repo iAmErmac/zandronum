@@ -52,6 +52,9 @@
 #include "gl/scene/gl_portal.h"
 #include "gl/scene/gl_wall.h"
 #include "gl/utility/gl_clock.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 EXTERN_CVAR(Bool, gl_render_segs)
 
@@ -419,10 +422,17 @@ static void DoSubsector(subsector_t * sub)
 
 		//if (!gl_multithreading)
 		{
+			#ifdef __ANDROID__
+			if (Particles != NULL && ParticlesInSubsec.Size() >= (size_t)numsubsectors)
+			{
+			#endif
 			for (i = ParticlesInSubsec[DWORD(sub-subsectors)]; i != NO_PARTICLE; i = Particles[i].snext)
 			{
 				GLRenderer->ProcessParticle(&Particles[i], fakesector);
 			}
+			#ifdef __ANDROID__
+			}
+			#endif
 		}
 		/*
 		else if (ParticlesInSubsec[DWORD(sub-subsectors)] != NO_PARTICLE)

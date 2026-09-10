@@ -46,6 +46,9 @@
 
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/data/gl_data.h"
@@ -117,8 +120,9 @@ bool GLWall::PrepareLight(texcoord * tcs, ADynamicLight * light)
 //
 //==========================================================================
 FDynLightData lightdata;
+static unsigned int nativeLightCounts[3] = { 0, 0, 0 };
 
-void GLWall::SetupLights()
+void GLWall::SetupLights(bool collect)
 {
 	// [AK] Take care of gl_lights_size and ZADF_FORCE_VIDEO_DEFAULTS.
 	OVERRIDE_LIGHTS_SIZE_IF_NECESSARY
@@ -127,6 +131,8 @@ void GLWall::SetupLights()
 	Plane p;
 
 	lightdata.Clear();
+	nativeLightCounts[0] = nativeLightCounts[1] = nativeLightCounts[2] = 0;
+	if (!collect) return;
 	p.Init(vtx,4);
 
 	if (!p.ValidNormal()) 
@@ -208,6 +214,9 @@ void GLWall::SetupLights()
 	int numlights[3];
 
 	lightdata.Combine(numlights, gl.MaxLights());
+	nativeLightCounts[0] = static_cast<unsigned int>(numlights[0]);
+	nativeLightCounts[1] = static_cast<unsigned int>(numlights[1]);
+	nativeLightCounts[2] = static_cast<unsigned int>(numlights[2]);
 	if (numlights[2] > 0)
 	{
 		draw_dlight+=numlights[2]/2;
@@ -242,6 +251,62 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 		if (!PrepareLight(tcs, light)) return;
 		glowing = false;
 	}
+
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (light != NULL) return;
+		float color[3];
+		gl_GetLightColor(lightlevel, rellight + getExtraLight(), &Colormap,
+			color + 0, color + 1, color + 2);
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		const bool nativeFog = (flags & GLWF_FOGGY) != 0 && !gl_fixedcolormap;
+		if (nativeFog)
+		{
+			PalEntry fog = Colormap.FadeColor;
+			if (level.flags & LEVEL_HASFADETABLE)
+			{
+				fog = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(lightlevel, fog);
+				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
+			}
+			fogColor[0] = fog.r / 255.0f;
+			fogColor[1] = fog.g / 255.0f;
+			fogColor[2] = fog.b / 255.0f;
+		}
+		const float positions[12] =
+		{
+			glseg.x1, zbottom[0], glseg.y1,
+			glseg.x1, ztop[0], glseg.y1,
+			glseg.x2, ztop[1], glseg.y2,
+			glseg.x2, zbottom[1], glseg.y2
+		};
+		const float texcoords[8] =
+		{
+			tcs[0].u, tcs[0].v, tcs[1].u, tcs[1].v,
+			tcs[2].u, tcs[2].v, tcs[3].u, tcs[3].v
+		};
+		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
+		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+			gltexture->BindNativeBrightmap(true) : 0;
+		EAndroidNativeBlendMode blendMode =
+			(color2 == NULL && alpha < 0.999f) ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE;
+		if (RenderStyle == STYLE_Add) blendMode = ANDROID_BLEND_ADD;
+		else if (RenderStyle == STYLE_Subtract) blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+		gl_AndroidNativeGLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
+			texture, gltexture != NULL && gltexture->isMasked(), nativeFog, true, fogColor, fogDensity,
+			blendMode, 0, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
+			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
+			Colormap.colormap : 0);
+		vertexcount += 4;
+		return;
+	}
+#endif
 
 	if (glowing) gl_RenderState.SetGlowParams(topglowcolor, bottomglowcolor);
 
@@ -470,6 +535,11 @@ void GLWall::Draw(int pass)
 	{
 		int a = 0;
 	}
+#endif
+
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive() && pass != GLPASS_ALL)
+		nativeLightCounts[0] = nativeLightCounts[1] = nativeLightCounts[2] = 0;
 #endif
 
 

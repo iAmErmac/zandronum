@@ -4,10 +4,13 @@
 
 #include <algorithm>
 
+#include "c_console.h"
 #include "d_event.h"
 #include "d_gui.h"
 #include "doomdef.h"
+#include "doomstat.h"
 #include "m_joy.h"
+#include "sdl/dikeys.h"
 
 static volatile float AndroidAxes[4] = {};
 static bool AndroidArrowState[4] = {};
@@ -43,6 +46,9 @@ void Zandronum_AndroidInput_Text(int codepoint)
 
 void Zandronum_AndroidInput_Pointer(int, int action, float x, float y)
 {
+	// Gameplay touch controls use key actions; pointer events are for engine menus.
+	if (menuactive == MENU_Off && ConsoleState == c_up)
+		return;
 	event_t event = {};
 	event.type = EV_GUI_Event;
 	event.x = static_cast<int>(x);
@@ -89,7 +95,7 @@ void Zandronum_AndroidInput_Action(int action, bool pressed)
 	static const int actionKeys[] = {
 		KEY_MOUSE1, 0x12, KEY_SPACE, KEY_LCTRL, KEY_LSHIFT,
 		KEY_MWHEELUP, KEY_MWHEELDOWN, KEY_ESCAPE, KEY_GRAVE,
-		KEY_TAB, KEY_EQUALS, KEY_MINUS,
+		DIK_Z, KEY_EQUALS, KEY_MINUS,
 	};
 	if (action >= 0 && action < static_cast<int>(sizeof(actionKeys) / sizeof(actionKeys[0])))
 		PostKey(actionKeys[action], pressed);

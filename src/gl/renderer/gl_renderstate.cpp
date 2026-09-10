@@ -46,6 +46,9 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/renderer/gl_colormap.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 // [EP] New #includes.
 #include "gl/gl_functions.h"
@@ -268,6 +271,16 @@ bool FRenderState::ApplyShader()
 
 void FRenderState::Apply(bool forcenoshader)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		gl_AndroidNativeGLES_ApplyRenderState(mSrcBlend, mDstBlend, mAlphaFunc,
+			mAlphaThreshold, mAlphaTest, mBlendEquation, mFogEnabled,
+			mTextureEnabled, mTextureMode);
+		return;
+	}
+	#endif
+
 	if (!gl_direct_state_change)
 	{
 		if (mSrcBlend != glSrcBlend || mDstBlend != glDstBlend)

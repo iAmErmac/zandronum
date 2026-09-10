@@ -35,6 +35,14 @@ struct FFlatVertex	// exactly 32 bytes large
 class FFlatVertexBuffer : public FVertexBuffer
 {
 	FFlatVertex *map;
+#ifdef __ANDROID__
+	unsigned int vao_id;
+	unsigned int ebo_id;
+	bool android_data_uploaded;
+	static TArray<FFlatVertexBuffer *> android_buffers;
+	bool RestoreAndroidObjects();
+	void AndroidContextLost();
+#endif
 
 	void MapVBO();
 	void CheckPlanes(sector_t *sector);
@@ -56,6 +64,10 @@ public:
 	void BindVBO();
 	void CheckUpdate(sector_t *sector);
 	void UnmapVBO();
+
+#ifdef __ANDROID__
+	static void AndroidContextLostAll();
+#endif
 
 };
 

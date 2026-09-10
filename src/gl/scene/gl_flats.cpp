@@ -49,6 +49,11 @@
 
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#include <algorithm>
+#include <vector>
+#endif
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
@@ -176,12 +181,30 @@ void GLFlat::DrawSubsectorLights(subsector_t * sub, int pass)
 //
 //==========================================================================
 extern FDynLightData lightdata;
+static unsigned int nativeFlatLightCounts[3] = { 0, 0, 0 };
+#ifdef __ANDROID__
+static std::vector<GLFlat> NativeDeferredFlatTasks;
+
+void gl_AndroidNativeGLES_ClearFlatTasks()
+{
+	NativeDeferredFlatTasks.clear();
+}
+
+void gl_AndroidNativeGLES_EmitFlatTasks()
+{
+	std::vector<GLFlat> tasks;
+	tasks.swap(NativeDeferredFlatTasks);
+	for (size_t i = 0; i < tasks.size(); ++i)
+		tasks[i].DrawSubsectors(GLPASS_ALL, false);
+}
+#endif
 
 bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 {
 	Plane p;
 
 	lightdata.Clear();
+	nativeFlatLightCounts[0] = nativeFlatLightCounts[1] = nativeFlatLightCounts[2] = 0;
 	for(int i=0;i<2;i++)
 	{
 		FLightNode * node = sub->lighthead[i];
@@ -214,6 +237,9 @@ bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 	int numlights[3];
 
 	lightdata.Combine(numlights, gl.MaxLights());
+	nativeFlatLightCounts[0] = static_cast<unsigned int>(numlights[0]);
+	nativeFlatLightCounts[1] = static_cast<unsigned int>(numlights[1]);
+	nativeFlatLightCounts[2] = static_cast<unsigned int>(numlights[2]);
 	if (numlights[2] > 0)
 	{
 		draw_dlightf+=numlights[2]/2;
@@ -238,6 +264,85 @@ bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 
 void GLFlat::DrawSubsector(subsector_t * sub)
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (sub == NULL || sub->numlines < 3) return;
+		std::vector<float> positions;
+		std::vector<float> texcoords;
+		positions.reserve(sub->numlines * 3);
+		texcoords.reserve(sub->numlines * 2);
+		for (unsigned int k = 0; k < sub->numlines; ++k)
+		{
+			vertex_t *vt = sub->firstline[k].v1;
+			if (vt == NULL) continue;
+			const float x = vt->fx;
+			const float y = vt->fy;
+			const float zc = plane.plane.ZatPoint(vt->fx, vt->fy) + dz;
+			const float rawU = x / 64.0f;
+			const float rawV = -y / 64.0f;
+			float u = rawU;
+			float v = rawV;
+			if (gltexture != NULL)
+			{
+				const float textureWidth = static_cast<float>(std::max(1, gltexture->TextureWidth(GLUSE_TEXTURE)));
+				const float textureHeight = static_cast<float>(std::max(1, gltexture->TextureHeight(GLUSE_TEXTURE)));
+				const float uOffset = FIXED2FLOAT(plane.xoffs) / textureWidth;
+				const float vOffset = FIXED2FLOAT(plane.yoffs) / textureHeight;
+				const float uScale = FIXED2FLOAT(plane.xscale);
+				const float vScale = gltexture->tex->bHasCanvas ?
+					-FIXED2FLOAT(plane.yscale) : FIXED2FLOAT(plane.yscale);
+				const float angle = -ANGLE_TO_FLOAT(plane.angle) * 3.14159265359f / 180.0f;
+				const float cosine = cosf(angle);
+				const float sine = sinf(angle);
+				const float rotatedU = cosine * rawU - sine * rawV;
+				const float rotatedV = sine * rawU + cosine * rawV;
+				u = uScale * (uOffset + (64.0f / textureWidth) * rotatedU);
+				v = vScale * (vOffset + (64.0f / textureHeight) * rotatedV);
+			}
+			positions.push_back(x);
+			positions.push_back(zc);
+			positions.push_back(y);
+			texcoords.push_back(u);
+			texcoords.push_back(v);
+		}
+		if (positions.size() < 9) return;
+		float color[3];
+		gl_GetLightColor(lightlevel, getExtraLight(), &Colormap, color + 0, color + 1, color + 2);
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		if (foggy && !gl_fixedcolormap)
+		{
+			PalEntry fog = Colormap.FadeColor;
+			if (level.flags & LEVEL_HASFADETABLE)
+			{
+				fog = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(lightlevel, fog);
+				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
+			}
+			fogColor[0] = fog.r / 255.0f;
+			fogColor[1] = fog.g / 255.0f;
+			fogColor[2] = fog.b / 255.0f;
+		}
+		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
+		if (gltexture != NULL && texture == 0) return;
+		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+			gltexture->BindNativeBrightmap(true) : 0;
+		const EAndroidNativeBlendMode blendMode = renderstyle == STYLE_Add ? ANDROID_BLEND_ADD :
+			(alpha < 0.999f ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE);
+		gl_AndroidNativeGLES_AddFlat(&positions[0], &texcoords[0],
+			static_cast<unsigned int>(positions.size() / 3), color, alpha, texture,
+			gltexture != NULL && gltexture->isMasked(), fogDensity > 0.0f, true, fogColor, fogDensity,
+			blendMode, 0, nativeFlatLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeFlatLightCounts,
+			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
+			Colormap.colormap : 0);
+		return;
+	}
+#endif
 	glBegin(GL_TRIANGLE_FAN);
 
 	for(unsigned int k=0; k<sub->numlines; k++)
@@ -261,6 +366,49 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 
 void GLFlat::DrawSubsectors(int pass, bool istrans)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		const bool collectLights = gl_lights && GLRenderer->mLightCount > 0;
+		if (sub != NULL)
+		{
+			if (collectLights) SetupSubsectorLights(false, sub);
+			else nativeFlatLightCounts[0] = nativeFlatLightCounts[1] = nativeFlatLightCounts[2] = 0;
+			DrawSubsector(sub);
+		}
+		else if (sector != NULL)
+		{
+			for (int i = 0; i < sector->subsectorcount; ++i)
+			{
+				subsector_t *part = sector->subsectors[i];
+				if (part != NULL && (istrans || gl_drawinfo->ss_renderflags[part - subsectors] & renderflags))
+				{
+					if (collectLights) SetupSubsectorLights(false, part);
+					else nativeFlatLightCounts[0] = nativeFlatLightCounts[1] = nativeFlatLightCounts[2] = 0;
+					DrawSubsector(part);
+				}
+			}
+			// Preserve the extra plane traversal used by 3D floors and portals.
+			if (!(renderflags & SSRF_RENDER3DPLANES))
+			{
+				gl_subsectorrendernode *node = (renderflags & SSRF_RENDERFLOOR) ?
+					gl_drawinfo->GetOtherFloorPlanes(sector->sectornum) :
+					gl_drawinfo->GetOtherCeilingPlanes(sector->sectornum);
+				while (node != NULL)
+				{
+					if (node->sub != NULL)
+					{
+						if (collectLights) SetupSubsectorLights(false, node->sub);
+						else nativeFlatLightCounts[0] = nativeFlatLightCounts[1] = nativeFlatLightCounts[2] = 0;
+						DrawSubsector(node->sub);
+					}
+					node = node->next;
+				}
+			}
+		}
+		return;
+	}
+	#endif
 	bool lightsapplied = false;
 
 	gl_RenderState.Apply();
@@ -331,6 +479,13 @@ void GLFlat::DrawSubsectors(int pass, bool istrans)
 //==========================================================================
 void GLFlat::Draw(int pass)
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		DrawSubsectors(pass, false);
+		return;
+	}
+#endif
 	int i;
 	int rel = getExtraLight();
 
@@ -448,6 +603,26 @@ void GLFlat::Draw(int pass)
 //==========================================================================
 inline void GLFlat::PutFlat(bool fog)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (plane.texture == skyflatnum)
+		{
+			if (developer)
+				DPrintf("Android GLES flat skipped sky texture in sector %d (%s).\n",
+					sector != NULL ? sector->sectornum : -1, ceiling ? "ceiling" : "floor");
+			return;
+		}
+		if (gl_AndroidNativeGLES_IsFlatCollectionDeferred())
+		{
+			NativeDeferredFlatTasks.push_back(*this);
+			return;
+		}
+		// Keep the native path on the same visibility flags as the desktop draw list.
+		DrawSubsectors(GLPASS_ALL, false);
+		return;
+	}
+	#endif
 	int list;
 
 	if (gl_fixedcolormap) 
@@ -603,7 +778,8 @@ void GLFlat::ProcessSector(sector_t * frontsector)
 		Colormap=frontsector->ColorMap;
 		if ((stack = (frontsector->portals[sector_t::floor] != NULL)))
 		{
-			gl_drawinfo->AddFloorStack(sector);
+			if (!gl_AndroidNativeGLES_IsActive() || gl_AndroidNativeGLES_IsFlatCollectionDeferred())
+				gl_drawinfo->AddFloorStack(sector);
 			alpha = frontsector->GetAlpha(sector_t::floor)/65536.0f;
 		}
 		else
@@ -654,7 +830,8 @@ void GLFlat::ProcessSector(sector_t * frontsector)
 		Colormap=frontsector->ColorMap;
 		if ((stack = (frontsector->portals[sector_t::ceiling] != NULL))) 
 		{
-			gl_drawinfo->AddCeilingStack(sector);
+			if (!gl_AndroidNativeGLES_IsActive() || gl_AndroidNativeGLES_IsFlatCollectionDeferred())
+				gl_drawinfo->AddCeilingStack(sector);
 			alpha = frontsector->GetAlpha(sector_t::ceiling)/65536.0f;
 		}
 		else

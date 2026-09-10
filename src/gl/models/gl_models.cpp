@@ -60,6 +60,16 @@
 #include "gl/utility/gl_convert.h"
 #include "gl/renderer/gl_renderstate.h"
 
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#include "gl/system/gl_cvars.h"
+#include "gl/renderer/gl_colormap.h"
+#include "gl/renderer/gl_lightdata.h"
+#include "gl/data/gl_data.h"
+#include <math.h>
+#include <vector>
+#endif
+
 // [BB] New #includes. 
 #include "r_main.h"
 
@@ -77,6 +87,266 @@ EXTERN_CVAR(Bool, gl_dynlight_shader)
 
 extern TDeletingArray<FVoxel *> Voxels;
 extern TDeletingArray<FVoxelDef *> VoxelDefs;
+
+#ifdef __ANDROID__
+float gl_RollAgainstAngleHelper(const AActor *actor);
+
+class FAndroidNativeModelCollector : public FModelNativeCollector
+{
+	GLSprite *Sprite;
+	int Colormap;
+	int Translation;
+	Matrix3x4 Transform;
+
+public:
+	FAndroidNativeModelCollector(GLSprite *sprite, int colormap, int translation,
+		const Matrix3x4 &transform)
+		: Sprite(sprite), Colormap(colormap), Translation(translation), Transform(transform) {}
+
+	void SubmitSurface(const float *positions, const float *texcoords,
+		unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
+		FTexture *skin, const float *normals) override
+	{
+		if (positions == NULL || indices == NULL || skin == NULL || vertexCount == 0 || indexCount < 3)
+			return;
+		FMaterial *material = FMaterial::ValidateTexture(skin);
+		if (material == NULL) return;
+		const unsigned int texture = material->BindNative(Colormap, Translation, false);
+		const unsigned int brightmap = gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+			material->BindNativeBrightmap(false) : 0;
+		if (texture == 0) return;
+		std::vector<float> worldPositions(vertexCount * 3);
+		std::vector<float> worldNormals;
+		if (normals != NULL) worldNormals.resize(vertexCount * 3);
+		for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
+		{
+			float modelPosition[3] =
+			{
+				positions[vertex * 3 + 0],
+				positions[vertex * 3 + 1],
+				positions[vertex * 3 + 2]
+			};
+			float worldPosition[3];
+			Transform.MultiplyVector(modelPosition, worldPosition);
+			// Model transforms already use the renderer's x/z/y coordinate order.
+			worldPositions[vertex * 3 + 0] = worldPosition[0];
+			worldPositions[vertex * 3 + 1] = worldPosition[1];
+			worldPositions[vertex * 3 + 2] = worldPosition[2];
+			if (normals != NULL)
+			{
+				float worldNormal[3];
+				Transform.MultiplyDirection(normals + vertex * 3, worldNormal);
+				const float length = sqrtf(worldNormal[0] * worldNormal[0] +
+					worldNormal[1] * worldNormal[1] + worldNormal[2] * worldNormal[2]);
+				if (length > 0.0001f)
+				{
+					worldNormals[vertex * 3 + 0] = worldNormal[0] / length;
+					worldNormals[vertex * 3 + 1] = worldNormal[1] / length;
+					worldNormals[vertex * 3 + 2] = worldNormal[2] / length;
+				}
+			}
+		}
+		float color[3];
+		gl_GetLightColor(Sprite->lightlevel, getExtraLight(), &Sprite->Colormap,
+			color + 0, color + 1, color + 2);
+		if (gl_light_sprites && gl_lights && GLRenderer->mLightCount > 0 && !Sprite->fullbright &&
+			gl_fixedcolormap < CM_FIRSTSPECIALCOLORMAP && Sprite->actor != NULL &&
+			Sprite->actor->subsector != NULL)
+		{
+			float dynamicLight[3];
+			if (gl_GetSpriteLight(Sprite->actor, Sprite->actor->x, Sprite->actor->y,
+				Sprite->actor->z + (Sprite->actor->height >> 1), Sprite->actor->subsector,
+				Sprite->Colormap.colormap, dynamicLight))
+			{
+				color[0] = clamp<float>(color[0] + dynamicLight[0], 0.0f, 1.0f);
+				color[1] = clamp<float>(color[1] + dynamicLight[1], 0.0f, 1.0f);
+				color[2] = clamp<float>(color[2] + dynamicLight[2], 0.0f, 1.0f);
+			}
+		}
+		float nativeAlpha = Sprite->trans;
+		if (Sprite->RenderStyle.BlendOp == STYLEOP_Shadow)
+		{
+			// Model shadows use the same fixed tint and opacity as sprite shadows.
+			color[0] = 0.2f * Sprite->ThingColor.r / 255.0f;
+			color[1] = 0.2f * Sprite->ThingColor.g / 255.0f;
+			color[2] = 0.2f * Sprite->ThingColor.b / 255.0f;
+			nativeAlpha = 0.33f;
+		}
+		else
+		{
+			color[0] *= Sprite->ThingColor.r / 255.0f;
+			color[1] *= Sprite->ThingColor.g / 255.0f;
+			color[2] *= Sprite->ThingColor.b / 255.0f;
+		}
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		const bool fog = !gl_fixedcolormap &&
+			(!gl_isBlack(Sprite->Colormap.FadeColor) || (level.flags & LEVEL_HASFADETABLE) != 0);
+		if (fog)
+		{
+			PalEntry fade = Sprite->Colormap.FadeColor;
+			if (level.flags & LEVEL_HASFADETABLE)
+			{
+				fade = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(Sprite->lightlevel, fade);
+				gl_ModifyColor(fade.r, fade.g, fade.b, Sprite->Colormap.colormap);
+			}
+			fogColor[0] = fade.r / 255.0f;
+			fogColor[1] = fade.g / 255.0f;
+			fogColor[2] = fade.b / 255.0f;
+		}
+		const bool nativeFuzz = Sprite->nativeFuzz || Sprite->RenderStyle.BlendOp == STYLEOP_Fuzz;
+		EAndroidNativeBlendMode blendMode = nativeFuzz ? ANDROID_BLEND_FUZZ : ANDROID_BLEND_ALPHA;
+		if (Sprite->RenderStyle.BlendOp == STYLEOP_Add && Sprite->RenderStyle.DestAlpha == STYLEALPHA_One)
+			blendMode = ANDROID_BLEND_ADD;
+		else if (Sprite->RenderStyle.BlendOp == STYLEOP_Sub)
+			blendMode = ANDROID_BLEND_SUBTRACT;
+		else if (Sprite->RenderStyle.BlendOp == STYLEOP_RevSub)
+			blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+		else if (Sprite->trans >= 1.0f - FLT_EPSILON && Sprite->RenderStyle.BlendOp == STYLEOP_Add &&
+			(Sprite->RenderStyle.DestAlpha == STYLEALPHA_InvSrc || Sprite->RenderStyle.DestAlpha == STYLEALPHA_Zero))
+			blendMode = ANDROID_BLEND_OPAQUE;
+		gl_AndroidNativeGLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
+			indices, indexCount, color, nativeAlpha, material->isMasked(), fog, texture,
+			fogColor, fogDensity, blendMode,
+			(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_ColorIsFixed) ? ANDROID_MATERIAL_COLOR_FIXED : 0),
+			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
+			(Colormap >= CM_DESAT0 && Colormap <= CM_DESAT31) ? Colormap : 0,
+			!(Sprite->RenderStyle == LegacyRenderStyles[STYLE_Normal]));
+	}
+};
+
+static bool RenderModelNative(GLSprite *spr, int cm)
+{
+	FSpriteModelFrame *smf = spr != NULL ? spr->modelframe : NULL;
+	if (smf == NULL || spr->actor == NULL) return false;
+	int translation = (smf->flags & MDL_IGNORETRANSLATION) ? 0 : spr->actor->Translation;
+	const float scaleFactorX = FIXED2FLOAT(spr->actor->scaleX) * smf->xscale;
+	const float scaleFactorY = FIXED2FLOAT(spr->actor->scaleX) * smf->yscale;
+	const float scaleFactorZ = FIXED2FLOAT(spr->actor->scaleY) * smf->zscale;
+	float pitch = 0.0f;
+	float roll = 0.0f;
+	float rotateOffset = 0.0f;
+	const float angle = ANGLE_TO_FLOAT(spr->actor->angle);
+	if (smf->flags & MDL_PITCHFROMMOMENTUM)
+	{
+		const double vx = static_cast<double>(spr->actor->velx);
+		const double vy = static_cast<double>(spr->actor->vely);
+		const double vz = static_cast<double>(spr->actor->velz);
+		if (vz || vx || vy) pitch = float(atan(vz / sqrt(vx * vx + vy * vy)) / M_PI * 180.0);
+		if (vx || vy)
+		{
+			if ((vx * cos(angle * M_PI / 180.0) + vy * sin(angle * M_PI / 180.0)) /
+				sqrt(vx * vx + vy * vy) < 0.0) pitch *= -1.0f;
+		}
+		else pitch = fabs(pitch);
+	}
+	if (smf->flags & MDL_ROTATING)
+	{
+		const float time = smf->rotationSpeed * GetTimeFloat() / 200.0f;
+		rotateOffset = (time - xs_FloorToInt(time)) * 360.0f;
+	}
+	if (smf->flags & MDL_INHERITACTORPITCH)
+		pitch += float(static_cast<double>(spr->actor->pitch >> 16) / (1 << 13) * 45 +
+			static_cast<double>(spr->actor->pitch & 0xffff) / (1 << 29) * 45);
+	if (smf->flags & MDL_INHERITACTORROLL)
+		roll += float(static_cast<double>(spr->actor->roll >> 16) / (1 << 13) * 45 +
+			static_cast<double>(spr->actor->roll & 0xffff) / (1 << 29) * 45);
+	Matrix3x4 transform;
+	transform.MakeIdentity();
+	transform.Translate(spr->x, spr->z, spr->y);
+	if (!(smf->flags & MDL_ALIGNANGLE))
+		transform.Rotate(0, 1, 0, -angle);
+	else
+		transform.Rotate(0, 1, 0, -ANGLE_TO_FLOAT(R_PointToAngle(spr->actor->x, spr->actor->y)));
+	if (smf->flags & MDL_ALIGNPITCH)
+	{
+		const fixed_t distance = R_PointToDist2(spr->actor->x - viewx, spr->actor->y - viewy);
+		const float alignPitch = RAD2DEG(atan2(FIXED2FLOAT(spr->actor->z - viewz), FIXED2FLOAT(distance)));
+		transform.Rotate(0, 0, 1, alignPitch);
+	}
+	else
+		transform.Rotate(0, 0, 1, pitch);
+	if (smf->flags & MDL_ROLLAGAINSTANGLE)
+		transform.Rotate(1, 0, 0, gl_RollAgainstAngleHelper(spr->actor));
+	else
+		transform.Rotate(1, 0, 0, -roll);
+	if (smf->flags & MDL_ROTATING)
+	{
+		transform.Translate(smf->rotationCenterX, smf->rotationCenterY, smf->rotationCenterZ);
+		transform.Rotate(smf->xrotate, smf->yrotate, smf->zrotate, rotateOffset);
+		transform.Translate(-smf->rotationCenterX, -smf->rotationCenterY, -smf->rotationCenterZ);
+	}
+	transform.Scale(scaleFactorX, scaleFactorZ, scaleFactorY);
+	transform.Translate(smf->xoffset / smf->xscale, smf->zoffset / smf->zscale,
+		smf->yoffset / smf->yscale);
+	transform.Rotate(0, 1, 0, -ANGLE_TO_FLOAT(smf->angleoffset));
+	transform.Rotate(0, 0, 1, smf->pitchoffset);
+	transform.Rotate(1, 0, 0, -smf->rolloffset);
+	FSpriteModelFrame *smfNext = NULL;
+	double inter = 0.0;
+	if (gl_interpolate_model_frames && !(smf->flags & MDL_NOINTERPOLATION) &&
+		spr->actor->state != NULL)
+	{
+		const FState *curState = spr->actor->state;
+		const FState *nextState = curState->GetNextState();
+		if (curState != nextState && nextState && curState->Tics > 0)
+		{
+			float ticFraction = 0.0f;
+			if (ConsoleState == c_up && menuactive != MENU_On && !(level.flags2 & LEVEL2_FROZEN))
+				ticFraction = FIXED2FLOAT(I_GetTimeFrac(NULL));
+			inter = static_cast<double>(curState->Tics - spr->actor->tics + ticFraction) /
+				static_cast<double>(curState->Tics);
+			if (curState->Tics < spr->actor->tics)
+				inter = 0.0;
+			else
+			{
+				if (smf->flags & MDL_INTERPOLATEDOUBLEDFRAMES)
+				{
+					const FState *prevState = curState - 1;
+					if (RUNTIME_TYPE(spr->actor)->ActorInfo->OwnsState(prevState) &&
+						curState->sprite == prevState->sprite && curState->Frame == prevState->Frame)
+					{
+						inter = inter / 2.0 + 0.5;
+					}
+					if (curState->sprite == nextState->sprite && curState->Frame == nextState->Frame)
+					{
+						inter /= 2.0;
+						nextState = nextState->GetNextState();
+					}
+				}
+				if (inter != 0.0)
+					smfNext = gl_FindModelFrame(RUNTIME_TYPE(spr->actor), nextState->sprite,
+						nextState->GetFrame(), false);
+			}
+		}
+	}
+	FAndroidNativeModelCollector collector(spr, cm, translation, transform);
+	bool submitted = false;
+	for (int modelIndex = 0; modelIndex < MAX_MODELS_PER_FRAME; ++modelIndex)
+	{
+		FModel *model = smf->models[modelIndex];
+		if (model == NULL) continue;
+		model->PushSpriteMDLFrame(smf, modelIndex);
+		int frame2 = -1;
+		if (smfNext != NULL && smfNext->models[modelIndex] == model &&
+			smfNext->modelframes[modelIndex] >= 0 && smf->modelframes[modelIndex] != smfNext->modelframes[modelIndex])
+			frame2 = smfNext->modelframes[modelIndex];
+		if (model->RenderFrameNative(smf->skins[modelIndex], smf->modelframes[modelIndex],
+			frame2, inter, cm, translation, &collector)) submitted = true;
+	}
+	return submitted;
+}
+#endif
 
 
 class DeletingModelArray : public TArray<FModel *>
@@ -767,6 +1037,13 @@ void gl_RenderModel(GLSprite * spr, int cm)
 {
 	FSpriteModelFrame * smf = spr->modelframe;
 
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		RenderModelNative(spr, cm);
+		return;
+	}
+#endif
 
 	// Setup transformation.
 	glDepthFunc(GL_LEQUAL);

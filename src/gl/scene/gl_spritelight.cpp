@@ -240,7 +240,7 @@ void gl_GetSpriteLighting(FRenderStyle style, AActor *thing, FColormap *cm, PalE
 	// This doesn't work like in the software renderer.
 	if (style.Flags & STYLEF_InvertSource)
 	{
-		int gray = (cm->LightColor.r*77 + cm->LightColor.r*143 + cm->LightColor.r*36)>>8;
+		int gray = (cm->LightColor.r*77 + cm->LightColor.g*143 + cm->LightColor.b*36)>>8;
 		cm->LightColor.r = cm->LightColor.g = cm->LightColor.b = gray;
 	}
 }

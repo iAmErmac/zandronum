@@ -56,6 +56,9 @@
 #include "gl/system/gl_cvars.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 #include "gl/data/gl_data.h"
 // these will only have an effect on SM3 cards.
@@ -586,6 +589,9 @@ void FShaderManager::CompileShaders()
 void FShaderManager::Clean()
 {
 	SetActiveShader(NULL);
+	#ifdef __ANDROID__
+	ClearAndroidNativePrograms();
+	#endif
 	for(unsigned int i=0;i<mTextureEffects.Size();i++)
 	{
 		if (mTextureEffects[i] != NULL) delete mTextureEffects[i];
@@ -597,6 +603,44 @@ void FShaderManager::Clean()
 	}
 	mTextureEffects.Clear();
 }
+
+#ifdef __ANDROID__
+void FShaderManager::RegisterAndroidNativeProgram(const char *name, unsigned int handle)
+{
+	if (name == NULL || handle == 0) return;
+	FName programName = name;
+	for (unsigned int i = 0; i < mAndroidNativePrograms.Size(); ++i)
+	{
+		if (mAndroidNativePrograms[i].Name == programName)
+		{
+			mAndroidNativePrograms[i].Handle = handle;
+			return;
+		}
+	}
+	FAndroidNativeProgram program = { programName, handle };
+	mAndroidNativePrograms.Push(program);
+}
+
+void FShaderManager::ClearAndroidNativePrograms()
+{
+	mAndroidNativePrograms.Clear();
+}
+
+unsigned int FShaderManager::BindAndroidNativeProgram(const char *name)
+{
+	if (name == NULL) return 0;
+	FName programName = name;
+	for (unsigned int i = 0; i < mAndroidNativePrograms.Size(); ++i)
+	{
+		if (mAndroidNativePrograms[i].Name == programName)
+		{
+			gl_AndroidNativeGLES_UseProgram(mAndroidNativePrograms[i].Handle);
+			return mAndroidNativePrograms[i].Handle;
+		}
+	}
+	return 0;
+}
+#endif
 
 //==========================================================================
 //

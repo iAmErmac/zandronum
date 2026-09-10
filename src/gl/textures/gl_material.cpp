@@ -38,6 +38,9 @@
 #include "gl/system/gl_system.h"
 #include "w_wad.h"
 #include "m_png.h"
+#ifdef __ANDROID__
+#include <algorithm>
+#endif
 #include "sbar.h"
 #include "gi.h"
 #include "cmdlib.h"
@@ -59,6 +62,9 @@
 #include "gl/textures/gl_bitmap.h"
 #include "gl/textures/gl_material.h"
 #include "gl/shaders/gl_shader.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 EXTERN_CVAR(Bool, gl_render_precise)
 EXTERN_CVAR(Int, gl_lightmode)
@@ -624,7 +630,11 @@ FMaterial::FMaterial(FTexture * tx, bool forceexpand)
 	{
 		expanded = false;
 	}
-	else if (gl.shadermodel > 2) 
+	else if (gl.shadermodel > 2
+#ifdef __ANDROID__
+		|| gl_AndroidNativeGLES_GetCapabilities().majorVersion >= 3
+#endif
+	)
 	{
 		if (tx->gl_info.shaderindex >= FIRST_USER_SHADER)
 		{
@@ -935,6 +945,70 @@ void FMaterial::Precache()
 	}
 }
 
+#ifdef __ANDROID__
+unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool allowhires) const
+{
+	if (translation <= 0) translation = -translation;
+	else translation = GLTranslationPalette::GetInternalTranslation(translation);
+	int width = 0;
+	int height = 0;
+	// Sprite materials keep a one-pixel transparent border in their UV and size
+	// metadata. Keep the native upload dimensions in step with that contract.
+	const bool expand = tex->UseType == FTexture::TEX_Sprite ||
+		tex->UseType == FTexture::TEX_SkinSprite || tex->UseType == FTexture::TEX_Decal;
+	unsigned char *pixels = CreateTexBuffer(cm, translation, width, height, expand, allowhires);
+	if (pixels == NULL || width <= 0 || height <= 0)
+	{
+		delete[] pixels;
+		return 0;
+	}
+	const unsigned int texture = gl_AndroidNativeGLES_BindMaterial(this, pixels, width, height,
+		repeat, cm, translation, allowhires);
+	delete[] pixels;
+	return texture;
+}
+
+void FMaterial::RemapNativeTexCoords(float *u, float *v) const
+{
+	if (u == NULL || v == NULL || tex == NULL)
+		return;
+	// Desktop UVs use the padded POT dimensions. Native uploads keep the source
+	// dimensions, including the transparent border.
+	const float paddedWidth = static_cast<float>(FHardwareTexture::GetTexDimension(Width[GLUSE_PATCH]));
+	const float paddedHeight = static_cast<float>(FHardwareTexture::GetTexDimension(Height[GLUSE_PATCH]));
+	FTexture *nativeTexture = mBaseLayer != NULL && mBaseLayer->hirestexture != NULL ?
+		mBaseLayer->hirestexture : tex;
+	const bool expanded = nativeTexture == tex &&
+		(tex->UseType == FTexture::TEX_Sprite || tex->UseType == FTexture::TEX_SkinSprite ||
+		 tex->UseType == FTexture::TEX_Decal);
+	const int nativeTextureWidth = nativeTexture != NULL ? nativeTexture->GetWidth() + (expanded ? 2 : 0) : 1;
+	const int nativeTextureHeight = nativeTexture != NULL ? nativeTexture->GetHeight() + (expanded ? 2 : 0) : 1;
+	const float nativeWidth = static_cast<float>(std::max(1, nativeTextureWidth));
+	const float nativeHeight = static_cast<float>(std::max(1, nativeTextureHeight));
+	*u = clamp<float>(*u * paddedWidth / nativeWidth, 0.0f, 1.0f);
+	*v = clamp<float>(*v * paddedHeight / nativeHeight, 0.0f, 1.0f);
+}
+
+void FMaterial::GetNativeSpriteCoords(float *u1, float *v1, float *u2, float *v2) const
+{
+	if (u1 == NULL || v1 == NULL || u2 == NULL || v2 == NULL)
+		return;
+	*u1 = SpriteU[0];
+	*v1 = SpriteV[0];
+	*u2 = SpriteU[1];
+	*v2 = SpriteV[1];
+	RemapNativeTexCoords(u1, v1);
+	RemapNativeTexCoords(u2, v2);
+}
+
+unsigned int FMaterial::BindNativeBrightmap(bool repeat) const
+{
+	if (mTextureLayers.Size() == 0 || mTextureLayers[0].texture == NULL) return 0;
+	FMaterial *brightmap = ValidateTexture(mTextureLayers[0].texture);
+	return brightmap != NULL ? brightmap->BindNative(CM_DEFAULT, 0, repeat) : 0;
+}
+#endif
+
 //===========================================================================
 //
 // This function is needed here to temporarily manipulate the texture
@@ -1072,6 +1146,9 @@ FMaterial * FMaterial::ValidateTexture(FTextureID no, bool translate)
 
 void FMaterial::FlushAll()
 {
+#ifdef __ANDROID__
+	gl_AndroidNativeGLES_ClearMaterialCache();
+#endif
 	for(int i=mMaterials.Size()-1;i>=0;i--)
 	{
 		mMaterials[i]->Clean(true);

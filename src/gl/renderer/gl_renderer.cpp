@@ -67,12 +67,50 @@
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_templates.h"
 #include "gl/models/gl_models.h"
+#include <math.h>
+#include <vector>
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 //===========================================================================
 // 
 // Renderer interface
 //
 //===========================================================================
+
+#ifdef __ANDROID__
+void gl_AndroidNativeGLES_RegisterShaderPrograms()
+{
+	if (GLRenderer == NULL || GLRenderer->mShaderManager == NULL) return;
+	const char *names[] =
+	{
+		"android/opaque", "android/masked", "android/fog", "android/palette", "android/present"
+	};
+	for (unsigned int i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+	{
+		const unsigned int handle = gl_AndroidNativeGLES_GetShaderProgram(names[i]);
+		if (handle != 0) GLRenderer->mShaderManager->RegisterAndroidNativeProgram(names[i], handle);
+	}
+}
+
+void gl_AndroidNativeGLES_UnregisterShaderPrograms()
+{
+	if (GLRenderer != NULL && GLRenderer->mShaderManager != NULL)
+		GLRenderer->mShaderManager->ClearAndroidNativePrograms();
+}
+
+unsigned int gl_AndroidNativeGLES_BindShaderProgram(const char *name, unsigned int fallback)
+{
+	if (GLRenderer != NULL && GLRenderer->mShaderManager != NULL)
+	{
+		const unsigned int handle = GLRenderer->mShaderManager->BindAndroidNativeProgram(name);
+		if (handle != 0) return handle;
+	}
+	gl_AndroidNativeGLES_UseProgram(fallback);
+	return fallback;
+}
+#endif
 
 EXTERN_CVAR(Bool, gl_render_segs)
 
@@ -109,6 +147,9 @@ void FGLRenderer::Initialize()
 	mFBID = 0;
 	SetupLevel();
 	mShaderManager = new FShaderManager;
+	#ifdef __ANDROID__
+	gl_AndroidNativeGLES_RegisterShaderPrograms();
+	#endif
 	//mThreadManager = new FGLThreadManager;
 }
 
@@ -189,7 +230,7 @@ void FGLRenderer::ProcessParticle(particle_t *part, sector_t *sector)
 
 void FGLRenderer::ProcessSector(sector_t *fakesector)
 {
-	GLFlat glflat;
+	GLFlat glflat = {};
 	glflat.ProcessSector(fakesector);
 }
 
@@ -305,6 +346,112 @@ void FGLRenderer::ClearBorders()
 
 void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		FMaterial *nativeMaterial = FMaterial::ValidateTexture(img);
+		if (nativeMaterial == NULL) return;
+
+		const double xscale = parms.texwidth > 0.0 ? parms.destwidth / parms.texwidth : 1.0;
+		const double yscale = parms.texheight > 0.0 ? parms.destheight / parms.texheight : 1.0;
+		double left = parms.x - parms.left * xscale;
+		double top = parms.y - parms.top * yscale;
+		double right = left + parms.destwidth;
+		double bottom = top + parms.destheight;
+		float u1 = 0.0f, v1 = 0.0f, u2 = 1.0f, v2 = 1.0f;
+		if (parms.windowleft > 0.0 || parms.windowright < parms.texwidth)
+		{
+			const float texWidth = parms.texwidth > 0.0 ? static_cast<float>(parms.texwidth) : 1.0f;
+			left += parms.windowleft * xscale;
+			right -= (parms.texwidth - parms.windowright) * xscale;
+			u1 = static_cast<float>(parms.windowleft) / texWidth;
+			u2 = static_cast<float>(parms.windowright) / texWidth;
+		}
+		if (parms.flipX)
+		{
+			const float swap = u1;
+			u1 = u2;
+			u2 = swap;
+		}
+		const double clipLeft = std::max(left, static_cast<double>(parms.lclip));
+		const double clipTop = std::max(top, static_cast<double>(parms.uclip));
+		const double clipRight = std::min(right, static_cast<double>(parms.rclip));
+		const double clipBottom = std::min(bottom, static_cast<double>(parms.dclip));
+		if (clipLeft >= clipRight || clipTop >= clipBottom || right <= left || bottom <= top) return;
+		const float clipU1 = u1 + (u2 - u1) * static_cast<float>((clipLeft - left) / (right - left));
+		const float clipU2 = u1 + (u2 - u1) * static_cast<float>((clipRight - left) / (right - left));
+		const float clipV1 = v1 + (v2 - v1) * static_cast<float>((clipTop - top) / (bottom - top));
+		const float clipV2 = v1 + (v2 - v1) * static_cast<float>((clipBottom - top) / (bottom - top));
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float positions[12] =
+		{
+			2.0f * static_cast<float>(clipLeft) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(clipTop) / height, 0.0f,
+			2.0f * static_cast<float>(clipLeft) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(clipBottom) / height, 0.0f,
+			2.0f * static_cast<float>(clipRight) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(clipBottom) / height, 0.0f,
+			2.0f * static_cast<float>(clipRight) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(clipTop) / height, 0.0f
+		};
+		const float texcoords[8] = { clipU1, clipV1, clipU1, clipV2, clipU2, clipV2, clipU2, clipV1 };
+		uint32 colorOverlay = parms.colorOverlay;
+		float light = 1.0f;
+		if (colorOverlay != 0 && (colorOverlay & 0xffffff) == 0)
+		{
+			light = 1.0f - APART(colorOverlay) / 255.0f;
+			colorOverlay = 0;
+		}
+		float color[3] = { light, light, light };
+		if (parms.style.Flags & STYLEF_ColorIsFixed)
+		{
+			color[0] = RPART(parms.fillcolor) / 255.0f;
+			color[1] = GPART(parms.fillcolor) / 255.0f;
+			color[2] = BPART(parms.fillcolor) / 255.0f;
+		}
+		int translation = 0;
+		if (parms.remap != NULL && !parms.remap->Inactive)
+		{
+			GLTranslationPalette *palette = static_cast<GLTranslationPalette *>(parms.remap->GetNative());
+			if (palette != NULL) translation = -palette->GetIndex();
+		}
+		const bool alphaChannel = parms.alphaChannel;
+		const unsigned int texture = nativeMaterial->BindNative(alphaChannel ? CM_SHADE : CM_DEFAULT,
+			alphaChannel ? 0 : translation, false, false);
+		EAndroidNativeBlendMode blendMode = ANDROID_BLEND_OPAQUE;
+		if (parms.style.BlendOp == STYLEOP_Add)
+			blendMode = parms.style.DestAlpha == STYLEALPHA_One ? ANDROID_BLEND_ADD : ANDROID_BLEND_ALPHA;
+		else if (parms.style.BlendOp == STYLEOP_Sub) blendMode = ANDROID_BLEND_SUBTRACT;
+		else if (parms.style.BlendOp == STYLEOP_RevSub) blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+		else if (parms.alpha < FRACUNIT || parms.style.BlendOp != STYLEOP_None) blendMode = ANDROID_BLEND_ALPHA;
+		unsigned int materialFlags = 0;
+		if (alphaChannel) materialFlags |= ANDROID_MATERIAL_RED_IS_ALPHA;
+		if (parms.style.Flags & STYLEF_RedIsAlpha) materialFlags |= ANDROID_MATERIAL_RED_IS_ALPHA;
+		if (parms.style.Flags & STYLEF_InvertOverlay) materialFlags |= ANDROID_MATERIAL_INVERT;
+		if (parms.style.Flags & STYLEF_FadeToBlack) materialFlags |= ANDROID_MATERIAL_FADE_TO_BLACK;
+		if (parms.style.Flags & STYLEF_InvertSource) materialFlags |= ANDROID_MATERIAL_INVERT_SOURCE;
+		if (parms.style.Flags & STYLEF_ColorIsFixed) materialFlags |= ANDROID_MATERIAL_COLOR_FIXED;
+		gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, color, FIXED2FLOAT(parms.alpha),
+			parms.masked != 0, texture, blendMode, materialFlags);
+		if (colorOverlay != 0 && APART(colorOverlay) != 0)
+		{
+			const float overlayColor[3] =
+			{
+				RPART(colorOverlay) / 255.0f,
+				GPART(colorOverlay) / 255.0f,
+				BPART(colorOverlay) / 255.0f
+			};
+			gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, overlayColor,
+				APART(colorOverlay) / 255.0f, false, texture, ANDROID_BLEND_ALPHA,
+				ANDROID_MATERIAL_COLOR_OVERLAY);
+		}
+		return;
+	}
+	#endif
+
 	double xscale = parms.destwidth / parms.texwidth;
 	double yscale = parms.destheight / parms.texheight;
 	double x = parms.x - parms.left * xscale;
@@ -448,6 +595,46 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 color)
 {
 	PalEntry p = color? (PalEntry)color : GPalette.BaseColors[palcolor];
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float dx = static_cast<float>(x2 - x1);
+		const float dy = static_cast<float>(y2 - y1);
+		const float length = sqrtf(dx * dx + dy * dy);
+		if (length > 0.001f)
+		{
+			const float offsetX = -dy / length * 0.5f;
+			const float offsetY = dx / length * 0.5f;
+			const float points[8] =
+			{
+				x1 + offsetX, y1 + offsetY,
+				x1 - offsetX, y1 - offsetY,
+				x2 - offsetX, y2 - offsetY,
+				x2 + offsetX, y2 + offsetY
+			};
+			float positions[12];
+			for (int i = 0; i < 4; ++i)
+			{
+				positions[i * 3 + 0] = 2.0f * points[i * 2 + 0] / width - 1.0f;
+				positions[i * 3 + 1] = 1.0f - 2.0f * points[i * 2 + 1] / height;
+				positions[i * 3 + 2] = 0.0f;
+			}
+			const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
+			const float alpha = color != 0 && p.a != 0 ? p.a / 255.0f : 1.0f;
+			gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
+				alpha < 0.999f ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE);
+		}
+		else
+		{
+			DrawPixel(x1, y1, palcolor, color);
+		}
+		return;
+	}
+	#endif
 	gl_RenderState.EnableTexture(false);
 	gl_RenderState.Apply(true);
 	glColor3ub(p.r, p.g, p.b);
@@ -466,6 +653,29 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 {
 	PalEntry p = color? (PalEntry)color : GPalette.BaseColors[palcolor];
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float left = 2.0f * static_cast<float>(x1) / width - 1.0f;
+		const float right = 2.0f * static_cast<float>(x1 + 1) / width - 1.0f;
+		const float top = 1.0f - 2.0f * static_cast<float>(y1) / height;
+		const float bottom = 1.0f - 2.0f * static_cast<float>(y1 + 1) / height;
+		const float positions[12] =
+		{
+			left, top, 0.0f, left, bottom, 0.0f,
+			right, bottom, 0.0f, right, top, 0.0f
+		};
+		const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
+		const float alpha = color != 0 && p.a != 0 ? p.a / 255.0f : 1.0f;
+		gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
+			alpha < 0.999f ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE);
+		return;
+	}
+	#endif
 	gl_RenderState.EnableTexture(false);
 	gl_RenderState.Apply(true);
 	glColor3ub(p.r, p.g, p.b);
@@ -483,6 +693,29 @@ void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 
 void FGLRenderer::Dim(PalEntry color, float damount, int x1, int y1, int w, int h)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (damount <= 0.0f || w <= 0 || h <= 0) return;
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float left = 2.0f * static_cast<float>(x1) / width - 1.0f;
+		const float right = 2.0f * static_cast<float>(x1 + w) / width - 1.0f;
+		const float top = 1.0f - 2.0f * static_cast<float>(y1) / height;
+		const float bottom = 1.0f - 2.0f * static_cast<float>(y1 + h) / height;
+		const float positions[12] =
+		{
+			left, top, 0.0f, left, bottom, 0.0f,
+			right, bottom, 0.0f, right, top, 0.0f
+		};
+		const float rgb[3] = { color.r / 255.0f, color.g / 255.0f, color.b / 255.0f };
+		gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, damount, false, 0,
+			ANDROID_BLEND_ALPHA);
+		return;
+	}
+	#endif
 	float r, g, b;
 	
 	gl_RenderState.EnableTexture(false);
@@ -512,6 +745,38 @@ void FGLRenderer::Dim(PalEntry color, float damount, int x1, int y1, int w, int 
 //==========================================================================
 void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *src, bool local_origin)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (src == NULL || right <= left || bottom <= top) return;
+		FMaterial *nativeMaterial = FMaterial::ValidateTexture(src);
+		if (nativeMaterial == NULL) return;
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float u1 = local_origin ? 0.0f : static_cast<float>(left) / src->GetWidth();
+		const float v1 = local_origin ? 0.0f : static_cast<float>(top) / src->GetHeight();
+		const float u2 = static_cast<float>(local_origin ? right - left : right) / src->GetWidth();
+		const float v2 = static_cast<float>(local_origin ? bottom - top : bottom) / src->GetHeight();
+		const float positions[12] =
+		{
+			2.0f * static_cast<float>(left) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(top) / height, 0.0f,
+			2.0f * static_cast<float>(left) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(bottom) / height, 0.0f,
+			2.0f * static_cast<float>(right) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(bottom) / height, 0.0f,
+			2.0f * static_cast<float>(right) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(top) / height, 0.0f
+		};
+		const float texcoords[8] = { u1, v1, u1, v2, u2, v2, u2, v1 };
+		const unsigned int nativeTexture = nativeMaterial->BindNative(CM_DEFAULT, 0, true);
+		gl_AndroidNativeGLES_AddHUDPolygon(positions, texcoords, 4, NULL, 1.0f,
+			nativeMaterial->isMasked(), nativeTexture, true, ANDROID_BLEND_OPAQUE);
+		return;
+	}
+	#endif
 	float fU1,fU2,fV1,fV2;
 
 	FMaterial *gltexture=FMaterial::ValidateTexture(src);
@@ -552,6 +817,33 @@ void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *
 //==========================================================================
 void FGLRenderer::Clear(int left, int top, int right, int bottom, int palcolor, uint32 color)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (right <= left || bottom <= top) return;
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float positions[12] =
+		{
+			2.0f * static_cast<float>(left) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(top) / height, 0.0f,
+			2.0f * static_cast<float>(left) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(bottom) / height, 0.0f,
+			2.0f * static_cast<float>(right) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(bottom) / height, 0.0f,
+			2.0f * static_cast<float>(right) / width - 1.0f,
+			1.0f - 2.0f * static_cast<float>(top) / height, 0.0f
+		};
+		const PalEntry fill = palcolor == -1 || color != 0 ?
+			static_cast<PalEntry>(color) : GPalette.BaseColors[palcolor];
+		const float rgb[3] = { fill.r / 255.0f, fill.g / 255.0f, fill.b / 255.0f };
+		gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, 1.0f, false, 0,
+			ANDROID_BLEND_OPAQUE);
+		return;
+	}
+	#endif
 	int rt;
 	int offY = 0;
 	PalEntry p = palcolor==-1 || color != 0? (PalEntry)color : GPalette.BaseColors[palcolor];
@@ -593,6 +885,61 @@ void FGLRenderer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoint
 	double originx, double originy, double scalex, double scaley,
 	angle_t rotation, FDynamicColormap *colormap, int lightlevel)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (texture == NULL || points == NULL || npoints < 3) return;
+		FMaterial *nativeMaterial = FMaterial::ValidateTexture(texture);
+		if (nativeMaterial == NULL) return;
+		FColormap cm;
+		cm = colormap;
+		lightlevel = gl_CalcLightLevel(lightlevel, 0, true);
+		const PalEntry light = gl_CalcLightColor(lightlevel, cm.LightColor, cm.blendfactor, true);
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float uScale = 1.0f / static_cast<float>(texture->GetScaledWidth() * scalex);
+		const float vScale = (nativeMaterial->tex->bHasCanvas ? -1.0f : 1.0f) /
+			static_cast<float>(texture->GetScaledHeight() * scaley);
+		const float radians = static_cast<float>(rotation * M_PI / float(1u << 31));
+		const float cosRotation = cosf(radians);
+		const float sinRotation = sinf(radians);
+		const float ox = static_cast<float>(originx);
+		const float oy = static_cast<float>(originy);
+		std::vector<float> positions(static_cast<size_t>(npoints) * 3);
+		std::vector<float> texcoords(static_cast<size_t>(npoints) * 2);
+		for (int i = 0; i < npoints; ++i)
+		{
+			const float x = points[i].X;
+			const float y = points[i].Y;
+			positions[i * 3 + 0] = 2.0f * x / width - 1.0f;
+			positions[i * 3 + 1] = 1.0f - 2.0f * y / height;
+			positions[i * 3 + 2] = 0.0f;
+			float u = x - 0.5f - ox;
+			float v = y - 0.5f - oy;
+			if (rotation != 0)
+			{
+				const float rotatedU = u;
+				u = rotatedU * cosRotation - v * sinRotation;
+				v = v * cosRotation + rotatedU * sinRotation;
+			}
+			texcoords[i * 2 + 0] = u * uScale;
+			texcoords[i * 2 + 1] = v * vScale;
+		}
+		const float color[3] =
+		{
+			light.r / 255.0f,
+			light.g / 255.0f,
+			light.b / 255.0f
+		};
+		const unsigned int nativeTexture = nativeMaterial->BindNative(cm.colormap, 0, true);
+		gl_AndroidNativeGLES_AddHUDPolygon(&positions[0], &texcoords[0],
+			static_cast<unsigned int>(npoints), color, 1.0f, nativeMaterial->isMasked(),
+			nativeTexture, true, ANDROID_BLEND_OPAQUE);
+		return;
+	}
+	#endif
 	if (npoints < 3)
 	{ // This is no polygon.
 		return;

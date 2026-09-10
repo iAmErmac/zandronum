@@ -49,6 +49,9 @@
 #include "r_sky.h"
 
 #include "gl/system/gl_cvars.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/data/gl_data.h"
 #include "gl/dynlights/gl_dynlight.h"
@@ -137,6 +140,52 @@ void GLWall::PutWall(bool translucent)
 	}
 
 	CheckGlowing();
+
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
+		// Special portal surfaces need their own target; ordinary walls can be
+		// collected directly while the scene is traversed.
+		if (type == RENDERWALL_SKY)
+		{
+			if (sky != NULL && sky->texture[0] != NULL)
+			{
+				const float positions[12] =
+				{
+					glseg.x1, zbottom[0], glseg.y1,
+					glseg.x1, ztop[0], glseg.y1,
+					glseg.x2, ztop[1], glseg.y2,
+					glseg.x2, zbottom[1], glseg.y2
+				};
+				gl_AndroidNativeGLES_AddSkyMask(positions);
+				gl_AndroidNativeGLES_SetSky(sky->texture[0], sky->x_offset[0], sky->y_offset,
+					sky->mirrored, sky->sky2, sky->fadecolor);
+				if (sky->doublesky && sky->texture[1] != NULL)
+					gl_AndroidNativeGLES_SetSkyLayer(sky->texture[1], sky->x_offset[1], sky->y_offset, false);
+			}
+			// Sky walls are portal geometry even when their material is unavailable.
+			return;
+		}
+		else if (passflag[type] != 4)
+		{
+			RenderWall(3, NULL);
+			if (type != RENDERWALL_FFBLOCK && seg != NULL && seg->sidedef != NULL && seg->sidedef->AttachedDecals != NULL)
+			{
+				DoDrawDecals();
+			}
+		}
+		else if (type != RENDERWALL_SKYBOX && type != RENDERWALL_MIRROR &&
+			type != RENDERWALL_SECTORSTACK && type != RENDERWALL_PLANEMIRROR)
+		{
+			// Unsupported portal types keep their source surface until a native
+			// target path is available for that specific portal.
+			RenderWall(3, NULL);
+			return;
+		}
+		if (passflag[type] != 4) return;
+	}
+#endif
 
 	if (translucent) // translucent walls
 	{

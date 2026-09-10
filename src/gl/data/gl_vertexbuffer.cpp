@@ -47,6 +47,9 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/data/gl_data.h"
 #include "gl/data/gl_vertexbuffer.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 
 CUSTOM_CVAR(Int, gl_usevbo, -1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
@@ -66,6 +69,10 @@ CUSTOM_CVAR(Int, gl_usevbo, -1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCA
 		Printf("Vertex buffer use will be changed for the next level.\n");
 	}
 }
+
+#ifdef __ANDROID__
+TArray<FFlatVertexBuffer *> FFlatVertexBuffer::android_buffers;
+#endif
 
 //==========================================================================
 //
@@ -100,6 +107,18 @@ FVertexBuffer::~FVertexBuffer()
 FFlatVertexBuffer::FFlatVertexBuffer()
 : FVertexBuffer()
 {
+#ifdef __ANDROID__
+	vao_id = ebo_id = 0;
+	android_data_uploaded = false;
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		vbo_arg = 1;
+		gl_AndroidNativeGLES_CreateFlatBufferObjects(&vbo_id, &vao_id, &ebo_id);
+		android_buffers.Push(this);
+		map = NULL;
+		return;
+	}
+#endif
 	if (!(gl.flags&RFL_VBO)) 
 	{
 		vbo_arg = 0;
@@ -114,7 +133,60 @@ FFlatVertexBuffer::FFlatVertexBuffer()
 FFlatVertexBuffer::~FFlatVertexBuffer()
 {
 	UnmapVBO();
+#ifdef __ANDROID__
+	if (vao_id != 0 || ebo_id != 0)
+	{
+		gl_AndroidNativeGLES_DestroyFlatBufferObjects(vbo_id, vao_id, ebo_id);
+		vbo_id = vao_id = ebo_id = 0;
+	}
+	for (unsigned int i = 0; i < android_buffers.Size(); ++i)
+	{
+		if (android_buffers[i] == this)
+		{
+			android_buffers.Delete(i);
+			break;
+		}
+	}
+#endif
 }
+
+#ifdef __ANDROID__
+bool FFlatVertexBuffer::RestoreAndroidObjects()
+{
+	if (!gl_AndroidNativeGLES_CanUseResources()) return false;
+	if (vbo_id == 0 || vao_id == 0 || ebo_id == 0)
+	{
+		vbo_id = vao_id = ebo_id = 0;
+		if (!gl_AndroidNativeGLES_CreateFlatBufferObjects(&vbo_id, &vao_id, &ebo_id)) return false;
+		android_data_uploaded = false;
+	}
+	if (!android_data_uploaded && vbo_shadowdata.Size() > 0)
+	{
+		if (!gl_AndroidNativeGLES_UploadFlatBuffer(vbo_id, vao_id, ebo_id,
+			&vbo_shadowdata[0], vbo_shadowdata.Size(), sizeof(FFlatVertex))) return false;
+	}
+	android_data_uploaded = true;
+	return true;
+}
+
+void FFlatVertexBuffer::AndroidContextLost()
+{
+	vbo_id = vao_id = ebo_id = 0;
+	android_data_uploaded = false;
+	map = NULL;
+}
+
+void FFlatVertexBuffer::AndroidContextLostAll()
+{
+	for (unsigned int i = 0; i < android_buffers.Size(); ++i)
+		android_buffers[i]->AndroidContextLost();
+}
+
+void gl_AndroidNativeGLES_InvalidateFlatBuffers()
+{
+	FFlatVertexBuffer::AndroidContextLostAll();
+}
+#endif
 
 //==========================================================================
 //
@@ -313,6 +385,15 @@ void FFlatVertexBuffer::UpdatePlaneVertices(sector_t *sec, int plane)
 		vt->z = splane.ZatPoint(vt->x, vt->y);
 		if (plane == sector_t::floor && sec->transdoor) vt->z -= 1;
 	}
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (!RestoreAndroidObjects()) return;
+		gl_AndroidNativeGLES_UpdateFlatBuffer(vbo_id, startvt * sizeof(FFlatVertex),
+			countvt * sizeof(FFlatVertex), &vbo_shadowdata[startvt]);
+	}
+	else
+	#endif
 	if (gl.flags & RFL_MAP_BUFFER_RANGE)
 	{
 		MapVBO();
@@ -338,6 +419,14 @@ void FFlatVertexBuffer::CreateVBO()
 	if (vbo_arg > 0)
 	{
 		CreateFlatVBO();
+		#ifdef __ANDROID__
+		if (gl_AndroidNativeGLES_IsActive())
+		{
+			android_data_uploaded = false;
+			if (!RestoreAndroidObjects()) return;
+			return;
+		}
+		#endif
 		glBindBuffer(GL_ARRAY_BUFFER, vbo_id);
 		glBufferData(GL_ARRAY_BUFFER, vbo_shadowdata.Size() * sizeof(FFlatVertex), &vbo_shadowdata[0], GL_DYNAMIC_DRAW);
 	}
@@ -364,6 +453,14 @@ void FFlatVertexBuffer::BindVBO()
 	if (vbo_arg > 0)
 	{
 		UnmapVBO();
+		#ifdef __ANDROID__
+		if (gl_AndroidNativeGLES_IsActive())
+		{
+			if (!RestoreAndroidObjects()) return;
+			gl_AndroidNativeGLES_BindFlatBuffer(vao_id, vbo_id);
+			return;
+		}
+		#endif
 		glBindBuffer(GL_ARRAY_BUFFER, vbo_id);
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 		glVertexPointer(3,GL_FLOAT, sizeof(FFlatVertex), &VTO->x);

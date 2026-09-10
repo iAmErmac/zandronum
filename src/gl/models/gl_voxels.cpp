@@ -60,6 +60,11 @@
 #include "gl/utility/gl_convert.h"
 #include "gl/renderer/gl_renderstate.h"
 
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#include <vector>
+#endif
+
 
 //===========================================================================
 //
@@ -548,4 +553,87 @@ void FVoxelModel::RenderFrameInterpolated(FTexture * skin, int frame, int frame2
 {
 	RenderFrame(skin, frame, cm, translation);
 }
+
+#ifdef __ANDROID__
+bool FVoxelModel::RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
+	int cm, int translation, FModelNativeCollector *collector)
+{
+	if (collector == NULL || mVertices.Size() == 0 || mIndices.Size() < 4) return false;
+	std::vector<float> positions;
+	std::vector<float> texcoords;
+	std::vector<float> normals;
+	std::vector<unsigned int> indices;
+	positions.reserve((mIndices.Size() / 4) * 12);
+	texcoords.reserve((mIndices.Size() / 4) * 8);
+	normals.reserve((mIndices.Size() / 4) * 12);
+	indices.reserve((mIndices.Size() / 4) * 6);
+	for (unsigned int quad = 0; quad + 3 < mIndices.Size(); quad += 4)
+	{
+		const unsigned int a = mIndices[quad + 0];
+		const unsigned int b = mIndices[quad + 1];
+		const unsigned int c = mIndices[quad + 2];
+		const unsigned int d = mIndices[quad + 3];
+		if (a >= mVertices.Size() || b >= mVertices.Size() || c >= mVertices.Size() || d >= mVertices.Size())
+			return false;
+		const FVoxelVertex *corners[4] =
+		{
+			&mVertices[a], &mVertices[b], &mVertices[c], &mVertices[d]
+		};
+		const float edge1[3] =
+		{
+			corners[1]->x - corners[0]->x,
+			corners[1]->y - corners[0]->y,
+			corners[1]->z - corners[0]->z
+		};
+		const float edge2[3] =
+		{
+			corners[2]->x - corners[0]->x,
+			corners[2]->y - corners[0]->y,
+			corners[2]->z - corners[0]->z
+		};
+		float normal[3] =
+		{
+			edge1[1] * edge2[2] - edge1[2] * edge2[1],
+			edge1[2] * edge2[0] - edge1[0] * edge2[2],
+			edge1[0] * edge2[1] - edge1[1] * edge2[0]
+		};
+		const float length = sqrtf(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+		if (length > 0.0001f)
+		{
+			normal[0] /= length;
+			normal[1] /= length;
+			normal[2] /= length;
+		}
+		else
+		{
+			normal[0] = 0.0f;
+			normal[1] = 0.0f;
+			normal[2] = 1.0f;
+		}
+		const unsigned int first = static_cast<unsigned int>(positions.size() / 3);
+		for (int corner = 0; corner < 4; ++corner)
+		{
+			positions.push_back(corners[corner]->x);
+			positions.push_back(corners[corner]->y);
+			positions.push_back(corners[corner]->z);
+			texcoords.push_back(corners[corner]->u);
+			texcoords.push_back(corners[corner]->v);
+			normals.push_back(normal[0]);
+			normals.push_back(normal[1]);
+			normals.push_back(normal[2]);
+		}
+		indices.push_back(first + 0);
+		indices.push_back(first + 1);
+		indices.push_back(first + 2);
+		indices.push_back(first + 0);
+		indices.push_back(first + 2);
+		indices.push_back(first + 3);
+	}
+	if (indices.empty()) return false;
+	collector->SubmitSurface(&positions[0], &texcoords[0],
+		static_cast<unsigned int>(positions.size() / 3), &indices[0],
+		static_cast<unsigned int>(indices.size()), skin != NULL ? skin : mPalette, &normals[0]);
+	return true;
+}
+#endif
 

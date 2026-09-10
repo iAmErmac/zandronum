@@ -56,6 +56,9 @@
 #include "gl/models/gl_models.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 EXTERN_CVAR (Bool, r_drawplayersprites)
 EXTERN_CVAR(Float, transsouls)
@@ -70,7 +73,7 @@ EXTERN_CVAR (Bool, r_deathcamera)
 //
 //==========================================================================
 
-void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader)
+void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader, float nativeAlpha, unsigned int nativeMaterialFlags)
 {
 	float			fU1,fV1;
 	float			fU2,fV2;
@@ -96,6 +99,10 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 	FMaterial * tex = FMaterial::ValidateTexture(lump, false);
 	if (!tex) return;
 
+#ifdef __ANDROID__
+	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+	if (!nativeGLES)
+#endif
 	tex->BindPatch(cm_index, 0, OverrideShader);
 
 	int vw = viewwidth;
@@ -149,6 +156,39 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		fV2=tex->GetVB();
 	}
 
+#ifdef __ANDROID__
+	if (nativeGLES)
+	{
+		const float width = screen != NULL && screen->GetWidth() > 0 ?
+			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
+		const float height = screen != NULL && screen->GetHeight() > 0 ?
+			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float left = 2.0f * static_cast<float>(x1) / width - 1.0f;
+		const float right = 2.0f * static_cast<float>(x2) / width - 1.0f;
+		const float top = 1.0f - 2.0f * static_cast<float>(y1) / height;
+		const float bottom = 1.0f - 2.0f * static_cast<float>(y2) / height;
+		const float positions[12] =
+		{
+			left, top, 0.0f,
+			left, bottom, 0.0f,
+			right, bottom, 0.0f,
+			right, top, 0.0f
+		};
+		// Native sprite uploads are direct NPOT images; the desktop UV range
+		// describes the old padded texture and would crop the weapon.
+		const float nativeLeft = mirror ? 1.0f : 0.0f;
+		const float nativeRight = mirror ? 0.0f : 1.0f;
+		const float texcoords[8] = { nativeLeft, 0.0f, nativeLeft, 1.0f,
+			nativeRight, 1.0f, nativeRight, 0.0f };
+		const unsigned int texture = tex->BindNative(cm_index, 0, false);
+		const EAndroidNativeBlendMode blendMode = nativeAlpha < 0.999f ?
+			ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE;
+		gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, NULL, nativeAlpha,
+			tex->isMasked(), texture, blendMode, nativeMaterialFlags);
+		return;
+	}
+#endif
+
 	if (tex->GetTransparent() || OverrideShader != 0)
 	{
 		gl_RenderState.EnableAlphaTest(false);
@@ -176,6 +216,9 @@ EXTERN_CVAR(Bool, gl_brightfog)
 
 void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 {
+	#ifdef __ANDROID__
+	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+	#endif
 	bool statebright[2] = {false, false};
 	unsigned int i;
 	pspdef_t *psp;
@@ -311,11 +354,21 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 
 	int OverrideShader = 0;
 	float trans = 0.f;
+	bool nativeFuzz = false;
 	if (vis.RenderStyle.BlendOp >= STYLEOP_Fuzz && vis.RenderStyle.BlendOp <= STYLEOP_FuzzOrRevSub)
 	{
 		vis.RenderStyle.CheckFuzz();
 		if (vis.RenderStyle.BlendOp == STYLEOP_Fuzz)
 		{
+			#ifdef __ANDROID__
+			if (gl_AndroidNativeGLES_IsActive() && gl_fuzztype != 0)
+			{
+				nativeFuzz = true;
+				vis.RenderStyle = LegacyRenderStyles[STYLE_Translucent];
+				trans = 0.99f;
+			}
+			else
+			#endif
 			if (gl.shadermodel >= 4 && gl_fuzztype != 0)
 			{
 				// Todo: implement shader selection here
@@ -331,7 +384,10 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 		statebright[0] = statebright[1] = false;
 	}
 
-	gl_SetRenderStyle(vis.RenderStyle, false, false);
+	#ifdef __ANDROID__
+	if (!nativeGLES)
+	#endif
+		gl_SetRenderStyle(vis.RenderStyle, false, false);
 
 	if (vis.RenderStyle.Flags & STYLEF_TransSoulsAlpha)
 	{
@@ -382,9 +438,21 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 				}
 			}
 			// set the lighting parameters (only calls glColor and glAlphaFunc)
-			gl_SetSpriteLighting(vis.RenderStyle, playermo, statebright[i]? 255 : lightlevel, 
-				0, &cmc, 0xffffff, trans, statebright[i], true);
-			DrawPSprite (player,psp,psp->sx+ofsx, psp->sy+ofsy, cm.colormap, hudModelStep, OverrideShader);
+			#ifdef __ANDROID__
+			if (!nativeGLES)
+			#endif
+				gl_SetSpriteLighting(vis.RenderStyle, playermo, statebright[i]? 255 : lightlevel,
+					0, &cmc, 0xffffff, trans, statebright[i], true);
+			unsigned int nativeMaterialFlags = 0;
+			#ifdef __ANDROID__
+			nativeMaterialFlags =
+				(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
+				((vis.RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
+				((vis.RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
+				((vis.RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
+				((vis.RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0);
+			#endif
+			DrawPSprite (player,psp,psp->sx+ofsx, psp->sy+ofsy, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags);
 		}
 	}
 	gl_RenderState.EnableBrightmap(false);
@@ -399,6 +467,9 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 
 void FGLRenderer::DrawTargeterSprites()
 {
+	#ifdef __ANDROID__
+	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+	#endif
 	int i;
 	pspdef_t *psp;
 	AActor * playermo=players[consoleplayer].camera;
@@ -407,12 +478,17 @@ void FGLRenderer::DrawTargeterSprites()
 	if(!player || playermo->renderflags&RF_INVISIBLE || !r_drawplayersprites ||
 		mViewActor!=playermo) return;
 
-	gl_RenderState.EnableBrightmap(false);
-	gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	gl_RenderState.AlphaFunc(GL_GEQUAL,gl_mask_sprite_threshold);
-	gl_RenderState.BlendEquation(GL_FUNC_ADD);
-	glColor3f(1.0f,1.0f,1.0f);
-	gl_RenderState.SetTextureMode(TM_MODULATE);
+	#ifdef __ANDROID__
+	if (!nativeGLES)
+	#endif
+	{
+		gl_RenderState.EnableBrightmap(false);
+		gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		gl_RenderState.AlphaFunc(GL_GEQUAL,gl_mask_sprite_threshold);
+		gl_RenderState.BlendEquation(GL_FUNC_ADD);
+		glColor3f(1.0f,1.0f,1.0f);
+		gl_RenderState.SetTextureMode(TM_MODULATE);
+	}
 
 	// The Targeter's sprites are always drawn normally.
 	for (i=ps_targetcenter, psp = &player->psprites[ps_targetcenter]; i<NUMPSPRITES; i++,psp++)

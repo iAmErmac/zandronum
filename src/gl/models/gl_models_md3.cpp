@@ -47,6 +47,8 @@
 #include "gl/textures/gl_material.h"
 #include "gl/shaders/gl_shader.h"
 
+#include <vector>
+
 #define MAX_QPATH 64
 
 static void UnpackVector(unsigned short packed, float & nx, float & ny, float & nz)
@@ -317,6 +319,77 @@ void FMD3Model::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 		delete[] verticesInterpolated;
 	}
 }
+
+#ifdef __ANDROID__
+bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, double inter,
+	int cm, int translation, FModelNativeCollector *collector)
+{
+	if (collector == NULL || frames == NULL || surfaces == NULL || frameno < 0 || frameno >= numFrames)
+		return false;
+	if (frameno2 < 0 || frameno2 >= numFrames)
+	{
+		frameno2 = frameno;
+		inter = 0.0;
+	}
+	inter = clamp<double>(inter, 0.0, 1.0);
+	bool submitted = false;
+	for (int surfaceIndex = 0; surfaceIndex < numSurfaces; ++surfaceIndex)
+	{
+		MD3Surface *surface = &surfaces[surfaceIndex];
+		FTexture *surfaceSkin = skin;
+		if (!surfaceSkin && curSpriteMDLFrame != NULL)
+			surfaceSkin = curSpriteMDLFrame->surfaceskins[curMDLIndex][surfaceIndex];
+		if (!surfaceSkin && surface->numSkins > 0)
+			surfaceSkin = surface->skins[0];
+		if (!surfaceSkin || surface->numVertices <= 0 || surface->numTriangles <= 0) continue;
+		std::vector<float> positions;
+		std::vector<float> texcoords;
+		std::vector<float> normals;
+		std::vector<unsigned int> indices;
+		positions.reserve(surface->numVertices * 3);
+		texcoords.reserve(surface->numVertices * 2);
+		normals.reserve(surface->numVertices * 3);
+		indices.reserve(surface->numTriangles * 3);
+		MD3Vertex *firstFrame = surface->vertices + frameno * surface->numVertices;
+		MD3Vertex *secondFrame = surface->vertices + frameno2 * surface->numVertices;
+		for (int vertex = 0; vertex < surface->numVertices; ++vertex)
+		{
+			const MD3Vertex &a = firstFrame[vertex];
+			const MD3Vertex &b = secondFrame[vertex];
+			const float x = static_cast<float>((1.0 - inter) * a.x + inter * b.x);
+			const float y = static_cast<float>((1.0 - inter) * a.y + inter * b.y);
+			const float z = static_cast<float>((1.0 - inter) * a.z + inter * b.z);
+			// MD3 uses a different up axis; RenderTriangles swaps y and z.
+			positions.push_back(x);
+			positions.push_back(z);
+			positions.push_back(y);
+			const float nx = static_cast<float>((1.0 - inter) * a.nx + inter * b.nx);
+			const float ny = static_cast<float>((1.0 - inter) * a.ny + inter * b.ny);
+			const float nz = static_cast<float>((1.0 - inter) * a.nz + inter * b.nz);
+			// MD3 uses the same axis swap for normals as it does for positions.
+			normals.push_back(nx);
+			normals.push_back(nz);
+			normals.push_back(ny);
+			texcoords.push_back(surface->texcoords[vertex].s);
+			texcoords.push_back(surface->texcoords[vertex].t);
+		}
+		for (int triangle = 0; triangle < surface->numTriangles; ++triangle)
+		{
+			for (int corner = 0; corner < 3; ++corner)
+			{
+				const int index = surface->tris[triangle].VertIndex[corner];
+				if (index < 0 || index >= surface->numVertices) return submitted;
+				indices.push_back(static_cast<unsigned int>(index));
+			}
+		}
+		collector->SubmitSurface(&positions[0], &texcoords[0],
+			static_cast<unsigned int>(positions.size() / 3), &indices[0],
+			static_cast<unsigned int>(indices.size()), surfaceSkin, &normals[0]);
+		submitted = true;
+	}
+	return submitted;
+}
+#endif
 
 FMD3Model::~FMD3Model()
 {

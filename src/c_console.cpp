@@ -191,7 +191,11 @@ CVAR (Float, con_notifytime, 3.f, CVAR_ARCHIVE)
 CVAR (Bool, con_centernotify, false, CVAR_ARCHIVE)
 // [BC] con_scaletext is back to being a bool.
 // [AK] Converted to a CUSTOM_CVAR.
-CUSTOM_CVAR(Bool, con_scaletext, 0, CVAR_ARCHIVE)		// Scale text at high resolutions?
+#ifdef __ANDROID__
+CUSTOM_CVAR(Bool, con_scaletext, true, CVAR_ARCHIVE)		// Scale text at high resolutions?
+#else
+CUSTOM_CVAR(Bool, con_scaletext, false, CVAR_ARCHIVE)		// Scale text at high resolutions?
+#endif
 {
 	// [AK] Update the scaling of the virtual screen.
 	C_UpdateVirtualScreen();
@@ -207,7 +211,11 @@ CUSTOM_CVAR(Float, con_alpha, 0.75f, CVAR_ARCHIVE)
 CVAR (String, con_ctrl_d, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 // [BC] Allow users to specify a virtual width and height when text scaling is enabled.
+#ifdef __ANDROID__
+CUSTOM_CVAR( Int, con_virtualwidth, 320, CVAR_ARCHIVE )
+#else
 CUSTOM_CVAR( Int, con_virtualwidth, 640, CVAR_ARCHIVE )
+#endif
 {
 	// [RC] Less than 4 crashes in the menu, less than 8 in game. Set to 32 to be safe.
 	if ( self < 32 )
@@ -217,7 +225,11 @@ CUSTOM_CVAR( Int, con_virtualwidth, 640, CVAR_ARCHIVE )
 	C_UpdateVirtualScreen();
 }
 
+#ifdef __ANDROID__
+CUSTOM_CVAR( Int, con_virtualheight, 240, CVAR_ARCHIVE )
+#else
 CUSTOM_CVAR( Int, con_virtualheight, 480, CVAR_ARCHIVE )
+#endif
 {
 	// [RC] Less than 4 crashes in the menu, less than 8 in game. Set to 32 to be safe.
 	if ( self < 32 )
@@ -457,8 +469,10 @@ void C_InitConsole (int width, int height, bool ingame)
 	{
 		cwidth = cheight = 8;
 	}
-	ConCols = (width - LEFTMARGIN - RIGHTMARGIN) / cwidth;
-	PhysRows = height / cheight;
+	const int textWidth = g_bScale ? con_virtualwidth : width;
+	const int textHeight = g_bScale ? con_virtualheight : height;
+	ConCols = (textWidth - LEFTMARGIN - RIGHTMARGIN) / cwidth;
+	PhysRows = textHeight / cheight;
 
 	// If there is some text in the console buffer, reformat it
 	// for the new resolution.
@@ -926,7 +940,7 @@ void AddToConsole (int printlevel, const char *text)
 	if (ConFont != NULL && screen != NULL)
 	{
 		x = 0;
-		maxwidth = screen->GetWidth() - LEFTMARGIN - RIGHTMARGIN;
+		maxwidth = (g_bScale ? con_virtualwidth : screen->GetWidth()) - LEFTMARGIN - RIGHTMARGIN;
 
 		while (*work_p)
 		{
@@ -1437,10 +1451,46 @@ void C_SetTicker (unsigned int at, bool forceUpdate)
 	maybedrawnow (true, TickerVisible ? forceUpdate : false);
 }
 
+static void C_DrawConsoleText (FFont *font, int color, int x, int y, const char *text)
+{
+	if (g_bScale)
+	{
+		screen->DrawText (font, color, x, y, text,
+			DTA_VirtualWidth, static_cast<int> (con_virtualwidth),
+			DTA_VirtualHeight, static_cast<int> (con_virtualheight),
+			DTA_KeepRatio, static_cast<bool> (con_scaletext_usescreenratio),
+			TAG_DONE);
+	}
+	else
+	{
+		screen->DrawText (font, color, x, y, text, TAG_DONE);
+	}
+}
+
+static void C_DrawConsoleChar (FFont *font, int color, int x, int y, BYTE character)
+{
+	if (g_bScale)
+	{
+		screen->DrawChar (font, color, x, y, character,
+			DTA_VirtualWidth, static_cast<int> (con_virtualwidth),
+			DTA_VirtualHeight, static_cast<int> (con_virtualheight),
+			DTA_KeepRatio, static_cast<bool> (con_scaletext_usescreenratio),
+			TAG_DONE);
+	}
+	else
+	{
+		screen->DrawChar (font, color, x, y, character, TAG_DONE);
+	}
+}
+
 void C_DrawConsole (bool hw2d)
 {
 	static int oldbottom = 0;
 	int lines, left, offset;
+	const int drawWidth = g_bScale ? con_virtualwidth : SCREENWIDTH;
+	const int drawHeight = g_bScale ? con_virtualheight : SCREENHEIGHT;
+	const int fontHeight = ConFont->GetHeight ();
+	const int consoleCols = (drawWidth - LEFTMARGIN - RIGHTMARGIN) / ConFont->GetCharWidth ('M');
 
 	// [AK] Check if we should interpolate the console.
 	const bool bInterpolate = ((con_interpolate) && (ConsoleState == c_falling || ConsoleState == c_rising));
@@ -1456,16 +1506,18 @@ void C_DrawConsole (bool hw2d)
 		ConBottom = clamp<int>(SavedConBottom + offset * (ConsoleState == c_falling ? 1 : -1), 0, SCREENHEIGHT / 2);
 	}
 
+	const int drawBottom = g_bScale ? Scale (ConBottom, drawHeight, SCREENHEIGHT) : ConBottom;
+
 	left = LEFTMARGIN;
-	lines = (ConBottom-ConFont->GetHeight()*2)/ConFont->GetHeight();
-	if (-ConFont->GetHeight() + lines*ConFont->GetHeight() > ConBottom - ConFont->GetHeight()*7/2)
+	lines = (drawBottom-fontHeight*2)/fontHeight;
+	if (-fontHeight + lines*fontHeight > drawBottom - fontHeight*7/2)
 	{
-		offset = -ConFont->GetHeight()/2;
+		offset = -fontHeight/2;
 		lines--;
 	}
 	else
 	{
-		offset = -ConFont->GetHeight();
+		offset = -fontHeight;
 	}
 
 	if ((ConBottom < oldbottom) &&
@@ -1503,7 +1555,7 @@ void C_DrawConsole (bool hw2d)
 			screen->Clear (0, visheight, screen->GetWidth(), visheight+1, 0, 0);
 		}
 
-		if (ConBottom >= 12)
+		if (drawBottom >= 12)
 		{
 			// [AK] Use FString to create the version string.
 			FString versionString;
@@ -1513,17 +1565,17 @@ void C_DrawConsole (bool hw2d)
 			versionString.Format( "v%s (" TEXTCOLOR_GREEN "%s" TEXTCOLOR_NORMAL ") ", GetVersionString( ), ZDOOMVERSIONSTR );
 			versionString.AppendFormat( TEXTCOLOR_BLUE "%s", GetGitTime( ));
 
-			screen->DrawText (ConFont, CR_ORANGE, SCREENWIDTH - 8 -
+			C_DrawConsoleText (ConFont, CR_ORANGE, drawWidth - 8 -
 				ConFont->StringWidth( versionString.GetChars( )),
-				ConBottom - ConFont->GetHeight( ) - 4,
-				versionString.GetChars( ), TAG_DONE );
+				drawBottom - fontHeight - 4,
+				versionString.GetChars( ));
 
 			if (TickerMax)
 			{
 				char tickstr[256];
-				const int tickerY = ConBottom - ConFont->GetHeight() - 4;
+				const int tickerY = drawBottom - fontHeight - 4;
 				size_t i;
-				int tickend = ConCols - SCREENWIDTH / 90 - 6;
+				int tickend = consoleCols - drawWidth / 90 - 6;
 				int tickbegin = 0;
 
 				if (TickerLabel)
@@ -1546,11 +1598,11 @@ void C_DrawConsole (bool hw2d)
 				{
 					tickstr[tickend+3] = 0;
 				}
-				screen->DrawText (ConFont, CR_BROWN, LEFTMARGIN, tickerY, tickstr, TAG_DONE);
+				C_DrawConsoleText (ConFont, CR_BROWN, LEFTMARGIN, tickerY, tickstr);
 
 				// Draw the marker
 				i = LEFTMARGIN+5+tickbegin*8 + Scale (TickerAt, (SDWORD)(tickend - tickbegin)*8, TickerMax);
-				screen->DrawChar (ConFont, CR_ORANGE, (int)i, tickerY, 0x13, TAG_DONE);
+				C_DrawConsoleChar (ConFont, CR_ORANGE, (int)i, tickerY, 0x13);
 
 				TickerVisible = true;
 			}
@@ -1585,7 +1637,7 @@ void C_DrawConsole (bool hw2d)
 
 	if (lines > 0)
 	{
-		int bottomline = ConBottom - ConFont->GetHeight()*2 - 4;
+		int bottomline = drawBottom - fontHeight*2 - 4;
 		int pos = (InsertLine - 1) & LINEMASK;
 		int i;
 
@@ -1613,15 +1665,15 @@ void C_DrawConsole (bool hw2d)
 				int lineoffset = LEFTMARGIN;
 				if (TimeStamps[pos] != NULL)
 				{
-					screen->DrawText (ConFont, CR_TAN, lineoffset, offset + lines * ConFont->GetHeight(),
-						TimeStamps[pos], TAG_DONE);
+					C_DrawConsoleText (ConFont, CR_TAN, lineoffset, offset + lines * fontHeight,
+						TimeStamps[pos]);
 
 					lineoffset += ConFont->StringWidth(TimeStamps[pos]);
 				}
 
 				// [AK] Offset the rest of the line by on the width of the timestamp.
-				screen->DrawText (ConFont, CR_TAN, lineoffset, offset + lines * ConFont->GetHeight(),
-					Lines[pos], TAG_DONE);
+				C_DrawConsoleText (ConFont, CR_TAN, lineoffset, offset + lines * fontHeight,
+					Lines[pos]);
 			}
 			lines--;
 		} while (pos != TopLine && lines > 0);
@@ -1629,7 +1681,7 @@ void C_DrawConsole (bool hw2d)
 		ConsoleDrawing = false;
 		DequeueConsoleText ();
 
-		if (ConBottom >= 20)
+		if (drawBottom >= 20)
 		{
 			if (gamestate != GS_STARTUP)
 			{
@@ -1639,21 +1691,21 @@ void C_DrawConsole (bool hw2d)
 				FString command((char *)&CmdLine[2+CmdLine[259]]);
 				int cursorpos = CmdLine[1] - CmdLine[259];
 
-				screen->DrawChar (ConFont, CR_ORANGE, left, bottomline, '\x1c', TAG_DONE);
-				screen->DrawText (ConFont, CR_ORANGE, left + ConFont->GetCharWidth(0x1c), bottomline,
-					command, TAG_DONE);
+				C_DrawConsoleChar (ConFont, CR_ORANGE, left, bottomline, '\x1c');
+				C_DrawConsoleText (ConFont, CR_ORANGE, left + ConFont->GetCharWidth(0x1c), bottomline,
+					command.GetChars());
 
 				if (cursoron)
 				{
-					screen->DrawChar (ConFont, CR_YELLOW, left + ConFont->GetCharWidth(0x1c) + cursorpos * ConFont->GetCharWidth(0xb),
-						bottomline, '\xb', TAG_DONE);
+					C_DrawConsoleChar (ConFont, CR_YELLOW, left + ConFont->GetCharWidth(0x1c) + cursorpos * ConFont->GetCharWidth(0xb),
+						bottomline, '\xb');
 				}
 			}
-			if (RowAdjust && ConBottom >= ConFont->GetHeight()*7/2)
+			if (RowAdjust && drawBottom >= fontHeight*7/2)
 			{
 				// Indicate that the view has been scrolled up (10)
 				// and if we can scroll no further (12)
-				screen->DrawChar (ConFont, CR_GREEN, 0, bottomline, pos == TopLine ? 12 : 10, TAG_DONE);
+				C_DrawConsoleChar (ConFont, CR_GREEN, 0, bottomline, pos == TopLine ? 12 : 10);
 			}
 		}
 	}
@@ -2718,6 +2770,14 @@ void C_UpdateVirtualScreen()
 		g_fXScale = static_cast<float>( SCREENWIDTH ) / 320.0f;
 		g_fYScale = static_cast<float>( SCREENHEIGHT ) / 200.0f;
 		g_rXScale = g_rYScale = 1.0f;
+	}
+
+	if (ConFont != NULL)
+	{
+		const int textWidth = g_bScale ? con_virtualwidth : SCREENWIDTH;
+		const int textHeight = g_bScale ? con_virtualheight : SCREENHEIGHT;
+		ConCols = (textWidth - LEFTMARGIN - RIGHTMARGIN) / ConFont->GetCharWidth ('M');
+		PhysRows = textHeight / ConFont->GetHeight ();
 	}
 
 	// [AK] The screen size changed, refresh the HUD just in case.

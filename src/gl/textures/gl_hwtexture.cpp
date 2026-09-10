@@ -50,6 +50,9 @@
 #include "gl/system/gl_cvars.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/textures/gl_material.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 
 extern TexFilter_s TexFilter[];
@@ -63,6 +66,9 @@ EXTERN_CVAR(Bool, gl_clamp_per_texture)
 //
 //===========================================================================
 unsigned int FHardwareTexture::lastbound[FHardwareTexture::MAX_TEXTURES];
+#ifdef __ANDROID__
+TArray<FHardwareTexture *> FHardwareTexture::android_textures;
+#endif
 
 //===========================================================================
 // 
@@ -72,6 +78,10 @@ unsigned int FHardwareTexture::lastbound[FHardwareTexture::MAX_TEXTURES];
 int FHardwareTexture::GetTexDimension(int value)
 {
 	if (value > gl.max_texturesize) return gl.max_texturesize;
+#ifdef __ANDROID__
+	// Native GLES 3.2 supports non-power-of-two 2D textures directly.
+	if (gl_AndroidNativeGLES_IsActive()) return value;
+#endif
 	if (gl.flags&RFL_NPOT_TEXTURE) return value;
 
 	int i=1;
@@ -232,8 +242,13 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 	bool deletebuffer=false;
 	bool use_mipmapping = TexFilter[gl_texture_filter].mipmapping;
 
+	#ifdef __ANDROID__
+	// Native GLES uses one sized RGBA format until compressed asset uploads are audited.
+	texformat = GL_RGBA8;
+	#else
 	if (alphatexture) texformat=GL_ALPHA8;
 	else if (forcenocompression) texformat = GL_RGBA8;
+	#endif
 	if (glTexID==0) glGenTextures(1,&glTexID);
 	glBindTexture(GL_TEXTURE_2D, glTexID);
 	lastbound[texunit]=glTexID;
@@ -247,7 +262,9 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 
 		// The texture must at least be initialized if no data is present.
 		mipmap=false;
+		#ifndef __ANDROID__
 		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, false);
+		#endif
 		buffer=(unsigned char *)calloc(4,rw * (rh+1));
 		deletebuffer=true;
 		//texheight=-h;	
@@ -257,7 +274,9 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 		rw = GetTexDimension (w);
 		rh = GetTexDimension (h);
 
+		#ifndef __ANDROID__
 		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, (mipmap && use_mipmapping && !forcenofiltering));
+		#endif
 
 		if (rw == w && rh == h)
 		{
@@ -293,11 +312,17 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
             buffer=(unsigned char *)scaledbuffer;
 		}
 	}
-#ifdef __MOBILE__
+#ifdef __ANDROID__
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+#elif defined(__MOBILE__)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, texformat, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 #endif
+	#ifdef __ANDROID__
+	if (mipmap && use_mipmapping && !forcenofiltering)
+		gl_AndroidNativeGLES_GenerateMipmap();
+	#endif
 
 
 	if (deletebuffer) free(buffer);
@@ -356,7 +381,83 @@ FHardwareTexture::FHardwareTexture(int _width, int _height, bool _mipmap, bool w
 	clampmode=0;
 	glDepthID = 0;
 	forcenofiltering = nofilter;
+#ifdef __ANDROID__
+	android_textures.Push(this);
+#endif
 }
+
+#ifdef __ANDROID__
+void FHardwareTexture::RememberAndroidSource(const unsigned char *buffer, int w, int h, bool wrap, int cm, int translation)
+{
+	if (buffer == NULL || w <= 0 || h <= 0) return;
+	for (unsigned int i = 0; i < android_sources.Size(); ++i)
+	{
+		AndroidTextureSource &source = android_sources[i];
+		if (source.cm == cm && source.translation == translation)
+		{
+			free(source.pixels);
+			source.pixels = (unsigned char *)malloc(w * h * 4);
+			if (source.pixels != NULL) memcpy(source.pixels, buffer, w * h * 4);
+			source.width = w;
+			source.height = h;
+			source.wrap = wrap;
+			return;
+		}
+	}
+	const int index = android_sources.Reserve(1);
+	AndroidTextureSource &source = android_sources[index];
+	source.cm = cm;
+	source.translation = translation;
+	source.width = w;
+	source.height = h;
+	source.wrap = wrap;
+	source.pixels = (unsigned char *)malloc(w * h * 4);
+	if (source.pixels != NULL) memcpy(source.pixels, buffer, w * h * 4);
+}
+
+bool FHardwareTexture::RestoreAndroidSource(int cm, int translation, unsigned int &texture, int texunit)
+{
+	for (unsigned int i = 0; i < android_sources.Size(); ++i)
+	{
+		AndroidTextureSource &source = android_sources[i];
+		if (source.cm == cm && source.translation == translation && source.pixels != NULL)
+		{
+			LoadImage(source.pixels, source.width, source.height, texture,
+				source.wrap ? GL_REPEAT : GL_CLAMP, cm == CM_SHADE, texunit);
+			return texture != 0;
+		}
+	}
+	return false;
+}
+
+void FHardwareTexture::ClearAndroidSources()
+{
+	for (unsigned int i = 0; i < android_sources.Size(); ++i)
+		free(android_sources[i].pixels);
+	android_sources.Clear();
+}
+
+void FHardwareTexture::AndroidContextLost()
+{
+	const int cm_arraysize = CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size();
+	for (int i = 0; i < cm_arraysize; ++i) glTexID[i] = 0;
+	for (unsigned int i = 0; i < glTexID_Translated.Size(); ++i)
+		glTexID_Translated[i].glTexID = 0;
+	glDepthID = 0;
+}
+
+void FHardwareTexture::AndroidContextLostAll()
+{
+	for (unsigned int i = 0; i < android_textures.Size(); ++i)
+		android_textures[i]->AndroidContextLost();
+	memset(lastbound, 0, sizeof(lastbound));
+}
+
+void gl_AndroidNativeGLES_InvalidateTextures()
+{
+	FHardwareTexture::AndroidContextLostAll();
+}
+#endif
 
 
 //===========================================================================
@@ -422,6 +523,17 @@ void FHardwareTexture::Clean(bool all)
 FHardwareTexture::~FHardwareTexture() 
 { 
 	Clean(true); 
+#ifdef __ANDROID__
+	for (unsigned int i = 0; i < android_textures.Size(); ++i)
+	{
+		if (android_textures[i] == this)
+		{
+			android_textures.Delete(i);
+			break;
+		}
+	}
+	ClearAndroidSources();
+#endif
 	delete [] glTexID;
 }
 
@@ -467,6 +579,10 @@ unsigned * FHardwareTexture::GetTexID(int cm, int translation)
 unsigned int FHardwareTexture::Bind(int texunit, int cm,int translation)
 {
 	unsigned int * pTexID=GetTexID(cm, translation);
+	#ifdef __ANDROID__
+	if (*pTexID == 0 && gl_AndroidNativeGLES_CanUseResources())
+		RestoreAndroidSource(cm, translation, *pTexID, texunit);
+	#endif
 
 	if (*pTexID!=0)
 	{
@@ -551,6 +667,9 @@ unsigned int FHardwareTexture::CreateTexture(unsigned char * buffer, int w, int 
 	if (cm < 0 || cm >= CM_MAXCOLORMAP) cm=CM_DEFAULT;
 
 	unsigned int * pTexID=GetTexID(cm, translation);
+	#ifdef __ANDROID__
+	RememberAndroidSource(buffer, w, h, wrap, cm, translation);
+	#endif
 
 	if (texunit != 0) glActiveTexture(GL_TEXTURE0+texunit);
 	LoadImage(buffer, w, h, *pTexID, wrap? GL_REPEAT:GL_CLAMP, cm==CM_SHADE, texunit);

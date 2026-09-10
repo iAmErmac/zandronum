@@ -137,6 +137,12 @@ public:
 
 	void Bind(int cm, int clamp = 0, int translation = 0, int overrideshader = 0);
 	void BindPatch(int cm, int translation = 0, int overrideshader = 0);
+#ifdef __ANDROID__
+	unsigned int BindNative(int cm, int translation, bool repeat, bool allowhires = true) const;
+	unsigned int BindNativeBrightmap(bool repeat) const;
+	void RemapNativeTexCoords(float *u, float *v) const;
+	void GetNativeSpriteCoords(float *u1, float *v1, float *u2, float *v2) const;
+#endif
 
 	unsigned char * CreateTexBuffer(int cm, int translation, int & w, int & h, bool expand = false, bool allowhires=true) const
 	{

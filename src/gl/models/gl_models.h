@@ -22,6 +22,17 @@ FTexture * LoadSkin(const char * path, const char * fn);
 // [JM] Necessary forward declaration
 typedef struct FSpriteModelFrame FSpriteModelFrame;
 
+#ifdef __ANDROID__
+class FModelNativeCollector
+{
+public:
+	virtual ~FModelNativeCollector() {}
+	virtual void SubmitSurface(const float *positions, const float *texcoords,
+		unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
+		FTexture *skin, const float *normals = NULL) = 0;
+};
+#endif
+
 class FModel
 {
 public:
@@ -33,6 +44,10 @@ public:
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0) = 0;
 	// [BB] Added RenderFrameInterpolated
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0) = 0;
+#ifdef __ANDROID__
+	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
+		int cm, int translation, FModelNativeCollector *collector) = 0;
+#endif
 	virtual void MakeGLData() {}
 	virtual void CleanGLData() {}
 
@@ -147,6 +162,10 @@ public:
 	virtual int FindFrame(const char * name);
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0);
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0);
+#ifdef __ANDROID__
+	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
+		int cm, int translation, FModelNativeCollector *collector);
+#endif
 
 };
 
@@ -237,6 +256,10 @@ public:
 	virtual int FindFrame(const char * name);
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0);
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0);
+#ifdef __ANDROID__
+	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
+		int cm, int translation, FModelNativeCollector *collector);
+#endif
 };
 
 class FVoxelVertexBuffer;
@@ -300,6 +323,10 @@ public:
 	virtual int FindFrame(const char * name);
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0);
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0);
+#ifdef __ANDROID__
+	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
+		int cm, int translation, FModelNativeCollector *collector);
+#endif
 	FTexture *GetPaletteTexture() const { return mPalette; }
 };
 

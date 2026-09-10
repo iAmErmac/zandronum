@@ -61,6 +61,9 @@
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_templates.h"
 #include "gl/utility/gl_geometric.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 // [AK] New #includes.
 #include "c_console.h"
 
@@ -95,6 +98,15 @@ UniqueList<secplane_t> UniquePlaneMirrors;
 
 
 
+#ifdef __ANDROID__
+static void SetNativePortalView(bool mirrored, bool planeMirrored)
+{
+	GLRenderer->SetCameraPos(viewx, viewy, viewz, viewangle);
+	const float yaw = float((viewangle >> ANGLETOFINESHIFT) * 360.0 / FINEANGLES);
+	gl_AndroidNativeGLES_SetPortalView(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), FIXED2FLOAT(viewz),
+		yaw, GLRenderer->mAngles.Pitch, GLRenderer->mAngles.Roll, mirrored, planeMirrored);
+}
+#endif
 //==========================================================================
 //
 //
@@ -115,6 +127,9 @@ void GLPortal::BeginScene()
 //==========================================================================
 void GLPortal::ClearScreen()
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) return;
+#endif
 	bool multi = !!glIsEnabled(GL_MULTISAMPLE);
 	glMatrixMode(GL_MODELVIEW);
 	glPushMatrix();
@@ -355,7 +370,11 @@ void GLPortal::End(bool usestencil)
 		viewangle=savedviewangle;
 		GLRenderer->mViewActor=savedviewactor;
 		in_area=savedviewarea;
-		GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+		#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	else
+	#endif
+	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
 		glColor4f(1,1,1,1);
 		glColorMask(0,0,0,0);						// no graphics
@@ -411,7 +430,11 @@ void GLPortal::End(bool usestencil)
 		viewangle=savedviewangle;
 		GLRenderer->mViewActor=savedviewactor;
 		in_area=savedviewarea;
-		GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+		#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	else
+	#endif
+	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
 		// This draws a valid z-buffer into the stencil's contents to ensure it
 		// doesn't get overwritten by the level's geometry.
@@ -472,6 +495,23 @@ FString indent;
 void GLPortal::EndFrame()
 {
 	GLPortal * p;
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		// Process only this frame's queue; the sentinel preserves an outer target.
+		unsigned int captured = 0;
+		while (portals.Pop(p))
+		{
+			if (p == NULL) break;
+			if (p->RenderNative()) ++captured;
+			delete p;
+		}
+		if (renderdepth > 0) --renderdepth;
+		if (developer && captured > 0)
+			DPrintf("Android GLES captured %u portal target(s).\n", captured);
+		return;
+	}
+#endif
 
 	if (gl_portalinfo)
 	{
@@ -509,6 +549,49 @@ void GLPortal::EndFrame()
 
 //-----------------------------------------------------------------------------
 //
+#ifdef __ANDROID__
+bool GLPortal::RenderNative()
+{
+	if (!gl_AndroidNativeGLES_IsActive() || !SupportsNativeCapture() || lines.Size() == 0)
+		return false;
+	const fixed_t savedViewX = viewx;
+	const fixed_t savedViewY = viewy;
+	const fixed_t savedViewZ = viewz;
+	const angle_t savedViewAngle = viewangle;
+	const area_t savedViewArea = in_area;
+	AActor *const savedViewActor = GLRenderer->mViewActor;
+	GLPortal *const savedCurrentPortal = GLRenderer->mCurrentPortal;
+	const unsigned int portalId = gl_AndroidNativeGLES_BeginPortalCapture();
+	if (portalId == ~0u) return false;
+	for (unsigned int index = 0; index < lines.Size(); ++index)
+	{
+		const GLWall &line = lines[index];
+		const float positions[12] =
+		{
+			line.glseg.x1, line.zbottom[0], line.glseg.y1,
+			line.glseg.x1, line.ztop[0], line.glseg.y1,
+			line.glseg.x2, line.ztop[1], line.glseg.y2,
+			line.glseg.x2, line.zbottom[1], line.glseg.y2
+		};
+		gl_AndroidNativeGLES_AddPortalMask(portalId, positions);
+	}
+	// Keep recursive visibility data separate from the enclosing scene.
+	// The active owner is needed by BSP and actor clipping while the target is collected.
+	GLRenderer->mCurrentPortal = this;
+	FDrawInfo::StartDrawInfo();
+	DrawContents();
+	FDrawInfo::EndDrawInfo();
+	viewx = savedViewX;
+	viewy = savedViewY;
+	viewz = savedViewZ;
+	viewangle = savedViewAngle;
+	in_area = savedViewArea;
+	GLRenderer->mViewActor = savedViewActor;
+	GLRenderer->mCurrentPortal = savedCurrentPortal;
+	gl_AndroidNativeGLES_EndPortalCapture(portalId);
+	return true;
+}
+#endif
 // Renders one sky portal without a stencil.
 // In more complex scenes using a stencil for skies can severly stall
 // the GPU and there's rarely more than one sky visible at a time.
@@ -616,7 +699,9 @@ void GLSkyboxPortal::DrawContents()
 
 	PlaneMirrorMode=0;
 
+#ifndef __ANDROID__
 	glDisable(GL_DEPTH_CLAMP_NV);
+#endif
 
 	// [AK] Don't interpolate the skybox if the game is supposed to be paused
 	// but the console is still interpolated. Otherwise, it will appear jittery.
@@ -637,6 +722,10 @@ void GLSkyboxPortal::DrawContents()
 
 	validcount++;
 	inskybox=true;
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	else
+	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	GLRenderer->SetViewArea();
 	ClearClipper();
@@ -649,7 +738,9 @@ void GLSkyboxPortal::DrawContents()
 	GLRenderer->DrawScene();
 	origin->flags&=~MF_JUSTHIT;
 	inskybox=false;
+#ifndef __ANDROID__
 	glEnable(GL_DEPTH_CLAMP_NV);
+#endif
 	skyboxrecursion--;
 
 	PlaneMirrorMode=old_pm;
@@ -737,6 +828,10 @@ void GLSectorStackPortal::DrawContents()
 	// avoid recursions!
 	if (origin->plane != -1) instack[origin->plane]++;
 
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	else
+	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	SaveMapSection();
 	SetupCoverage();
@@ -781,17 +876,30 @@ void GLPlaneMirrorPortal::DrawContents()
 	validcount++;
 
 	PlaneMirrorFlag++;
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+		gl_AndroidNativeGLES_SetPortalClipPlane(0.0f, static_cast<float>(PlaneMirrorMode), 0.0f,
+			FIXED2FLOAT(origin->d));
+	}
+	else
+	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	ClearClipper();
 
+#ifndef __ANDROID__
 	glEnable(GL_CLIP_PLANE0+renderdepth);
 	// This only works properly for non-sloped planes so don't bother with the math.
 	//double d[4]={origin->a/65536., origin->c/65536., origin->b/65536., FIXED2FLOAT(origin->d)};
 	double d[4]={0, static_cast<double>(PlaneMirrorMode), 0, FIXED2FLOAT(origin->d)};
 	glClipPlane(GL_CLIP_PLANE0+renderdepth, d);
+#endif
 
 	GLRenderer->DrawScene();
+#ifndef __ANDROID__
 	glDisable(GL_CLIP_PLANE0+renderdepth);
+#endif
 	PlaneMirrorFlag--;
 	PlaneMirrorMode=old_pm;
 }
@@ -888,6 +996,10 @@ void GLMirrorPortal::DrawContents()
 	validcount++;
 
 	MirrorFlag++;
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	else
+	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 
 	clipper.Clear();

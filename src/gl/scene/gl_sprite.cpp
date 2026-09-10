@@ -50,11 +50,15 @@
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_framebuffer.h"
 #include "gl/system/gl_cvars.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/data/gl_data.h"
 #include "gl/dynlights/gl_glow.h"
 #include "gl/scene/gl_drawinfo.h"
+#include "gl/scene/gl_wall.h"
 #include "gl/scene/gl_portal.h"
 #include "gl/models/gl_models.h"
 #include "gl/shaders/gl_shader.h"
@@ -78,6 +82,22 @@ CUSTOM_CVAR(Int, gl_fuzztype, 0, CVAR_ARCHIVE)
 {
 	if (self < 0 || self > 7) self = 0;
 }
+
+#ifdef __ANDROID__
+static EAndroidNativeBlendMode AndroidSpriteBlend(const FRenderStyle &style, float alpha, bool solid, bool fuzz)
+{
+	if (fuzz) return ANDROID_BLEND_FUZZ;
+	if (style.BlendOp == STYLEOP_Add && style.DestAlpha == STYLEALPHA_One)
+		return ANDROID_BLEND_ADD;
+	if (style.BlendOp == STYLEOP_Sub)
+		return ANDROID_BLEND_SUBTRACT;
+	if (style.BlendOp == STYLEOP_RevSub)
+		return ANDROID_BLEND_REVERSE_SUBTRACT;
+	if (solid && alpha >= 1.0f - FLT_EPSILON)
+		return ANDROID_BLEND_OPAQUE;
+	return ANDROID_BLEND_ALPHA;
+}
+#endif
 
 extern bool r_showviewer;
 EXTERN_CVAR (Float, transsouls)
@@ -114,6 +134,113 @@ CVAR(Bool, gl_nolayer, false, 0)
 void GLSprite::Draw(int pass)
 {
 	if (pass!=GLPASS_PLAIN && pass != GLPASS_ALL && pass!=GLPASS_TRANSLUCENT) return;
+
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (actor != NULL)
+			gl_GetSpriteLighting(RenderStyle, actor, &Colormap, ThingColor);
+		if (actor != NULL && (RenderStyle.Flags & STYLEF_ColorIsFixed))
+			gl_ModifyColor(ThingColor.r, ThingColor.g, ThingColor.b, Colormap.colormap);
+		if (modelframe != NULL)
+		{
+			gl_RenderModel(this, Colormap.colormap);
+			return;
+		}
+		float color[3];
+		const bool nativeShadow = RenderStyle.BlendOp == STYLEOP_Shadow;
+		const float nativeAlpha = nativeShadow ? 0.33f : trans;
+		if (nativeShadow)
+		{
+			// Match the source shadow style instead of applying sector lighting.
+			color[0] = 0.2f * ThingColor.r / 255.0f;
+			color[1] = 0.2f * ThingColor.g / 255.0f;
+			color[2] = 0.2f * ThingColor.b / 255.0f;
+		}
+		else
+		{
+			gl_GetLightColor(lightlevel, getExtraLight(), &Colormap, color + 0, color + 1, color + 2);
+			const bool allowDynamicLight = actor != NULL ? gl_light_sprites :
+				particle != NULL ? gl_light_particles : false;
+			if (allowDynamicLight && gl_lights && GLRenderer->mLightCount > 0 && !fullbright &&
+				gl_fixedcolormap < CM_FIRSTSPECIALCOLORMAP)
+			{
+				float dynamicLight[3];
+				subsector_t *lightSubsector = actor != NULL ? actor->subsector :
+					particle != NULL ? particle->subsector : NULL;
+				if (lightSubsector != NULL)
+				{
+					fixed_t lightX = actor != NULL ? actor->x : particle->x;
+					fixed_t lightY = actor != NULL ? actor->y : particle->y;
+					fixed_t lightZ = actor != NULL ? actor->z + (actor->height >> 1) : particle->z;
+					if (gl_GetSpriteLight(actor, lightX, lightY, lightZ, lightSubsector,
+						Colormap.colormap, dynamicLight))
+					{
+						color[0] = clamp<float>(color[0] + dynamicLight[0], 0.0f, 1.0f);
+						color[1] = clamp<float>(color[1] + dynamicLight[1], 0.0f, 1.0f);
+						color[2] = clamp<float>(color[2] + dynamicLight[2], 0.0f, 1.0f);
+					}
+				}
+			}
+			color[0] *= ThingColor.r / 255.0f;
+			color[1] *= ThingColor.g / 255.0f;
+			color[2] *= ThingColor.b / 255.0f;
+		}
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		const bool nativeFog = !gl_fixedcolormap &&
+			(!gl_isBlack(Colormap.FadeColor) || (level.flags & LEVEL_HASFADETABLE) != 0);
+		if (nativeFog)
+		{
+			PalEntry fog = Colormap.FadeColor;
+			if (level.flags & LEVEL_HASFADETABLE)
+			{
+				fog = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(lightlevel, fog);
+				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
+			}
+			fogColor[0] = fog.r / 255.0f;
+			fogColor[1] = fog.g / 255.0f;
+			fogColor[2] = fog.b / 255.0f;
+		}
+		const unsigned int texture = gltexture != NULL ?
+			gltexture->BindNative(Colormap.colormap, translation, false) : 0;
+		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+			gltexture->BindNativeBrightmap(false) : 0;
+		const float positions[12] =
+		{
+			x1, z1, y1,
+			x2, z1, y2,
+			x2, z2, y2,
+			x1, z2, y1
+		};
+		// Convert Zan's padded sprite range to the exact native upload dimensions.
+		float nativeU1 = 0.0f, nativeV1 = 0.0f, nativeU2 = 1.0f, nativeV2 = 1.0f;
+		if (gltexture != NULL)
+			gltexture->GetNativeSpriteCoords(&nativeU1, &nativeV1, &nativeU2, &nativeV2);
+		const bool mirrored = ul < ur;
+		const float nativeLeft = mirrored ? nativeU1 : nativeU2;
+		const float nativeRight = mirrored ? nativeU2 : nativeU1;
+		const float texcoords[8] = { nativeLeft, nativeV1, nativeRight, nativeV1,
+			nativeRight, nativeV2, nativeLeft, nativeV2 };
+		gl_AndroidNativeGLES_AddSprite(positions, texcoords, color, nativeAlpha,
+			gltexture != NULL && gltexture->isMasked(),
+			nativeFog, texture, fogColor, fogDensity,
+			AndroidSpriteBlend(RenderStyle, nativeAlpha, hw_styleflags == STYLEHW_Solid, nativeFuzz),
+			(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
+			((RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
+			((RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
+			((RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
+			((RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0) |
+			((RenderStyle.Flags & STYLEF_ColorIsFixed) ? ANDROID_MATERIAL_COLOR_FIXED : 0), brightmap,
+			(Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ? Colormap.colormap : 0);
+		return;
+	}
+#endif
 
 	// Hack to enable bright sprites in faded maps
 	uint32 backupfade = Colormap.FadeColor.d;
@@ -394,6 +521,14 @@ inline void GLSprite::PutSprite(bool translucent)
 	if ( this->actor && this->actor->FixedColormap != NOFIXEDCOLORMAP )
 		this->Colormap.colormap = CM_FIRSTSPECIALCOLORMAP + this->actor->FixedColormap;
 
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		Draw(GLPASS_TRANSLUCENT);
+		return;
+	}
+#endif
+
 	gl_drawinfo->drawlists[list].AddSprite(this);
 }
 
@@ -507,6 +642,10 @@ void GLSprite::Process(AActor* thing,sector_t * sector)
 
 	// Don't waste time projecting sprites that are definitely not visible.
 	if (thing == NULL || thing->sprite == 0 || !thing->IsVisibleToPlayer())
+	{
+		return;
+	}
+	if (thing->subsector == NULL || thing->Sector == NULL)
 	{
 		return;
 	}
@@ -837,6 +976,7 @@ void GLSprite::Process(AActor* thing,sector_t * sector)
 
 	ThingColor=0xffffff;
 	RenderStyle = thing->RenderStyle;
+	nativeFuzz = false;
 	OverrideShader = 0;
 	trans = FIXED2FLOAT(thing->alpha);
 	hw_styleflags = STYLEHW_Normal;
@@ -846,6 +986,16 @@ void GLSprite::Process(AActor* thing,sector_t * sector)
 		RenderStyle.CheckFuzz();
 		if (RenderStyle.BlendOp == STYLEOP_Fuzz)
 		{
+			#ifdef __ANDROID__
+			if (gl_AndroidNativeGLES_IsActive() && gl_fuzztype != 0)
+			{
+				nativeFuzz = true;
+				RenderStyle = LegacyRenderStyles[STYLE_Translucent];
+				trans = 0.99f;
+				hw_styleflags |= STYLEHW_NoAlphaTest;
+			}
+			else
+			#endif
 			if (gl.shadermodel >= 4 && gl_fuzztype != 0)
 			{
 				// Todo: implement shader selection here
@@ -1002,6 +1152,7 @@ void GLSprite::ProcessParticle (particle_t *particle, sector_t *sector)//, int s
 
 	trans=particle->trans/255.0f;
 	RenderStyle = STYLE_Translucent;
+	nativeFuzz = false;
 	OverrideShader = 0;
 
 	ThingColor = particle->color;

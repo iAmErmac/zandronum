@@ -54,8 +54,14 @@
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/textures/gl_material.h"
 #include "gl/utility/gl_clock.h"
+#include "gl/utility/gl_convert.h"
 #include "gl/utility/gl_templates.h"
 #include "gl/shaders/gl_shader.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#include <algorithm>
+#include <math.h>
+#endif
 
 FDrawInfo * gl_drawinfo;
 
@@ -1065,6 +1071,97 @@ void FDrawInfo::DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, boo
 		else lightlevel=abs(ceiling? sec->GetCeilingLight() : sec->GetFloorLight());
 	}
 
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		const int rel = getExtraLight();
+		float color[3];
+		gl_GetLightColor(lightlevel, rel, &Colormap, color + 0, color + 1, color + 2);
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		if (!gl_fixedcolormap && (gl_CheckFog(&Colormap, lightlevel) || (level.flags & LEVEL_HASFADETABLE)))
+		{
+			PalEntry fog = Colormap.FadeColor;
+			if (level.flags & LEVEL_HASFADETABLE)
+			{
+				fog = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(lightlevel, fog);
+				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
+			}
+			fogColor[0] = fog.r / 255.0f;
+			fogColor[1] = fog.g / 255.0f;
+			fogColor[2] = fog.b / 255.0f;
+		}
+
+		const float fviewx = FIXED2FLOAT(viewx);
+		const float fviewy = FIXED2FLOAT(viewy);
+		const float fviewz = FIXED2FLOAT(viewz);
+		const float denominator1 = ws->z1 - fviewz;
+		const float denominator2 = ws->z2 - fviewz;
+		if (fabsf(denominator1) < 0.0001f || fabsf(denominator2) < 0.0001f)
+			return;
+		if ((denominator1 < 0.0f) != (denominator2 < 0.0f))
+			return;
+		const float projection1 = (planez - fviewz) / denominator1;
+		const float projection2 = (planez - fviewz) / denominator2;
+		if (!isfinite(projection1) || !isfinite(projection2))
+			return;
+		const float px[4] =
+		{
+			fviewx + projection1 * (ws->x1 - fviewx),
+			fviewx + projection2 * (ws->x1 - fviewx),
+			fviewx + projection2 * (ws->x2 - fviewx),
+			fviewx + projection1 * (ws->x2 - fviewx)
+		};
+		const float py[4] =
+		{
+			fviewy + projection1 * (ws->y1 - fviewy),
+			fviewy + projection2 * (ws->y1 - fviewy),
+			fviewy + projection2 * (ws->y2 - fviewy),
+			fviewy + projection1 * (ws->y2 - fviewy)
+		};
+		const float textureWidth = static_cast<float>(std::max(1, gltexture->TextureWidth(GLUSE_TEXTURE)));
+		const float textureHeight = static_cast<float>(std::max(1, gltexture->TextureHeight(GLUSE_TEXTURE)));
+		const float uOffset = FIXED2FLOAT(plane.xoffs) / textureWidth;
+		const float vOffset = FIXED2FLOAT(plane.yoffs) / textureHeight;
+		const float uScale = FIXED2FLOAT(plane.xscale);
+		const float vScale = gltexture->tex->bHasCanvas ?
+			-FIXED2FLOAT(plane.yscale) : FIXED2FLOAT(plane.yscale);
+		const float angle = -ANGLE_TO_FLOAT(plane.angle) * 3.14159265359f / 180.0f;
+		const float cosine = cosf(angle);
+		const float sine = sinf(angle);
+		float positions[12];
+		float texcoords[8];
+		for (int i = 0; i < 4; ++i)
+		{
+			const float rawU = px[i] / 64.0f;
+			const float rawV = -py[i] / 64.0f;
+			const float rotatedU = cosine * rawU - sine * rawV;
+			const float rotatedV = sine * rawU + cosine * rawV;
+			positions[i * 3 + 0] = px[i];
+			positions[i * 3 + 1] = planez;
+			positions[i * 3 + 2] = py[i];
+			texcoords[i * 2 + 0] = uScale * (uOffset + (64.0f / textureWidth) * rotatedU);
+			texcoords[i * 2 + 1] = vScale * (vOffset + (64.0f / textureHeight) * rotatedV);
+		}
+		const float wallPositions[12] =
+		{
+			ws->x1, ws->z1, ws->y1,
+			ws->x1, ws->z2, ws->y1,
+			ws->x2, ws->z2, ws->y2,
+			ws->x2, ws->z1, ws->y2
+		};
+		const unsigned int texture = gltexture->BindNative(Colormap.colormap, 0, true);
+		gl_AndroidNativeGLES_AddFloodPlane(wallPositions, positions, texcoords, color, texture,
+			fogDensity > 0.0f, fogColor, fogDensity);
+		return;
+	}
+	#endif
+
 	int rel = getExtraLight();
 	gl_SetColor(lightlevel, rel, &Colormap, 1.0f);
 	gl_SetFog(lightlevel, rel, &Colormap, false);
@@ -1136,6 +1233,11 @@ void FDrawInfo::FloodUpperGap(seg_t * seg)
 	fixed_t frontz = fakefsector->ceilingplane.ZatPoint(seg->v1);
 
 	if (fakebsector->GetTexture(sector_t::ceiling)==skyflatnum) return;
+	#ifdef __ANDROID__
+	// Native flood projection has no legacy portal depth handoff. Do not project
+	// the adjacent ceiling across an opening owned by an F_SKY1 ceiling.
+	if (gl_AndroidNativeGLES_IsActive() && fakefsector->GetTexture(sector_t::ceiling)==skyflatnum) return;
+	#endif
 	if (backz < viewz) return;
 
 	if (seg->sidedef == seg->linedef->sidedef[0])
@@ -1156,6 +1258,14 @@ void FDrawInfo::FloodUpperGap(seg_t * seg)
 
 	ws.z1= FIXED2FLOAT(frontz);
 	ws.z2= FIXED2FLOAT(backz);
+
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		DrawFloodedPlane(&ws, ws.z2, fakebsector, true);
+		return;
+	}
+	#endif
 
 	// Step1: Draw a stencil into the gap
 	SetupFloodStencil(&ws);
@@ -1189,6 +1299,9 @@ void FDrawInfo::FloodLowerGap(seg_t * seg)
 
 
 	if (fakebsector->GetTexture(sector_t::floor) == skyflatnum) return;
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive() && fakefsector->GetTexture(sector_t::floor)==skyflatnum) return;
+	#endif
 	if (fakebsector->GetPlaneTexZ(sector_t::floor) > viewz) return;
 
 	if (seg->sidedef == seg->linedef->sidedef[0])
@@ -1209,6 +1322,14 @@ void FDrawInfo::FloodLowerGap(seg_t * seg)
 
 	ws.z2= FIXED2FLOAT(frontz);
 	ws.z1= FIXED2FLOAT(backz);
+
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		DrawFloodedPlane(&ws, ws.z1, fakebsector, false);
+		return;
+	}
+	#endif
 
 	// Step1: Draw a stencil into the gap
 	SetupFloodStencil(&ws);

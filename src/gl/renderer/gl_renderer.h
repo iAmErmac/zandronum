@@ -91,7 +91,7 @@ public:
 	void DrawScene(bool toscreen = false);
 	void DrawBlend(sector_t * viewsector);
 
-	void DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader);
+	void DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader, float nativeAlpha = 1.0f, unsigned int nativeMaterialFlags = 0);
 	void DrawPlayerSprites(sector_t * viewsector, bool hudModelStep);
 	void DrawTargeterSprites();
 

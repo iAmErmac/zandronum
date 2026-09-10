@@ -246,6 +246,13 @@ public:
 		float z = f3[0] * m[2][0] + f3[1] * m[2][1] + f3[2] * m[2][2] + m[2][3];
 		f3o[2] = z; f3o[1] = y; f3o[0] = x;
 	}
+
+	void MultiplyDirection(const float *f3, float *f3o) const
+	{
+		f3o[0] = f3[0] * m[0][0] + f3[1] * m[0][1] + f3[2] * m[0][2];
+		f3o[1] = f3[0] * m[1][0] + f3[1] * m[1][1] + f3[2] * m[1][2];
+		f3o[2] = f3[0] * m[2][0] + f3[1] * m[2][1] + f3[2] * m[2][2];
+	}
 };
 
 #endif

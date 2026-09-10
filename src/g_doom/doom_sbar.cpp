@@ -29,6 +29,9 @@
 #include "gamemode.h"
 #include "st_hud.h"
 #include "survival.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 
 #define ST_EVILGRINCOUNT		(2*TICRATE)
@@ -114,6 +117,30 @@ public:
 
 	void Draw (EHudState state)
 	{
+		#ifdef __ANDROID__
+		if (gl_AndroidNativeGLES_IsActive())
+		{
+			if (state == HUD_StatusBar)
+			{
+				// The native renderer rebuilds the 2D batch every frame. Keep the
+				// complete status bar submission independent of the retained-frame
+				// refresh counters used by the desktop framebuffer.
+				HealthRefresh = ArmorRefresh = ActiveAmmoRefresh = 1;
+				FragsRefresh = PointsRefresh = AmmoRefresh = MaxAmmoRefresh = KeysRefresh = 1;
+				ArmsRefresh[0] = ArmsRefresh[1] = ArmsRefresh[2] = 1;
+				DrawMainBar();
+				if (CPlayer->inventorytics > 0 && !(level.flags & LEVEL_NOINVENTORYBAR))
+					DrawInventoryBar();
+			}
+			else if (state == HUD_Fullscreen)
+			{
+				if (cl_stfullscreenhud) DrawFullScreenStuffST();
+				else DrawFullScreenStuff();
+			}
+			lastDrawnWithMenuActive = (menuactive != MENU_Off);
+			return;
+		}
+		#endif
 		DBaseStatusBar::Draw (state);
 
 		if (state == HUD_Fullscreen)

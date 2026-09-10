@@ -142,6 +142,7 @@ void OpenGLFrameBuffer::InitializeState()
 			first = false;
 			gl_AndroidNativeGLES_PrintStartupLog();
 		}
+		GLRenderer->Initialize();
 		return;
 	}
 #endif
@@ -226,6 +227,8 @@ void OpenGLFrameBuffer::Update()
 	#ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
+		// Status-bar and message drawing appends to the native batch after the view.
+		gl_AndroidNativeGLES_EndScene();
 		Swap();
 		Unlock();
 		return;
@@ -533,8 +536,15 @@ void OpenGLFrameBuffer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 //
 //
 //==========================================================================
-void OpenGLFrameBuffer::Dim(PalEntry)
+void OpenGLFrameBuffer::Dim(PalEntry color)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		DCanvas::Dim(color);
+		return;
+	}
+	#endif
 	// Unlike in the software renderer the color is being ignored here because
 	// view blending only affects the actual view with the GL renderer.
 	Super::Dim(0);

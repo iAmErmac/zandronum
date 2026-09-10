@@ -120,6 +120,9 @@ protected:
 	virtual bool IsSky() { return false; }
 	virtual bool NeedCap() { return true; }
 	virtual bool NeedDepthBuffer() { return true; }
+	#ifdef __ANDROID__
+	virtual bool SupportsNativeCapture() const { return false; }
+	#endif
 	void ClearScreen();
 	virtual const char *GetName() = 0;
 	void SaveMapSection();
@@ -168,6 +171,9 @@ public:
 	static bool RenderFirstSkyPortal(int recursion);
 	static void EndFrame();
 	static GLPortal * FindPortal(const void * src);
+	#ifdef __ANDROID__
+	bool RenderNative();
+	#endif
 };
 
 
@@ -180,6 +186,9 @@ protected:
 	virtual void DrawContents();
 	virtual void * GetSource() const { return linedef; }
 	virtual const char *GetName();
+	#ifdef __ANDROID__
+	virtual bool SupportsNativeCapture() const { return true; }
+	#endif
 
 public:
 	
@@ -203,6 +212,9 @@ protected:
 	virtual void * GetSource() const { return origin; }
 	virtual bool IsSky() { return true; } // later!
 	virtual const char *GetName();
+	#ifdef __ANDROID__
+	virtual bool SupportsNativeCapture() const { return true; }
+	#endif
 
 public:
 
@@ -247,6 +259,9 @@ protected:
 	virtual void * GetSource() const { return origin; }
 	virtual bool IsSky() { return true; }	// although this isn't a real sky it can be handled as one.
 	virtual const char *GetName();
+	#ifdef __ANDROID__
+	virtual bool SupportsNativeCapture() const { return true; }
+	#endif
 	FPortal *origin;
 
 public:
@@ -269,6 +284,9 @@ protected:
 	virtual void DrawContents();
 	virtual void * GetSource() const { return origin; }
 	virtual const char *GetName();
+	#ifdef __ANDROID__
+	virtual bool SupportsNativeCapture() const { return true; }
+	#endif
 	secplane_t * origin;
 
 public:

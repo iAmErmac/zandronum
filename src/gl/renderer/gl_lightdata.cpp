@@ -42,6 +42,9 @@
 #include "gl/system/gl_system.h"
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "gl/data/gl_data.h"
 #include "gl/renderer/gl_colormap.h"
 #include "gl/renderer/gl_lightdata.h"
@@ -83,6 +86,9 @@ CVAR(Bool, gl_brightfog, false, CVAR_ARCHIVE);
 
 bool gl_BrightmapsActive()
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) return gl_brightmap_shader;
+#endif
 	return gl.shadermodel == 4 || (gl.shadermodel == 3 && gl_brightmap_shader);
 }
 

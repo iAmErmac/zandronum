@@ -154,7 +154,7 @@ private:
 	void PutWall(bool translucent);
 	void CheckTexturePosition();
 
-	void SetupLights();
+	void SetupLights(bool collect = true);
 	bool PrepareLight(texcoord * tcs, ADynamicLight * light);
 	void RenderWall(int textured, float * color2, ADynamicLight * light=NULL);
 	void RenderGlowingPoly(int textured, ADynamicLight * light=NULL);
@@ -304,6 +304,7 @@ public:
 	FColormap Colormap;
 	FSpriteModelFrame * modelframe;
 	FRenderStyle RenderStyle;
+	bool nativeFuzz;
 	int OverrideShader;
 
 	int translation;
@@ -354,6 +355,8 @@ void gl_GetSpriteLight(AActor * thing, int lightlevel, int rellight, FColormap *
 
 int gl_SetSpriteLighting(FRenderStyle style, AActor *thing, int lightlevel, int rellight, FColormap *cm, 
 						  PalEntry ThingColor, float alpha, bool fullbright, bool weapon);
+
+void gl_GetSpriteLighting(FRenderStyle style, AActor *thing, FColormap *cm, PalEntry &ThingColor);
 
 int gl_SetSpriteLight(particle_t * thing, int lightlevel, int rellight, FColormap *cm, float alpha, PalEntry ThingColor = 0xffffff);
 void gl_GetLightForThing(AActor * thing, float upper, float lower, float & r, float & g, float & b);

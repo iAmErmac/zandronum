@@ -75,6 +75,9 @@
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_convert.h"
 #include "gl/utility/gl_templates.h"
+#ifdef __ANDROID__
+	#include "gl/system/gl_android.h"
+#endif
 
 //==========================================================================
 //
@@ -118,7 +121,7 @@ angle_t FGLRenderer::FrustumAngle()
 {
 	float tilt= fabs(mAngles.Pitch);
 
-	// If the pitch is larger than this you can look all around at a FOV of 90°
+	// If the pitch is larger than this you can look all around at a FOV of 90ï¿½
 	if (tilt>46.0f) return 0xffffffff;
 
 	// ok, this is a gross hack that barely works...
@@ -374,16 +377,38 @@ void FGLRenderer::CreateScene()
 {
 	// reset the portal manager
 	GLPortal::StartFrame();
-	PO_LinkToSubsectors();
+	if (polyobjs != NULL) PO_LinkToSubsectors();
 
 	ProcessAll.Clock();
 
 	// clip the scene and fill the drawlists
 	for(unsigned i=0;i<portals.Size(); i++) portals[i]->glportal = NULL;
 	gl_spriteindex=0;
+	#ifdef __ANDROID__
+	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+	if (nativeGLES)
+	{
+		gl_AndroidNativeGLES_ClearFlatTasks();
+		gl_AndroidNativeGLES_SetFlatCollectionDeferred(true);
+	}
+	#endif
 	Bsp.Clock();
 	gl_RenderBSPNode (nodes + numnodes - 1);
 	Bsp.Unclock();
+#ifdef __ANDROID__
+	if (nativeGLES)
+	{
+		// Finish the source visibility passes before publishing native flat batches.
+		gl_drawinfo->HandleMissingTextures();
+		gl_drawinfo->HandleHackedSubsectors();
+		gl_drawinfo->ProcessSectorStacks();
+		gl_AndroidNativeGLES_SetFlatCollectionDeferred(false);
+		gl_AndroidNativeGLES_EmitFlatTasks();
+		gl_drawinfo->DrawUnhandledMissingTextures();
+		ProcessAll.Unclock();
+		return;
+	}
+	#endif
 
 	// And now the crappy hacks that have to be done to avoid rendering anomalies:
 
@@ -642,6 +667,17 @@ EXTERN_CVAR(Bool, gl_draw_sync)
 
 void FGLRenderer::DrawScene(bool toscreen)
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		const bool nestedPortal = mCurrentPortal != NULL;
+		CreateScene();
+		if (!nestedPortal) mCurrentPortal = NULL;
+		GLPortal::EndFrame();
+		return;
+	}
+
+#endif
 	static int recursion=0;
 
 	CreateScene();
@@ -753,6 +789,15 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 		// black multiplicative blends are ignored
 		if (extra_red || extra_green || extra_blue)
 		{
+		#ifdef __ANDROID__
+			if (gl_AndroidNativeGLES_IsActive())
+			{
+				const float color[3] = { extra_red, extra_green, extra_blue };
+				gl_AndroidNativeGLES_AddScreenQuad(color, 1.0f, ANDROID_BLEND_MULTIPLY);
+			}
+			else
+		#endif
+			{
 			gl_RenderState.EnableAlphaTest(false);
 			gl_RenderState.EnableTexture(false);
 			gl_RenderState.BlendFunc(GL_DST_COLOR,GL_ZERO);
@@ -764,6 +809,7 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 			glVertex2f( (float)SCREENWIDTH, 0.0f);
 			glVertex2f( (float)SCREENWIDTH, (float)SCREENHEIGHT);
 			glEnd();
+			}
 		}
 	}
 	else if (blendv.a)
@@ -790,6 +836,15 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 
 	if (blend[3]>0.0f)
 	{
+	#ifdef __ANDROID__
+		if (gl_AndroidNativeGLES_IsActive())
+		{
+			const float color[3] = { blend[0], blend[1], blend[2] };
+			gl_AndroidNativeGLES_AddScreenQuad(color, blend[3], ANDROID_BLEND_ALPHA);
+		}
+		else
+	#endif
+		{
 		gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		gl_RenderState.EnableAlphaTest(false);
 		gl_RenderState.EnableTexture(false);
@@ -801,6 +856,7 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 		glVertex2f( (float)SCREENWIDTH, 0.0f);
 		glVertex2f( (float)SCREENWIDTH, (float)SCREENHEIGHT);
 		glEnd();
+		}
 	}
 }
 
@@ -959,6 +1015,29 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 
 	retval = viewsector;
 
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (mainview && toscreen)
+		{
+			SetCameraPos(viewx, viewy, viewz, viewangle);
+			mCurrentFoV = fov;
+			// Keep native collection complete; sky masks apply their own view-angle visibility.
+			clipper.Clear();
+			angle_t frustumAngle = FrustumAngle();
+			clipper.SafeAddClipRangeRealAngles(viewangle + frustumAngle, viewangle - frustumAngle);
+			const float yaw = float((viewangle >> ANGLETOFINESHIFT) * 360.0 / FINEANGLES);
+			const float pitch = float(viewpitch) / float(ANGLE_1);
+			gl_AndroidNativeGLES_BeginScene(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), FIXED2FLOAT(viewz),
+				yaw, pitch, mAngles.Roll, fov, ratio, fovratio);
+			ProcessScene(toscreen);
+		}
+		gl_frameCount++;
+		interpolator.RestoreInterpolations();
+		return retval;
+	}
+#endif
+
 	SetViewport(bounds);
 	mCurrentFoV = fov;
 	// [BB] Added stereo rendering based on one of the initial GZ3Doom revisions.
@@ -1021,6 +1100,42 @@ int crashoutTic = 0;
 
 void FGLRenderer::RenderView (player_t* player)
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (player == NULL || player->camera == NULL) return;
+		OpenGLFrameBuffer* GLTarget = static_cast<OpenGLFrameBuffer*>(screen);
+		AActor *&LastCamera = GLTarget->LastCamera;
+		if (player->camera != LastCamera)
+		{
+			R_ResetViewInterpolation();
+			LastCamera = player->camera;
+		}
+		if (mVBO != NULL) mVBO->BindVBO();
+		ResetProfilingData();
+		if (cl_capfps || r_NoInterpolate) r_TicFrac = FRACUNIT;
+		else r_TicFrac = I_GetTimeFrac(&r_FrameTime);
+		gl_frameMS = I_MSTime();
+		if (numsubsectors > 0) P_FindParticleSubsectors();
+		FCanvasTextureInfo::UpdateAll();
+		SetFixedColormap(player);
+		TThinkerIterator<ADynamicLight> it(STAT_DLIGHT);
+		mLightCount = ((it.Next()) != NULL);
+		#define RMUL (1.6f/1.333333f)
+		static float ratios[] = { RMUL*1.333333f, RMUL*1.777777f, RMUL*1.6f, RMUL*1.7f, RMUL*1.25f };
+		const float ratio = ratios[WidescreenRatio];
+		const float fovratio = (WidescreenRatio & 4) ? ratio : 1.6f;
+		const float fov = FieldOfView * 360.0f / FINEANGLES;
+		sector_t *viewsector = RenderViewpoint(player->camera, NULL, fov, ratio, fovratio, true, true);
+		#undef RMUL
+		// The weapon is a 2D overlay and must be collected after the world batches.
+		DrawPlayerSprites(viewsector, false);
+		DrawTargeterSprites();
+		DrawBlend(viewsector);
+		gl_AndroidNativeGLES_EndScene();
+		return;
+	}
+#endif
 #ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
 	// [BB] Continuously make this check, otherwise a hack could bypass the check by activating
 	// and deactivating itself at the right time interval.

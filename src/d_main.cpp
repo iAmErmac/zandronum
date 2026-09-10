@@ -866,6 +866,78 @@ void D_Display ()
 #ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
+		if (screen == NULL)
+			return;
+		if (viewactive)
+			R_SetFOV(players[consoleplayer].camera && players[consoleplayer].camera->player ?
+				players[consoleplayer].camera->player->FOV : 90.f);
+		RenderTarget = screen;
+		if (setsizeneeded && StatusBar != NULL)
+			R_ExecuteSetViewSize();
+		const bool levelDisplay = gamestate == GS_LEVEL || gamestate == GS_TITLELEVEL;
+		gl_AndroidNativeGLES_ClearScene();
+		if (levelDisplay && players[consoleplayer].camera == NULL)
+			players[consoleplayer].camera = players[consoleplayer].mo;
+		if (levelDisplay && Renderer != NULL && viewactive &&
+			players[consoleplayer].mo != NULL && players[consoleplayer].camera != NULL)
+		{
+			Renderer->RenderView(&players[consoleplayer]);
+		}
+		if (levelDisplay && automapactive)
+		{
+			const int saved_ST_Y = ST_Y;
+			if (hud_althud && viewheight == SCREENHEIGHT)
+				ST_Y = viewheight;
+			AM_Drawer();
+			ST_Y = saved_ST_Y;
+		}
+		if (levelDisplay && StatusBar != NULL && StatusBar->CPlayer != NULL &&
+			(viewactive || automapactive) && players[consoleplayer].mo != NULL)
+		{
+			if (hud_althud && viewheight == SCREENHEIGHT && screenblocks > 10)
+			{
+				StatusBar->DrawBottomStuff (HUD_AltHud);
+				if (DrawFSHUD || automapactive) DrawHUD();
+				StatusBar->Draw (HUD_AltHud);
+				StatusBar->DrawTopStuff (HUD_AltHud);
+			}
+			else if (viewheight == SCREENHEIGHT && viewactive && screenblocks > 10)
+			{
+				EHudState state = DrawFSHUD ? HUD_Fullscreen : HUD_None;
+				StatusBar->DrawBottomStuff (state);
+				StatusBar->Draw (state);
+				StatusBar->DrawTopStuff (state);
+			}
+			else
+			{
+				StatusBar->DrawBottomStuff (HUD_StatusBar);
+				StatusBar->Draw (HUD_StatusBar);
+				StatusBar->DrawTopStuff (HUD_StatusBar);
+			}
+		}
+		if (gamestate == GS_FULLCONSOLE)
+		{
+			C_DrawConsole(false);
+			M_Drawer();
+		}
+		else if (gamestate == GS_INTERMISSION)
+		{
+			WI_Drawer();
+			CHAT_Render();
+		}
+		else if (gamestate == GS_FINALE)
+		{
+			F_Drawer();
+		}
+		else if (gamestate == GS_DEMOSCREEN)
+		{
+			D_PageDrawer();
+		}
+		else
+		{
+			C_DrawConsole(false);
+			M_Drawer();
+		}
 		screen->Update();
 		return;
 	}

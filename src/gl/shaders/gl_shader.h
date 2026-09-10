@@ -121,6 +121,14 @@ public:
 //==========================================================================
 class FShaderManager
 {
+	#ifdef __ANDROID__
+	struct FAndroidNativeProgram
+	{
+		FName Name;
+		unsigned int Handle;
+	};
+	#endif
+
 	enum 
 	{ 
 		NUM_EFFECTS = 2 
@@ -129,6 +137,9 @@ class FShaderManager
 	TArray<FShaderContainer*> mTextureEffects;
 	FShader *mActiveShader;
 	FShader *mEffectShaders[NUM_EFFECTS];
+	#ifdef __ANDROID__
+	TArray<FAndroidNativeProgram> mAndroidNativePrograms;
+	#endif
 
 	void Clean();
 	void CompileShaders();
@@ -151,6 +162,12 @@ public:
 	}
 
 	void Recompile();
+
+	#ifdef __ANDROID__
+	void RegisterAndroidNativeProgram(const char *name, unsigned int handle);
+	void ClearAndroidNativePrograms();
+	unsigned int BindAndroidNativeProgram(const char *name);
+	#endif
 };
 
 #define FIRST_USER_SHADER 12

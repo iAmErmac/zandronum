@@ -74,7 +74,9 @@
 
 // EXTERNAL FUNCTION PROTOTYPES --------------------------------------------
 
+#ifndef __ANDROID__
 extern "C" int cc_install_handlers(int, char**, int, int*, const char*, int(*)(char*, char*));
+#endif
 
 // PUBLIC FUNCTION PROTOTYPES ----------------------------------------------
 
@@ -246,7 +248,7 @@ int main_android (int argc, char **argv)
 int main (int argc, char **argv)
 #endif
 {
-#if !defined (__APPLE__)
+#if !defined (__APPLE__) && !defined (__ANDROID__)
 	{
 		int s[4] = { SIGSEGV, SIGILL, SIGFPE, SIGBUS };
 		cc_install_handlers(argc, argv, 4, s, GAMENAMELOWERCASE "-crash.log", DoomSpecificInfo);

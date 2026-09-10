@@ -49,6 +49,8 @@
 #include "gl/textures/gl_material.h"
 #include "gl/shaders/gl_shader.h"
 
+#include <vector>
+
 static float   avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "tab_anorms.h"
 };
@@ -370,6 +372,83 @@ void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 	RenderGLCommands(lods[activeLod].glCommands, numVerts, verticesInterpolated/*, modelColors, NULL*/);
 	delete[] verticesInterpolated;
 }
+
+#ifdef __ANDROID__
+bool FDMDModel::RenderFrameNative(FTexture *skin, int frameno, int frameno2, double inter,
+	int cm, int translation, FModelNativeCollector *collector)
+{
+	if (collector == NULL || !loaded || frameno < 0 || frameno >= info.numFrames) return false;
+	if (frameno2 < 0 || frameno2 >= info.numFrames)
+	{
+		frameno2 = frameno;
+		inter = 0.0;
+	}
+	if (!skin)
+	{
+		if (info.numSkins == 0) return false;
+		skin = skins[0];
+		if (!skin) return false;
+	}
+	inter = clamp<double>(inter, 0.0, 1.0);
+	ModelFrame *firstFrame = &frames[frameno];
+	ModelFrame *secondFrame = &frames[frameno2];
+	std::vector<float> positions;
+	std::vector<float> texcoords;
+	std::vector<float> normals;
+	std::vector<unsigned int> indices;
+	char *cursor = reinterpret_cast<char *>(lods[0].glCommands);
+	if (cursor == NULL) return false;
+	while (*reinterpret_cast<int *>(cursor) != 0)
+	{
+		const int command = *reinterpret_cast<int *>(cursor);
+		cursor += sizeof(int);
+		const bool strip = command > 0;
+		const int count = abs(command);
+		if (count < 3) return false;
+		std::vector<unsigned int> primitive;
+		primitive.reserve(count);
+		for (int vertex = 0; vertex < count; ++vertex)
+		{
+			const FGLCommandVertex *commandVertex = reinterpret_cast<const FGLCommandVertex *>(cursor);
+			cursor += sizeof(FGLCommandVertex);
+			if (commandVertex->index < 0 || commandVertex->index >= info.numVertices) return false;
+			const unsigned int index = static_cast<unsigned int>(positions.size() / 3);
+			const FModelVertex &a = firstFrame->vertices[commandVertex->index];
+			const FModelVertex &b = secondFrame->vertices[commandVertex->index];
+			const FModelVertex &normalA = firstFrame->normals[commandVertex->index];
+			const FModelVertex &normalB = secondFrame->normals[commandVertex->index];
+			positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[0] + inter * b.xyz[0]));
+			positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[1] + inter * b.xyz[1]));
+			positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[2] + inter * b.xyz[2]));
+			normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[0] + inter * normalB.xyz[0]));
+			normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[1] + inter * normalB.xyz[1]));
+			normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[2] + inter * normalB.xyz[2]));
+			texcoords.push_back(commandVertex->s);
+			texcoords.push_back(commandVertex->t);
+			primitive.push_back(index);
+		}
+		for (int vertex = 0; vertex + 2 < count; ++vertex)
+		{
+			if (strip && (vertex & 1))
+			{
+				indices.push_back(primitive[vertex + 1]);
+				indices.push_back(primitive[vertex]);
+			}
+			else
+			{
+				indices.push_back(strip ? primitive[vertex] : primitive[0]);
+				indices.push_back(strip ? primitive[vertex + 1] : primitive[vertex + 1]);
+			}
+			indices.push_back(strip ? primitive[vertex + 2] : primitive[vertex + 2]);
+		}
+	}
+	if (indices.empty()) return false;
+	collector->SubmitSurface(&positions[0], &texcoords[0],
+		static_cast<unsigned int>(positions.size() / 3), &indices[0],
+		static_cast<unsigned int>(indices.size()), skin, &normals[0]);
+	return true;
+}
+#endif
 
 
 //===========================================================================
