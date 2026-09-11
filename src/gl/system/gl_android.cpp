@@ -1,4 +1,5 @@
 #include "gl/system/gl_android.h"
+#include "gl/system/gl_gles_targets.h"
 
 #ifdef __ANDROID__
 
@@ -22,9 +23,16 @@
 #include "gl/textures/gl_material.h"
 #include "gl/textures/gl_skyboxtexture.h"
 #include "gl/system/gl_cvars.h"
+#include "f_wipe.h"
+#include "m_misc.h"
+#include "m_png.h"
 
 extern TexFilter_s TexFilter[];
 EXTERN_CVAR(Float, skyoffset)
+EXTERN_CVAR(Float, Gamma)
+EXTERN_CVAR(Float, vid_brightness)
+EXTERN_CVAR(Float, vid_contrast)
+EXTERN_CVAR(Int, gl_vid_multisample)
 EXTERN_CVAR(Bool, gl_no_skyclear)
 extern int skyfog;
 
@@ -188,12 +196,18 @@ namespace
 		GLuint vertexBuffer;
 		GLuint indexBuffer;
 		GLuint checkerTexture;
-		GLuint sceneTexture;
 		GLuint checkerSampler;
 		GLuint sceneSampler;
 		int textureFilter;
-		GLuint sceneFramebuffer;
-		GLuint sceneDepthStencil;
+		FGLESTargetDescriptor sceneTarget;
+		GLuint wipeStartTexture;
+		GLuint wipeEndTexture;
+		bool wipeStartReady;
+		bool wipeEndReady;
+		bool wipeEndCapturePending;
+		bool wipeActive;
+		int wipeType;
+		float wipeProgress;
 		GLint sceneTextureUniform;
 		GLint sceneBrightmapUniform;
 		GLint sceneUseBrightmap;
@@ -303,6 +317,14 @@ namespace
 		GLint presentTexture;
 		GLint presentTextureTransform;
 		GLint presentDepth;
+		GLint presentWipeStart;
+		GLint presentWipeEnd;
+		GLint presentWipeProgress;
+		GLint presentWipeType;
+		GLint presentWipeActive;
+		GLint presentGamma;
+		GLint presentBrightness;
+		GLint presentContrast;
 		GLint fogColor;
 		GLint fogDensity;
 		unsigned int frame;
@@ -503,13 +525,13 @@ namespace
 		if (Resources.indexBuffer != 0) glDeleteBuffers(1, &Resources.indexBuffer);
 		if (Resources.vertexArray != 0) glDeleteVertexArrays(1, &Resources.vertexArray);
 		if (Resources.checkerTexture != 0) glDeleteTextures(1, &Resources.checkerTexture);
-		if (Resources.sceneTexture != 0) glDeleteTextures(1, &Resources.sceneTexture);
+		if (Resources.wipeStartTexture != 0) glDeleteTextures(1, &Resources.wipeStartTexture);
+		if (Resources.wipeEndTexture != 0) glDeleteTextures(1, &Resources.wipeEndTexture);
 		for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
 			if (Resources.nativeTextures[i].texture != 0) glDeleteTextures(1, &Resources.nativeTextures[i].texture);
 		if (Resources.checkerSampler != 0) glDeleteSamplers(1, &Resources.checkerSampler);
 		if (Resources.sceneSampler != 0) glDeleteSamplers(1, &Resources.sceneSampler);
-		if (Resources.sceneDepthStencil != 0) glDeleteRenderbuffers(1, &Resources.sceneDepthStencil);
-		if (Resources.sceneFramebuffer != 0) glDeleteFramebuffers(1, &Resources.sceneFramebuffer);
+		gl_GLES_DestroyRenderTarget(&Resources.sceneTarget);
 		Resources.sceneProgram = 0;
 		Resources.fogProgram = 0;
 		Resources.fogMaskedProgram = 0;
@@ -526,12 +548,18 @@ namespace
 		Resources.indexBuffer = 0;
 		Resources.vertexArray = 0;
 		Resources.checkerTexture = 0;
-		Resources.sceneTexture = 0;
+		Resources.wipeStartTexture = 0;
+		Resources.wipeEndTexture = 0;
+		Resources.wipeStartReady = false;
+		Resources.wipeEndReady = false;
+		Resources.wipeEndCapturePending = false;
+		Resources.wipeActive = false;
+		Resources.wipeType = wipe_None;
+		Resources.wipeProgress = 0.0f;
 		Resources.checkerSampler = 0;
 		Resources.sceneSampler = 0;
 		Resources.textureFilter = -1;
-		Resources.sceneDepthStencil = 0;
-		Resources.sceneFramebuffer = 0;
+		Resources.sceneTarget = {};
 		Resources.sceneTextureUniform = -1;
 		Resources.sceneBrightmapUniform = -1;
 		Resources.sceneUseBrightmap = -1;
@@ -636,6 +664,14 @@ namespace
 		Resources.presentTexture = -1;
 		Resources.presentTextureTransform = -1;
 		Resources.presentDepth = -1;
+		Resources.presentWipeStart = -1;
+		Resources.presentWipeEnd = -1;
+		Resources.presentWipeProgress = -1;
+		Resources.presentWipeType = -1;
+		Resources.presentWipeActive = -1;
+		Resources.presentGamma = -1;
+		Resources.presentBrightness = -1;
+		Resources.presentContrast = -1;
 		Resources.fogColor = -1;
 		Resources.fogDensity = -1;
 		Resources.sceneIndexCount = 0;
@@ -675,12 +711,18 @@ namespace
 		Resources.indexBuffer = 0;
 		Resources.vertexArray = 0;
 		Resources.checkerTexture = 0;
-		Resources.sceneTexture = 0;
+		Resources.sceneTarget = {};
+		Resources.wipeStartTexture = 0;
+		Resources.wipeEndTexture = 0;
+		Resources.wipeStartReady = false;
+		Resources.wipeEndReady = false;
+		Resources.wipeEndCapturePending = false;
+		Resources.wipeActive = false;
+		Resources.wipeType = wipe_None;
+		Resources.wipeProgress = 0.0f;
 		Resources.checkerSampler = 0;
 		Resources.sceneSampler = 0;
 		Resources.textureFilter = -1;
-		Resources.sceneDepthStencil = 0;
-		Resources.sceneFramebuffer = 0;
 		Resources.sceneTextureUniform = -1;
 		Resources.sceneBrightmapUniform = -1;
 		Resources.sceneUseBrightmap = -1;
@@ -785,6 +827,14 @@ namespace
 		Resources.presentTexture = -1;
 		Resources.presentTextureTransform = -1;
 		Resources.presentDepth = -1;
+		Resources.presentWipeStart = -1;
+		Resources.presentWipeEnd = -1;
+		Resources.presentWipeProgress = -1;
+		Resources.presentWipeType = -1;
+		Resources.presentWipeActive = -1;
+		Resources.presentGamma = -1;
+		Resources.presentBrightness = -1;
+		Resources.presentContrast = -1;
 		Resources.fogColor = -1;
 		Resources.fogDensity = -1;
 		Resources.sceneIndexCount = 0;
@@ -833,22 +883,11 @@ namespace
 		glBindSampler(0, 0);
 		glActiveTexture(GL_TEXTURE1);
 		glBindSampler(1, 0);
+		glActiveTexture(GL_TEXTURE2);
+		glBindSampler(2, 0);
 		glActiveTexture(GL_TEXTURE0);
 		glBindVertexArray(0);
 		glUseProgram(0);
-	}
-
-	static bool CheckFramebuffer(const char *site, int width, int height)
-	{
-		GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-		if (status == GL_FRAMEBUFFER_COMPLETE) return true;
-		if (!Resources.framebufferWarningLogged)
-		{
-			Resources.framebufferWarningLogged = true;
-			Printf("Android GLES framebuffer incomplete at %s: status 0x%04x, color RGBA8, depth-stencil GL_DEPTH24_STENCIL8, %dx%d.\n",
-				site, status, width, height);
-		}
-		return false;
 	}
 
 	static void BuildCheckerTexture()
@@ -907,25 +946,65 @@ namespace
 
 	static bool BuildFramebuffer(int width, int height)
 	{
-		glGenTextures(1, &Resources.sceneTexture);
-		glBindTexture(GL_TEXTURE_2D, Resources.sceneTexture);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		const int requestedSamples = std::max(static_cast<int>(gl_vid_multisample), 0);
+		if (!gl_GLES_CreateRenderTarget(&Resources.sceneTarget, width, height, requestedSamples))
+		{
+			if (!Resources.framebufferWarningLogged)
+			{
+				Resources.framebufferWarningLogged = true;
+				Printf("Android GLES render target could not be allocated at %dx%d.\n", width, height);
+			}
+			return false;
+		}
+		return true;
+	}
+
+	static bool BuildWipeTexture(GLuint &texture)
+	{
+		if (texture != 0) return true;
+		const int width = Resources.sceneTarget.renderWidth;
+		const int height = Resources.sceneTarget.renderHeight;
+		if (width <= 0 || height <= 0) return false;
+		GLint previousActiveTexture = GL_TEXTURE0;
+		GLint previousTexture = 0;
+		glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+		glGenTextures(1, &texture);
+		glBindTexture(GL_TEXTURE_2D, texture);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-		glGenFramebuffers(1, &Resources.sceneFramebuffer);
-		glBindFramebuffer(GL_FRAMEBUFFER, Resources.sceneFramebuffer);
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, Resources.sceneTexture, 0);
-		glGenRenderbuffers(1, &Resources.sceneDepthStencil);
-		glBindRenderbuffer(GL_RENDERBUFFER, Resources.sceneDepthStencil);
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, Resources.sceneDepthStencil);
-		const bool complete = CheckFramebuffer("framebuffer allocation", width, height);
-		glBindRenderbuffer(GL_RENDERBUFFER, 0);
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		CheckError("framebuffer allocation");
-		return complete;
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
+			GL_UNSIGNED_BYTE, NULL);
+		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+		glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+		if (CheckError("wipe texture allocation") != GL_NO_ERROR)
+		{
+			glDeleteTextures(1, &texture);
+			texture = 0;
+			return false;
+		}
+		return true;
+	}
+
+	static bool CaptureWipeTexture(GLuint texture)
+	{
+		if (texture == 0 || Resources.sceneTarget.resolveFramebuffer == 0) return false;
+		GLint previousFramebuffer = 0;
+		GLint previousActiveTexture = GL_TEXTURE0;
+		GLint previousTexture = 0;
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+		glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+		glBindFramebuffer(GL_FRAMEBUFFER, Resources.sceneTarget.resolveFramebuffer);
+		glBindTexture(GL_TEXTURE_2D, texture);
+		glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0,
+			Resources.sceneTarget.renderWidth, Resources.sceneTarget.renderHeight);
+		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+		glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+		glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFramebuffer));
+		return CheckError("wipe scene capture") == GL_NO_ERROR;
 	}
 
 	static void BuildViewProjection(float cameraX, float cameraY, float cameraZ,
@@ -1214,7 +1293,7 @@ namespace
 
 	static GLsizei UploadSkyGeometry(FMaterial *material, float xOffset, float yOffset, bool mirrored)
 	{
-		// Keep Zan's four-row, 60-degree dome and expose each primitive range explicitly.
+		// Keep Zandronum's four-row, 60-degree dome and expose each primitive range explicitly.
 		const float radius = 10000.0f;
 		const int rows = 4;
 		const int columns = 4 * std::max(gl_sky_detail > 0 ? gl_sky_detail : 1, 1);
@@ -1248,7 +1327,7 @@ namespace
 		{
 			verticalOffset = -1250.0f;
 			verticalScale = 128.0f / 230.0f;
-			// Keep Zan's integer small-sky texture scale.
+			// Keep Zandronum's integer small-sky texture scale.
 			textureVScale = static_cast<float>(128 / textureHeight);
 		}
 		else if (textureHeight < 200)
@@ -1623,7 +1702,17 @@ namespace
 			"in vec2 v_uv;\n"
 			"layout(location = 0) out vec4 frag_color;\n"
 			"uniform sampler2D u_texture;\n"
-			"void main() { frag_color = texture(u_texture, v_uv); }\n";
+			"uniform sampler2D u_wipe_start;\n"
+			"uniform sampler2D u_wipe_end;\n"
+			"uniform float u_wipe_progress;\n"
+			"uniform int u_wipe_type;\n"
+			"uniform bool u_wipe_active;\n"
+			"uniform float u_gamma;\n"
+			"uniform float u_brightness;\n"
+			"uniform float u_contrast;\n"
+			"float wipe_noise(vec2 p) { return fract(sin(dot(floor(p), vec2(12.9898, 78.233))) * 43758.5453); }\n"
+			"vec4 wipe_color() { vec4 current = texture(u_texture, v_uv); if (!u_wipe_active) return current; vec4 start = texture(u_wipe_start, v_uv); vec4 finish = texture(u_wipe_end, v_uv); float progress = clamp(u_wipe_progress, 0.0, 1.0); if (u_wipe_type == 1) { float column = floor(v_uv.x * 320.0); float delay = (wipe_noise(vec2(column, 0.0)) - 0.5) * 0.30; float reveal = clamp(progress * 1.30 - delay, 0.0, 1.0); return v_uv.y <= reveal ? finish : start; } if (u_wipe_type == 2) { float noise = wipe_noise(v_uv * vec2(320.0, 200.0)); float edge = smoothstep(progress - 0.08, progress + 0.08, noise); return mix(finish, start, edge); } return mix(start, finish, progress); }\n"
+			"void main() { vec4 color = wipe_color(); color.rgb = max((color.rgb - 0.5) * u_contrast + 0.5 + u_brightness * 0.5, vec3(0.0)); color.rgb = pow(color.rgb, vec3(1.0 / max(u_gamma, 0.1))); frag_color = color; }\n";
 
 		Resources.sceneProgram = LinkProgram(sceneVertexSource, sceneFragmentSource, "opaque scene");
 		Resources.maskedProgram = LinkProgram(sceneVertexSource, maskedFragmentSource, "masked scene");
@@ -1744,13 +1833,21 @@ namespace
 		Resources.presentTexture = glGetUniformLocation(Resources.presentProgram, "u_texture");
 		Resources.presentTextureTransform = glGetUniformLocation(Resources.presentProgram, "u_texture_transform");
 		Resources.presentDepth = glGetUniformLocation(Resources.presentProgram, "u_depth");
+		Resources.presentWipeStart = glGetUniformLocation(Resources.presentProgram, "u_wipe_start");
+		Resources.presentWipeEnd = glGetUniformLocation(Resources.presentProgram, "u_wipe_end");
+		Resources.presentWipeProgress = glGetUniformLocation(Resources.presentProgram, "u_wipe_progress");
+		Resources.presentWipeType = glGetUniformLocation(Resources.presentProgram, "u_wipe_type");
+		Resources.presentWipeActive = glGetUniformLocation(Resources.presentProgram, "u_wipe_active");
+		Resources.presentGamma = glGetUniformLocation(Resources.presentProgram, "u_gamma");
+		Resources.presentBrightness = glGetUniformLocation(Resources.presentProgram, "u_brightness");
+		Resources.presentContrast = glGetUniformLocation(Resources.presentProgram, "u_contrast");
 
 		static const FBootstrapVertex vertices[] =
 		{
 			{ -1.0f, -1.0f, 0.70f, 0.0f, 0.0f },
-			{  1.0f, -1.0f, 0.70f, 4.0f, 0.0f },
-			{  1.0f,  1.0f, 0.70f, 4.0f, 4.0f },
-			{ -1.0f,  1.0f, 0.70f, 0.0f, 4.0f },
+			{  1.0f, -1.0f, 0.70f, 1.0f, 0.0f },
+			{  1.0f,  1.0f, 0.70f, 1.0f, 1.0f },
+			{ -1.0f,  1.0f, 0.70f, 0.0f, 1.0f },
 			{ -0.62f, -0.48f, 0.20f, 0.0f, 0.0f },
 			{  0.62f, -0.48f, 0.20f, 2.0f, 0.0f },
 			{  0.62f,  0.48f, 0.20f, 2.0f, 2.0f },
@@ -2823,7 +2920,7 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	// Portal mask depth protects the target from later world batches; the sky
 	// itself is selected solely by stencil, as in the desktop non-depth path.
 	glDisable(GL_DEPTH_TEST);
-	// The sky cap and the alpha-faded first strip overlap. Like Zan's
+	// The sky cap and the alpha-faded first strip overlap. Like Zandronum's
 	// non-depth portal path, neither may write depth or the cap hides the fade.
 	glDepthMask(GL_FALSE);
 	glEnable(GL_BLEND);
@@ -3411,8 +3508,22 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		return;
 	}
 	BootstrapPauseLogged = false;
-	glBindFramebuffer(GL_FRAMEBUFFER, Resources.sceneFramebuffer);
-	glViewport(0, 0, width, height);
+	if (Resources.sceneTarget.renderWidth != width || Resources.sceneTarget.renderHeight != height)
+	{
+		if (Resources.wipeStartTexture != 0) glDeleteTextures(1, &Resources.wipeStartTexture);
+		if (Resources.wipeEndTexture != 0) glDeleteTextures(1, &Resources.wipeEndTexture);
+		Resources.wipeStartTexture = 0;
+		Resources.wipeEndTexture = 0;
+		Resources.wipeStartReady = false;
+		Resources.wipeEndReady = false;
+		Resources.wipeEndCapturePending = false;
+		Resources.wipeActive = false;
+		Resources.wipeType = wipe_None;
+		Resources.wipeProgress = 0.0f;
+		if (!BuildFramebuffer(width, height))
+			I_FatalError("Android GLES render target could not follow surface size %dx%d.", width, height);
+	}
+	gl_GLES_BindRenderTarget(&Resources.sceneTarget);
 	// The legacy view setup leaves its view-window scissor enabled. The native
 	// scene target always owns the complete render surface.
 	glScissor(0, 0, width, height);
@@ -4041,8 +4152,18 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(6 * sizeof(GLushort)));
 	}
 	CheckError(renderScene ? "world scene draw" : "bootstrap draw");
+	if (!gl_GLES_ResolveRenderTarget(&Resources.sceneTarget))
+		I_FatalError("Android GLES scene resolve failed.");
+	if (Resources.wipeEndCapturePending)
+	{
+		if (!BuildWipeTexture(Resources.wipeEndTexture) ||
+			!CaptureWipeTexture(Resources.wipeEndTexture))
+			I_FatalError("Android GLES wipe end capture failed.");
+		Resources.wipeEndReady = true;
+		Resources.wipeEndCapturePending = false;
+	}
 
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	ResetState(width, height);
 	glViewport(0, 0, width, height);
 	glScissor(0, 0, width, height);
 	glDisable(GL_SCISSOR_TEST);
@@ -4052,19 +4173,143 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	BindNativeProgram(Resources.presentProgram, "android/present");
 	glUniform1i(Resources.presentTexture, 0);
 	if (Resources.presentTextureTransform >= 0)
-		glUniform4f(Resources.presentTextureTransform, 0.25f, 0.25f, 0.0f, 0.0f);
-	glBindTexture(GL_TEXTURE_2D, Resources.sceneTexture);
+		glUniform4f(Resources.presentTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
+	if (Resources.presentDepth >= 0) glUniform1f(Resources.presentDepth, 0.0f);
+	const bool wipeReady = Resources.wipeActive && Resources.wipeStartReady && Resources.wipeEndReady;
+	if (Resources.presentWipeStart >= 0) glUniform1i(Resources.presentWipeStart, 1);
+	if (Resources.presentWipeEnd >= 0) glUniform1i(Resources.presentWipeEnd, 2);
+	if (Resources.presentWipeProgress >= 0) glUniform1f(Resources.presentWipeProgress, Resources.wipeProgress);
+	if (Resources.presentWipeType >= 0) glUniform1i(Resources.presentWipeType, Resources.wipeType);
+	if (Resources.presentWipeActive >= 0) glUniform1i(Resources.presentWipeActive, wipeReady ? 1 : 0);
+	if (Resources.presentGamma >= 0) glUniform1f(Resources.presentGamma, static_cast<float>(Gamma));
+	if (Resources.presentBrightness >= 0)
+		glUniform1f(Resources.presentBrightness, clamp<float>(vid_brightness, -0.8f, 0.8f));
+	if (Resources.presentContrast >= 0)
+		glUniform1f(Resources.presentContrast, clamp<float>(vid_contrast, 0.1f, 3.0f));
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, Resources.sceneTarget.colorAttachment);
 	glBindSampler(0, Resources.sceneSampler);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, wipeReady ? Resources.wipeStartTexture : Resources.sceneTarget.colorAttachment);
+	glBindSampler(1, Resources.sceneSampler);
+	glActiveTexture(GL_TEXTURE2);
+	glBindTexture(GL_TEXTURE_2D, wipeReady ? Resources.wipeEndTexture : Resources.sceneTarget.colorAttachment);
+	glBindSampler(2, Resources.sceneSampler);
+	glActiveTexture(GL_TEXTURE0);
 	glBindVertexArray(Resources.vertexArray);
 	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(0));
 	glBindVertexArray(0);
+	glActiveTexture(GL_TEXTURE1);
+	glBindSampler(1, 0);
+	glActiveTexture(GL_TEXTURE2);
+	glBindSampler(2, 0);
+	glActiveTexture(GL_TEXTURE0);
 	glBindSampler(0, 0);
 	glUseProgram(0);
+	ResetState(width, height);
 	const GLenum error = CheckError("present");
 	if (error != GL_NO_ERROR) I_FatalError("Android GLES frame failed.");
 	++Resources.frame;
 	if (Resources.frame == 1 || (Resources.frame % 120) == 0)
 		DPrintf("Android GLES frame %u at %dx%d.\n", Resources.frame, width, height);
+}
+
+bool gl_AndroidNativeGLES_WriteSavePic(FILE *file, int width, int height)
+{
+	if (file == nullptr || width <= 0 || height <= 0 || !gl_AndroidNativeGLES_CanUseResources())
+		return false;
+
+	const int sourceWidth = Resources.sceneTarget.renderWidth;
+	const int sourceHeight = Resources.sceneTarget.renderHeight;
+	if (sourceWidth <= 0 || sourceHeight <= 0)
+		return false;
+
+	std::vector<BYTE> rgba(static_cast<size_t>(sourceWidth) * sourceHeight * 4);
+	std::vector<BYTE> rgb(static_cast<size_t>(width) * height * 3);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glReadPixels(0, 0, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+	const GLenum readbackError = glGetError();
+	if (readbackError != GL_NO_ERROR)
+	{
+		glPixelStorei(GL_PACK_ALIGNMENT, 4);
+		return false;
+	}
+
+	for (int y = 0; y < height; ++y)
+	{
+		const int sourceY = (y * sourceHeight) / height;
+		for (int x = 0; x < width; ++x)
+		{
+			const int sourceX = (x * sourceWidth) / width;
+			const size_t source = (static_cast<size_t>(sourceY) * sourceWidth + sourceX) * 4;
+			const size_t destination = (static_cast<size_t>(y) * width + x) * 3;
+			rgb[destination + 0] = rgba[source + 0];
+			rgb[destination + 1] = rgba[source + 1];
+			rgb[destination + 2] = rgba[source + 2];
+		}
+	}
+
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	return M_CreatePNG(file, rgb.data() + static_cast<size_t>(height - 1) * width * 3,
+		nullptr, SS_RGB, width, height, -width * 3);
+}
+
+bool gl_AndroidNativeGLES_WipeStart(int type)
+{
+	if (!gl_AndroidNativeGLES_CanUseResources() ||
+		(type != wipe_Melt && type != wipe_Burn && type != wipe_Fade))
+		return false;
+	if (Resources.wipeStartTexture != 0) glDeleteTextures(1, &Resources.wipeStartTexture);
+	if (Resources.wipeEndTexture != 0) glDeleteTextures(1, &Resources.wipeEndTexture);
+	Resources.wipeStartTexture = 0;
+	Resources.wipeEndTexture = 0;
+	Resources.wipeStartReady = false;
+	Resources.wipeEndReady = false;
+	Resources.wipeEndCapturePending = false;
+	Resources.wipeActive = false;
+	Resources.wipeType = type;
+	Resources.wipeProgress = 0.0f;
+	if (!BuildWipeTexture(Resources.wipeStartTexture) ||
+		!CaptureWipeTexture(Resources.wipeStartTexture))
+	{
+		if (Resources.wipeStartTexture != 0) glDeleteTextures(1, &Resources.wipeStartTexture);
+		Resources.wipeStartTexture = 0;
+		return false;
+	}
+	Resources.wipeStartReady = true;
+	return true;
+}
+
+void gl_AndroidNativeGLES_WipeEnd()
+{
+	if (!gl_AndroidNativeGLES_CanUseResources() || !Resources.wipeStartReady) return;
+	Resources.wipeEndCapturePending = true;
+	Resources.wipeEndReady = false;
+	Resources.wipeProgress = 0.0f;
+}
+
+bool gl_AndroidNativeGLES_WipeDo(int ticks)
+{
+	if (!gl_AndroidNativeGLES_CanUseResources() || !Resources.wipeStartReady) return true;
+	Resources.wipeActive = true;
+	Resources.wipeProgress = std::min(1.0f, Resources.wipeProgress +
+		std::max(ticks, 1) / 32.0f);
+	return Resources.wipeProgress >= 1.0f;
+}
+
+void gl_AndroidNativeGLES_WipeCleanup()
+{
+	if (Resources.wipeStartTexture != 0) glDeleteTextures(1, &Resources.wipeStartTexture);
+	if (Resources.wipeEndTexture != 0) glDeleteTextures(1, &Resources.wipeEndTexture);
+	Resources.wipeStartTexture = 0;
+	Resources.wipeEndTexture = 0;
+	Resources.wipeStartReady = false;
+	Resources.wipeEndReady = false;
+	Resources.wipeEndCapturePending = false;
+	Resources.wipeActive = false;
+	Resources.wipeType = wipe_None;
+	Resources.wipeProgress = 0.0f;
 }
 
 bool gl_AndroidNativeGLES_IsActive()

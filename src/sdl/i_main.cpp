@@ -255,7 +255,7 @@ int main (int argc, char **argv)
  	}
 #endif // !__APPLE__
  	
-	// [SB] Moved ZDoom's version info down below for Zan's --version
+	// [SB] Moved ZDoom's version info down below for Zandronum's --version
 
 	seteuid (getuid ());
     std::set_new_handler (NewFailure);

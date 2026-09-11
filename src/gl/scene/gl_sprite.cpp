@@ -218,7 +218,7 @@ void GLSprite::Draw(int pass)
 			x2, z2, y2,
 			x1, z2, y1
 		};
-		// Convert Zan's padded sprite range to the exact native upload dimensions.
+		// Convert Zandronum's padded sprite range to the exact native upload dimensions.
 		float nativeU1 = 0.0f, nativeV1 = 0.0f, nativeU2 = 1.0f, nativeV2 = 1.0f;
 		if (gltexture != NULL)
 			gltexture->GetNativeSpriteCoords(&nativeU1, &nativeV1, &nativeU2, &nativeV2);

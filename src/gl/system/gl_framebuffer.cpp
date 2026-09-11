@@ -613,6 +613,30 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 	ReleaseScreenshotBuffer();
 	ScreenshotBuffer = new BYTE[w * h * 3];
 
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		BYTE *rgba = new BYTE[w * h * 4];
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glPixelStorei(GL_PACK_ALIGNMENT, 1);
+		glReadPixels(0, (GetTrueHeight() - GetHeight()) / 2, w, h,
+			GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+		for (int pixel = 0; pixel < w * h; ++pixel)
+		{
+			ScreenshotBuffer[pixel * 3 + 0] = rgba[pixel * 4 + 0];
+			ScreenshotBuffer[pixel * 3 + 1] = rgba[pixel * 4 + 1];
+			ScreenshotBuffer[pixel * 3 + 2] = rgba[pixel * 4 + 2];
+		}
+		delete [] rgba;
+		glPixelStorei(GL_PACK_ALIGNMENT, 4);
+		gl_AndroidNativeGLES_ResetState(GetWidth(), GetHeight());
+		pitch = -w*3;
+		color_type = SS_RGB;
+		buffer = ScreenshotBuffer + w * 3 * (h - 1);
+		return;
+	}
+	#endif
+
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(0,(GetTrueHeight() - GetHeight()) / 2,w,h,GL_RGB,GL_UNSIGNED_BYTE,ScreenshotBuffer);
 	glPixelStorei(GL_PACK_ALIGNMENT, 4);

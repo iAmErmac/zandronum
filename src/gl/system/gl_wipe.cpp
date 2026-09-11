@@ -50,6 +50,9 @@
 #include "vectors.h"
 
 #include "gl/system/gl_interface.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/system/gl_framebuffer.h"
@@ -126,6 +129,11 @@ private:
 
 bool OpenGLFrameBuffer::WipeStartScreen(int type)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+		return gl_AndroidNativeGLES_WipeStart(type);
+	#endif
+
 	switch (type)
 	{
 	case wipe_Burn:
@@ -167,6 +175,14 @@ bool OpenGLFrameBuffer::WipeStartScreen(int type)
 
 void OpenGLFrameBuffer::WipeEndScreen()
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		gl_AndroidNativeGLES_WipeEnd();
+		return;
+	}
+	#endif
+
 	wipeendscreen = new FHardwareTexture(Width, Height, false, false, false, true);
 	wipeendscreen->CreateTexture(NULL, Width, Height, false, 0, CM_DEFAULT);
 	glFlush();
@@ -193,6 +209,11 @@ void OpenGLFrameBuffer::WipeEndScreen()
 
 bool OpenGLFrameBuffer::WipeDo(int ticks)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+		return gl_AndroidNativeGLES_WipeDo(ticks);
+	#endif
+
 	// Sanity checks.
 	if (wipestartscreen == NULL || wipeendscreen == NULL)
 	{
@@ -222,6 +243,14 @@ bool OpenGLFrameBuffer::WipeDo(int ticks)
 
 void OpenGLFrameBuffer::WipeCleanup()
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		gl_AndroidNativeGLES_WipeCleanup();
+		return;
+	}
+	#endif
+
 	if (ScreenWipe != NULL)
 	{
 		delete ScreenWipe;

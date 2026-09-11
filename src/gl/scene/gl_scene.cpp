@@ -1235,24 +1235,16 @@ void FGLRenderer::RenderView (player_t* player)
 // Render the view to a savegame picture
 //
 //===========================================================================
-#ifdef __ANDROID__
-uint8_t * gles_convertRGB(uint8_t * data, int width, int height)
-{
-	uint8_t *src = data;
-	uint8_t *dst = data;
-
-	for (int i=0; i<width*height; i++) {
-		for (int j=0; j<3; j++)
-			*(dst++) = *(src++);
-		src++;
-	}
-
-	return dst;
-}
-#endif
-
 void FGLRenderer::WriteSavePic (player_t *player, FILE *file, int width, int height)
 {
+	#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (!gl_AndroidNativeGLES_WriteSavePic(file, width, height))
+			M_CreateDummyPNG(file);
+		return;
+	}
+	#endif
 	GL_IRECT bounds;
 
 	bounds.left=0;
@@ -1265,30 +1257,22 @@ void FGLRenderer::WriteSavePic (player_t *player, FILE *file, int width, int hei
 	// Check if there's some lights. If not some code can be skipped.
 	TThinkerIterator<ADynamicLight> it(STAT_DLIGHT);
 	GLRenderer->mLightCount = ((it.Next()) != NULL);
-
-	sector_t *viewsector = RenderViewpoint(players[consoleplayer].camera, &bounds, 
-								FieldOfView * 360.0f / FINEANGLES, 1.6f, 1.6f, true, false);
+	sector_t *viewsector = RenderViewpoint(players[consoleplayer].camera, &bounds,
+		FieldOfView * 360.0f / FINEANGLES, 1.6f, 1.6f, true, false);
 	glDisable(GL_STENCIL_TEST);
 	screen->Begin2D(false);
 	DrawBlend(viewsector);
 	glFlush();
-#ifdef __ANDROID__ //Some androids do not like GL_RGB
-	uint8_t * scr = (uint8_t *)M_Malloc(width * height * 4);
-	glReadPixels(0,0,width, height,GL_RGBA,GL_UNSIGNED_BYTE,scr);
-	gles_convertRGB(scr,width,height);
-	M_CreatePNG (file, scr + ((height-1) * width * 3), NULL, SS_RGB, width, height, -width*3);
-#else
 	byte * scr = (byte *)M_Malloc(width * height * 3);
 	glReadPixels(0,0,width, height,GL_RGB,GL_UNSIGNED_BYTE,scr);
 	M_CreatePNG (file, scr + ((height-1) * width * 3), NULL, SS_RGB, width, height, -width*3);
-#endif
 	M_Free(scr);
 
 	// [BC] In GZDoom, this is called every frame, regardless of whether or not
 	// the view is active. In Skulltag, we don't so we have to call this here
 	// to reset everything, such as the viewport, after rendering our view to
 	// a canvas.
-	FGLRenderer::EndDrawScene( viewsector );
+	FGLRenderer::EndDrawScene(viewsector);
 }
 
 

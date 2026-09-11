@@ -1,6 +1,8 @@
 #ifndef ZANDRONUM_GL_ANDROID_H
 #define ZANDRONUM_GL_ANDROID_H
 
+#include <stdio.h>
+
 #include "v_palette.h"
 
 class FMaterial;
@@ -57,6 +59,10 @@ enum EAndroidNativeMaterialFlags
 bool gl_AndroidNativeGLES_CollectCapabilities();
 bool gl_AndroidNativeGLES_InitializeBootstrap(int width, int height);
 void gl_AndroidNativeGLES_RenderBootstrap(int width, int height);
+bool gl_AndroidNativeGLES_WipeStart(int type);
+void gl_AndroidNativeGLES_WipeEnd();
+bool gl_AndroidNativeGLES_WipeDo(int ticks);
+void gl_AndroidNativeGLES_WipeCleanup();
 void gl_AndroidNativeGLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	float cameraYaw, float cameraPitch, float cameraRoll, float fieldOfView, float aspect, float fovRatio);
 void gl_AndroidNativeGLES_ClearScene();
@@ -103,6 +109,7 @@ unsigned int gl_AndroidNativeGLES_BindMaterial(const void *key, const unsigned c
 	int width, int height, bool repeat, int colormap, int translation, bool allowhires);
 void gl_AndroidNativeGLES_ClearMaterialCache();
 void gl_AndroidNativeGLES_EndScene();
+bool gl_AndroidNativeGLES_WriteSavePic(FILE *file, int width, int height);
 unsigned int gl_AndroidNativeGLES_BeginPortalCapture();
 void gl_AndroidNativeGLES_AddPortalMask(unsigned int portalId, const float *positions);
 void gl_AndroidNativeGLES_SetPortalView(float cameraX, float cameraY, float cameraZ,

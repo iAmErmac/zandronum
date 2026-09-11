@@ -71,6 +71,9 @@
 #include "sv_commands.h"
 #include "team.h"
 #include "chat.h"
+#ifdef __ANDROID__
+#include "gl/system/gl_android.h"
+#endif
 
 EXTERN_CVAR (Int, disableautosave)
 EXTERN_CVAR (Int, autosavecount)

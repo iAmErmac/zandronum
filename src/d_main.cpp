@@ -866,8 +866,41 @@ void D_Display ()
 #ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
+		static bool nativeWipeInProgress = false;
+		static bool nativeWipeEndRequested = false;
+		bool nativeWipeDone = false;
 		if (screen == NULL)
 			return;
+		if (!nativeWipeInProgress)
+		{
+			if (NoWipe || NETWORK_InClientMode())
+			{
+				V_SetBorderNeedRefresh();
+				NoWipe--;
+				wipegamestate = gamestate;
+			}
+			else if (gamestate != wipegamestate && gamestate != GS_FULLCONSOLE && gamestate != GS_TITLELEVEL)
+			{
+				int wipeType = wipetype;
+				switch (wipegamestate)
+				{
+				default:
+					break;
+				case GS_FORCEWIPEFADE:
+					wipeType = wipe_Fade;
+					break;
+				case GS_FORCEWIPEBURN:
+					wipeType = wipe_Burn;
+					break;
+				case GS_FORCEWIPEMELT:
+					wipeType = wipe_Melt;
+					break;
+				}
+				nativeWipeInProgress = screen->WipeStartScreen(wipeType);
+				nativeWipeEndRequested = false;
+				wipegamestate = gamestate;
+			}
+		}
 		if (viewactive)
 			R_SetFOV(players[consoleplayer].camera && players[consoleplayer].camera->player ?
 				players[consoleplayer].camera->player->FOV : 90.f);
@@ -938,7 +971,22 @@ void D_Display ()
 			C_DrawConsole(false);
 			M_Drawer();
 		}
+		if (nativeWipeInProgress)
+		{
+			if (!nativeWipeEndRequested)
+			{
+				screen->WipeEndScreen();
+				nativeWipeEndRequested = true;
+			}
+			nativeWipeDone = screen->WipeDo(1);
+		}
 		screen->Update();
+		if (nativeWipeDone)
+		{
+			screen->WipeCleanup();
+			nativeWipeInProgress = false;
+			nativeWipeEndRequested = false;
+		}
 		return;
 	}
 #endif
