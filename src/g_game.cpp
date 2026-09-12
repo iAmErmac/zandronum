@@ -744,6 +744,10 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 
 	forward = side = fly = 0;
 
+#ifdef __ANDROID__
+	const bool androidFlyActive = Zandronum_AndroidInput_FlyActive();
+#endif
+
 	// [RH] only use two stage accelerative turning on the keyboard
 	//		and not the joystick, since we treat the joystick as
 	//		the analog device it is.
@@ -790,6 +794,23 @@ void G_BuildTiccmd (ticcmd_t *cmd)
 		fly += flyspeed[speed];
 	if (Button_MoveDown.bDown)
 		fly -= flyspeed[speed];
+
+#ifdef __ANDROID__
+	if (Zandronum_AndroidInput_TouchJumpDown())
+	{
+		if (androidFlyActive)
+			fly += flyspeed[speed];
+		else
+			cmd->ucmd.buttons |= BT_JUMP;
+	}
+	if (Zandronum_AndroidInput_TouchCrouchDown())
+	{
+		if (androidFlyActive)
+			fly -= flyspeed[speed];
+		else
+			cmd->ucmd.buttons |= BT_CROUCH;
+	}
+#endif
 
 	if (Button_Klook.bDown)
 	{
@@ -1355,6 +1376,14 @@ const char* G_DescribeJoinMenuKey()
 //
 bool G_Responder (event_t *ev)
 {
+#ifdef __ANDROID__
+	if (ev->type == EV_AndroidAction)
+	{
+		Zandronum_AndroidInput_ApplyAction(ev->data1, ev->data2 != 0);
+		return true;
+	}
+#endif
+
 	// any other key pops up menu if in demos
 	// [RH] But only if the key isn't bound to a "special" command
 	// [BB] We explicitly don't check if a client side demo is played to allow binding demo_pause, etc..

@@ -40,6 +40,7 @@ enum EGenericEvent
 	EV_Mouse,		// x, y: mouse movement deltas
 	EV_GUI_Event,	// subtype specifies actual event
 	EV_DeviceChange,// a device has been connected or removed
+	EV_AndroidAction,	// data1: semantic action, data2: pressed state
 };
 
 // Event structure.

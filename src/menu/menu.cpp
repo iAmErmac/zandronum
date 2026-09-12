@@ -611,6 +611,11 @@ void M_SetMenu(FName menu, int param)
 
 bool M_Responder (event_t *ev) 
 { 
+	#ifdef __ANDROID__
+	if (ev->type == EV_AndroidAction)
+		return false;
+	#endif
+
 	int ch = 0;
 	bool keyup = false;
 	int mkey = NUM_MKEYS;

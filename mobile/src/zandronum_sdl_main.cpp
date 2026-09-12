@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
-#include <android/log.h>
 #include "gl/system/gl_android.h"
 #include "zandronum_android_lifecycle.h"
 #include "zandronum_android_input.h"
@@ -92,6 +91,12 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_
     Zandronum_AndroidInput_Key(static_cast<int>(keycode), pressed != 0);
 }
 
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputGuiKey(
+    JNIEnv *, jclass, jint keycode, jboolean pressed)
+{
+    Zandronum_AndroidInput_GuiKey(static_cast<int>(keycode), pressed != 0);
+}
+
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputText(
     JNIEnv *, jclass, jint codepoint)
 {
@@ -110,10 +115,28 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_
     Zandronum_AndroidInput_Axis(static_cast<int>(axis), value);
 }
 
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputLook(
+    JNIEnv *, jclass, jint deltaX, jint deltaY)
+{
+    Zandronum_AndroidInput_Look(static_cast<int>(deltaX), static_cast<int>(deltaY));
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputReset(
+    JNIEnv *, jclass)
+{
+    Zandronum_AndroidInput_Reset();
+}
+
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputAction(
     JNIEnv *, jclass, jint action, jboolean pressed)
 {
     Zandronum_AndroidInput_Action(static_cast<int>(action), pressed != 0);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMenuAction(
+    JNIEnv *, jclass, jint direction, jboolean pressed)
+{
+    Zandronum_AndroidInput_MenuAction(static_cast<int>(direction), pressed != 0);
 }
 static std::vector<std::string> ReadArguments()
 {
@@ -183,9 +206,6 @@ void Zandronum_Android_ProcessSurfaceState(int width, int height)
     int surfaceLost = 0;
     int surfaceRestored = 0;
     Android_JNI_PollSurfaceState(&surfaceLost, &surfaceRestored);
-    if (surfaceLost || surfaceRestored)
-        __android_log_print(ANDROID_LOG_INFO, "Zandronum", "surface state lost=%d restored=%d",
-                            surfaceLost, surfaceRestored);
     if (surfaceLost)
     {
         gl_AndroidNativeGLES_OnContextLost();
