@@ -144,9 +144,9 @@ public:
 	void GetNativeSpriteCoords(float *u1, float *v1, float *u2, float *v2) const;
 #endif
 
-	unsigned char * CreateTexBuffer(int cm, int translation, int & w, int & h, bool expand = false, bool allowhires=true) const
+	unsigned char * CreateTexBuffer(int cm, int translation, int & w, int & h, bool expand = false, bool allowhires=true, int warp = 0) const
 	{
-		return mBaseLayer->CreateTexBuffer(cm, translation, w, h, expand, allowhires? tex:NULL, 0);
+		return mBaseLayer->CreateTexBuffer(cm, translation, w, h, expand, allowhires? tex:NULL, warp);
 	}
 
 	void Clean(bool f)

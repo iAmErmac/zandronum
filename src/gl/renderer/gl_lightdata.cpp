@@ -94,6 +94,9 @@ bool gl_BrightmapsActive()
 
 bool gl_GlowActive()
 {
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive()) return gl_glow_shader;
+#endif
 	return gl.shadermodel == 4 || (gl.shadermodel == 3 && gl_glow_shader);
 }
 

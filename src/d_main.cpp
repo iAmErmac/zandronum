@@ -866,11 +866,13 @@ void D_Display ()
 #ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
-		static bool nativeWipeInProgress = false;
-		static bool nativeWipeEndRequested = false;
+		bool nativeWipeInProgress = gl_AndroidNativeGLES_IsWipeInProgress();
 		bool nativeWipeDone = false;
-		if (screen == NULL)
+		if (NETWORK_GetState() == NETSTATE_SERVER || nodrawers || screen == NULL)
 			return;
+		cycle_t nativeFrameCycles;
+		nativeFrameCycles.Reset();
+		nativeFrameCycles.Clock();
 		if (!nativeWipeInProgress)
 		{
 			if (NoWipe || NETWORK_InClientMode())
@@ -897,7 +899,8 @@ void D_Display ()
 					break;
 				}
 				nativeWipeInProgress = screen->WipeStartScreen(wipeType);
-				nativeWipeEndRequested = false;
+				if (nativeWipeInProgress)
+					GSnd->SetSfxPaused(true, 1);
 				wipegamestate = gamestate;
 			}
 		}
@@ -908,15 +911,25 @@ void D_Display ()
 		if (setsizeneeded && StatusBar != NULL)
 			R_ExecuteSetViewSize();
 		const bool levelDisplay = gamestate == GS_LEVEL || gamestate == GS_TITLELEVEL;
+		const bool nativeLevelReady = levelDisplay && gametic != 0 &&
+			(!NETWORK_InClientMode() || CLIENT_GetConnectionState() == CTS_ACTIVE);
+		if (screen->Lock(false))
+		{
+			ST_SetNeedRefresh();
+			V_SetBorderNeedRefresh();
+		}
+		const DWORD nowtime = I_FPSTime();
+		TexMan.UpdateAnimations(nowtime);
+		R_UpdateSky(nowtime);
 		gl_AndroidNativeGLES_ClearScene();
 		if (levelDisplay && players[consoleplayer].camera == NULL)
 			players[consoleplayer].camera = players[consoleplayer].mo;
-		if (levelDisplay && Renderer != NULL && viewactive &&
+		if (nativeLevelReady && Renderer != NULL && viewactive &&
 			players[consoleplayer].mo != NULL && players[consoleplayer].camera != NULL)
 		{
 			Renderer->RenderView(&players[consoleplayer]);
 		}
-		if (levelDisplay && automapactive)
+		if (nativeLevelReady && automapactive)
 		{
 			const int saved_ST_Y = ST_Y;
 			if (hud_althud && viewheight == SCREENHEIGHT)
@@ -924,7 +937,9 @@ void D_Display ()
 			AM_Drawer();
 			ST_Y = saved_ST_Y;
 		}
-		if (levelDisplay && StatusBar != NULL && StatusBar->CPlayer != NULL &&
+		if (nativeLevelReady && (!automapactive || viewactive))
+			V_RefreshViewBorder();
+		if (nativeLevelReady && StatusBar != NULL && StatusBar->CPlayer != NULL &&
 			(viewactive || automapactive) && players[consoleplayer].mo != NULL)
 		{
 			if (hud_althud && viewheight == SCREENHEIGHT && screenblocks > 10)
@@ -948,7 +963,56 @@ void D_Display ()
 				StatusBar->DrawTopStuff (HUD_StatusBar);
 			}
 		}
-		if (gamestate == GS_FULLCONSOLE)
+		if (nativeLevelReady && viewactive)
+		{
+			POSSESSION_Render();
+			HUD_Render(CLIENTDEMO_IsInFreeSpectateMode() == false ? HUD_GetViewPlayer() : consoleplayer);
+			MEDAL_Render();
+			CHAT_Render();
+		}
+		if (NETWORK_InClientMode())
+		{
+			FString message;
+			if (CLIENT_GetServerLagging())
+				message = "Waiting for server...";
+			else if (CLIENT_GetClientLagging())
+				message = "CONNECTION INTERRUPTED!";
+			if (message.Len() > 0)
+			{
+				DHUDMessageFadeOut *pMsg = new DHUDMessageFadeOut(SmallFont, message, 1.5f, 0.9f, 0, 0,
+					CR_GREEN, 0.15f, 0.35f);
+				StatusBar->AttachMessage(pMsg, MAKE_ID('C', 'L', 'A', 'G'));
+			}
+		}
+		if (paused && menuactive == MENU_Off)
+		{
+			FTexture *tex = TexMan(gameinfo.PauseSign);
+			int x = (SCREENWIDTH - tex->GetScaledWidth() * CleanXfac) / 2 +
+				tex->GetScaledLeftOffset() * CleanXfac;
+			screen->DrawTexture(tex, x, 4, DTA_CleanNoMove, true, TAG_DONE);
+		}
+		if (D_DrawIcon != NULL)
+		{
+			FTextureID picnum = TexMan.CheckForTexture(D_DrawIcon, FTexture::TEX_MiscPatch);
+			D_DrawIcon = NULL;
+			if (picnum.isValid())
+			{
+				FTexture *tex = TexMan[picnum];
+				screen->DrawTexture(tex, 160 - tex->GetScaledWidth() / 2, 100 - tex->GetScaledHeight() / 2,
+					DTA_320x200, true, TAG_DONE);
+			}
+			NoWipe = 10;
+		}
+		if (snd_drawoutput)
+			GSnd->DrawWaveDebug(snd_drawoutput);
+		if (nativeWipeInProgress)
+		{
+			screen->WipeEndScreen();
+			nativeWipeDone = screen->WipeDo(1);
+			C_DrawConsole(false);
+			M_Drawer();
+		}
+		else if (gamestate == GS_FULLCONSOLE)
 		{
 			C_DrawConsole(false);
 			M_Drawer();
@@ -971,22 +1035,18 @@ void D_Display ()
 			C_DrawConsole(false);
 			M_Drawer();
 		}
-		if (nativeWipeInProgress)
-		{
-			if (!nativeWipeEndRequested)
-			{
-				screen->WipeEndScreen();
-				nativeWipeEndRequested = true;
-			}
-			nativeWipeDone = screen->WipeDo(1);
-		}
+		if (!nativeWipeInProgress)
+			FStat::PrintStat();
+		NetUpdate();
 		screen->Update();
-		if (nativeWipeDone)
+		if (nativeWipeDone || (nativeWipeInProgress && !gl_AndroidNativeGLES_IsWipeInProgress()))
 		{
 			screen->WipeCleanup();
 			nativeWipeInProgress = false;
-			nativeWipeEndRequested = false;
+			GSnd->SetSfxPaused(false, 1);
 		}
+		nativeFrameCycles.Unclock();
+		FrameCycles = nativeFrameCycles;
 		return;
 	}
 #endif
@@ -1354,6 +1414,15 @@ void D_ErrorCleanup ()
 	savegamerestore = false;
 	screen->Unlock ();
 
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		if (gl_AndroidNativeGLES_IsWipeInProgress())
+			screen->WipeCleanup();
+		GSnd->SetSfxPaused(false, 1);
+	}
+#endif
+
 	// [BC] Remove all the bots from this game.
 	BOTS_RemoveAllBots( false );
 
@@ -1410,6 +1479,8 @@ void D_DoomLoop ()
 
 	for (;;)
 	{
+		const bool nativeWipeInProgress = gl_AndroidNativeGLES_IsActive() &&
+			gl_AndroidNativeGLES_IsWipeInProgress();
 		try
 		{
 			switch ( NETWORK_GetState( ))
@@ -1431,7 +1502,8 @@ void D_DoomLoop ()
 				}
 
 				// Run at least 1 tick.
-				TryRunTics( );
+				if (!nativeWipeInProgress)
+					TryRunTics( );
 
 				// Move positional sounds.
 				// NOTE: .camera can be NULL if player has loaded the level but
@@ -1461,7 +1533,7 @@ void D_DoomLoop ()
 				}
 				
 				// process one or more tics
-				if (singletics)
+				if (!nativeWipeInProgress && singletics)
 				{
 					I_StartTic ();
 					D_ProcessEvents ();
@@ -1479,7 +1551,7 @@ void D_DoomLoop ()
 					GC::CheckGC ();
 					Net_NewMakeTic ();
 				}
-				else
+				else if (!nativeWipeInProgress)
 				{
 					TryRunTics (); // will run at least one tic
 				}

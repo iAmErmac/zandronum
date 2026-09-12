@@ -28,11 +28,6 @@
 #include "config.h"
 #endif
 
-#ifdef __ANDROID__
-#include <android/log.h>
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"Gzdoom", __VA_ARGS__))
-#endif
-
 #ifdef _MSC_VER
 // VC++ does not define PATH_MAX, but the Windows headers do define MAX_PATH.
 // However, we want to avoid including the Windows headers in most of the

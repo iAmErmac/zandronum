@@ -956,7 +956,11 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 	// metadata. Keep the native upload dimensions in step with that contract.
 	const bool expand = tex->UseType == FTexture::TEX_Sprite ||
 		tex->UseType == FTexture::TEX_SkinSprite || tex->UseType == FTexture::TEX_Decal;
-	unsigned char *pixels = CreateTexBuffer(cm, translation, width, height, expand, allowhires);
+	if (tex->bHasCanvas)
+		return gl_AndroidNativeGLES_EnsureMaterialTexture(this, TextureWidth(GLUSE_TEXTURE),
+			TextureHeight(GLUSE_TEXTURE), repeat, cm, translation, allowhires);
+	const int nativeWarp = tex->bWarped && (mShaderIndex == 1 || mShaderIndex == 2) ? mShaderIndex : 0;
+	unsigned char *pixels = CreateTexBuffer(cm, translation, width, height, expand, allowhires, nativeWarp);
 	if (pixels == NULL || width <= 0 || height <= 0)
 	{
 		delete[] pixels;

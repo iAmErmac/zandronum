@@ -50,7 +50,7 @@ inline long long GetClockCycle ()
 }
 #endif
 
-#if defined (__APPLE__)
+#if defined (__APPLE__) || defined (__ANDROID__)
 
 typedef cycle_t glcycle_t;
 

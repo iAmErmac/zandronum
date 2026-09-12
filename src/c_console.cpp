@@ -1050,8 +1050,6 @@ void	SERVERCONSOLE_Print( char *pszString );
 
 
 #ifdef __ANDROID__
-#include <android/log.h>
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"Gzdoom", __VA_ARGS__))
 #include "LogWritter.h"
 #endif
 
@@ -1060,7 +1058,6 @@ int PrintString (int printlevel, const char *outline)
 {
 
 #ifdef __ANDROID__
-	LOGI("PrintString: %s",outline);
 	LogWritter_Write(outline);
 #endif
 

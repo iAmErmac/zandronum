@@ -179,8 +179,6 @@ static void Resize(int texwidth, int texheight, int width, int height, unsigned 
 
 static void GL_ResampleTexture (uint32_t *in, uint32_t inwidth, uint32_t inheight, uint32_t *out,  uint32_t outwidth, uint32_t outheight)
 {
-	//LOGI("GL_ResampleTexture %dx%d -> %dx%d",inwidth,inheight,outwidth,outheight);
-
 	int		i, j;
 	uint32_t	*inrow, *inrow2;
 	uint32_t	frac, fracstep;

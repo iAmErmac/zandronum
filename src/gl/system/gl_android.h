@@ -63,6 +63,7 @@ bool gl_AndroidNativeGLES_WipeStart(int type);
 void gl_AndroidNativeGLES_WipeEnd();
 bool gl_AndroidNativeGLES_WipeDo(int ticks);
 void gl_AndroidNativeGLES_WipeCleanup();
+bool gl_AndroidNativeGLES_IsWipeInProgress();
 void gl_AndroidNativeGLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	float cameraYaw, float cameraPitch, float cameraRoll, float fieldOfView, float aspect, float fovRatio);
 void gl_AndroidNativeGLES_ClearScene();
@@ -78,7 +79,8 @@ void gl_AndroidNativeGLES_AddWall(const float *positions, const float *texcoords
 	const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EAndroidNativeBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *lightData = 0, const unsigned int *lightCounts = 0,
-	unsigned int brightmap = 0, int brightmapDesaturation = 0);
+	unsigned int brightmap = 0, int brightmapDesaturation = 0, const float *topGlowColor = 0,
+	const float *bottomGlowColor = 0, const float *glowDistances = 0);
 void gl_AndroidNativeGLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EAndroidNativeBlendMode blendMode,
@@ -107,6 +109,11 @@ void gl_AndroidNativeGLES_AddScreenQuad(const float *color, float alpha,
 	EAndroidNativeBlendMode blendMode);
 unsigned int gl_AndroidNativeGLES_BindMaterial(const void *key, const unsigned char *pixels,
 	int width, int height, bool repeat, int colormap, int translation, bool allowhires);
+unsigned int gl_AndroidNativeGLES_EnsureMaterialTexture(const void *key, int width, int height,
+	bool repeat, int colormap, int translation, bool allowhires);
+void gl_AndroidNativeGLES_MarkMaterialFramebufferContent(const void *key, int colormap,
+	int translation, bool repeat, bool allowhires);
+bool gl_AndroidNativeGLES_EndSceneToTexture(unsigned int targetTexture, int width, int height);
 void gl_AndroidNativeGLES_ClearMaterialCache();
 void gl_AndroidNativeGLES_EndScene();
 bool gl_AndroidNativeGLES_WriteSavePic(FILE *file, int width, int height);
@@ -142,6 +149,7 @@ void gl_AndroidNativeGLES_DestroyFlatBufferObjects(unsigned int vbo, unsigned in
 void gl_AndroidNativeGLES_BindFlatBuffer(unsigned int vao, unsigned int vbo);
 #else
 inline bool gl_AndroidNativeGLES_IsActive() { return false; }
+inline bool gl_AndroidNativeGLES_IsWipeInProgress() { return false; }
 #endif
 
 #endif

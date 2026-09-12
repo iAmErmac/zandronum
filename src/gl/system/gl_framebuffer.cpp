@@ -99,6 +99,8 @@ OpenGLFrameBuffer::OpenGLFrameBuffer(void *hMonitor, int width, int height, int 
 	#ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
+		gl_SetupMenu();
+		gl_GenerateGlobalBrightmapFromColormap();
 		DoSetGamma();
 		needsetgamma = true;
 		swapped = false;
@@ -228,9 +230,12 @@ void OpenGLFrameBuffer::Update()
 	if (gl_AndroidNativeGLES_IsActive())
 	{
 		// Status-bar and message drawing appends to the native batch after the view.
+		DrawRateStuff();
 		gl_AndroidNativeGLES_EndScene();
 		Swap();
+		swapped = false;
 		Unlock();
+		CheckBench();
 		return;
 	}
 	#endif

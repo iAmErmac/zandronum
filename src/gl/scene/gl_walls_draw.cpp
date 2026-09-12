@@ -298,11 +298,19 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			(color2 == NULL && alpha < 0.999f) ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE;
 		if (RenderStyle == STYLE_Add) blendMode = ANDROID_BLEND_ADD;
 		else if (RenderStyle == STYLE_Subtract) blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+		const float glowDistances[8] =
+		{
+			zceil[0] - zbottom[0], zbottom[0] - zfloor[0],
+			zceil[0] - ztop[0], ztop[0] - zfloor[0],
+			zceil[1] - ztop[1], ztop[1] - zfloor[1],
+			zceil[1] - zbottom[1], zbottom[1] - zfloor[1]
+		};
 		gl_AndroidNativeGLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
 			texture, gltexture != NULL && gltexture->isMasked(), nativeFog, true, fogColor, fogDensity,
 			blendMode, 0, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
-			Colormap.colormap : 0);
+			Colormap.colormap : 0, glowing ? topglowcolor : NULL, glowing ? bottomglowcolor : NULL,
+			glowing ? glowDistances : NULL);
 		vertexcount += 4;
 		return;
 	}

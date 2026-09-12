@@ -1018,7 +1018,7 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 #ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
-		if (mainview && toscreen)
+		if ((mainview && toscreen) || (!mainview && !toscreen))
 		{
 			SetCameraPos(viewx, viewy, viewz, viewangle);
 			mCurrentFoV = fov;
@@ -1443,10 +1443,28 @@ extern TexFilter_s TexFilter[];
 
 void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, int FOV)
 {
+	if (tex == NULL) return;
 	FMaterial * gltex = FMaterial::ValidateTexture(tex);
+	if (gltex == NULL) return;
 
 	int width = gltex->TextureWidth(GLUSE_TEXTURE);
 	int height = gltex->TextureHeight(GLUSE_TEXTURE);
+
+#ifdef __ANDROID__
+	if (gl_AndroidNativeGLES_IsActive())
+	{
+		const unsigned int nativeTexture = gltex->BindNative(CM_DEFAULT, 0, false);
+		if (nativeTexture != 0 && width > 0 && height > 0)
+		{
+			GLRenderer->RenderViewpoint(Viewpoint, NULL, FOV, (float)width / height,
+				(float)width / height, false, false);
+			if (gl_AndroidNativeGLES_EndSceneToTexture(nativeTexture, width, height))
+				gl_AndroidNativeGLES_MarkMaterialFramebufferContent(gltex, CM_DEFAULT, 0, false, true);
+		}
+		tex->SetUpdated();
+		return;
+	}
+#endif
 
 	gl_fixedcolormap=CM_DEFAULT;
 
