@@ -13,7 +13,9 @@
 #include <windows.h>
 #include <mmsystem.h>
 #else
+#ifndef __ANDROID__
 #include <SDL.h>
+#endif
 #define FALSE 0
 #define TRUE 1
 #endif

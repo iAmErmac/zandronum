@@ -34,6 +34,8 @@
 #ifndef __TEMPFILES_H__
 #define __TEMPFILES_H__
 
+#include <stddef.h>
+
 #ifdef _MSC_VER
 #pragma once
 #endif

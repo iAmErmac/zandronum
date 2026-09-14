@@ -76,11 +76,11 @@ private:
 	int OutputRate;
 
 #if FMOD_STUDIO
-	static FMOD_RESULT F_CALLBACK ChannelCallback(FMOD_CHANNELCONTROL *channel, FMOD_CHANNELCONTROL_TYPE controltype, FMOD_CHANNELCONTROL_CALLBACK_TYPE type, void *data1, void *data2);
-	static float F_CALLBACK RolloffCallback(FMOD_CHANNELCONTROL *channel, float distance);
+	static FMOD_RESULT F_CALL ChannelCallback(FMOD_CHANNELCONTROL *channel, FMOD_CHANNELCONTROL_TYPE controltype, FMOD_CHANNELCONTROL_CALLBACK_TYPE type, void *data1, void *data2);
+	static float F_CALL RolloffCallback(FMOD_CHANNELCONTROL *channel, float distance);
 #else
-	static FMOD_RESULT F_CALLBACK ChannelCallback(FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *data1, void *data2);
-	static float F_CALLBACK RolloffCallback(FMOD_CHANNEL *channel, float distance);
+	static FMOD_RESULT F_CALL ChannelCallback(FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *data1, void *data2);
+	static float F_CALL RolloffCallback(FMOD_CHANNEL *channel, float distance);
 #endif
 
 	bool HandleChannelDelay(FMOD::Channel *chan, FISoundChannel *reuse_chan, int flags, float freq) const;

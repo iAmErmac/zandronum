@@ -124,7 +124,7 @@ inline T max( T a, T b) { return (((a)>(b)) ? (a) : (b)); }
 #define __cdecl
 #define _access(a,b)	access(a,b)
 #endif
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__ANDROID__)
 #include <SDL.h>
 #endif
 

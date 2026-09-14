@@ -56,14 +56,8 @@
 #include "i_soundinternal.h"
 #include "v_font.h"
 
-#ifndef NO_SOUND
-#define NO_SOUND
-#define ZANDRONUM_VOICECHAT_LOCAL_NO_SOUND
-#endif
-
-
 // [AK] Only include FMOD, Opus, and RNNoise files if compiling with sound.
-#ifndef NO_SOUND
+#if !defined(NO_SOUND) && !defined(ZANDRONUM_NO_VOICECHAT)
 #include "fmod_wrap.h"
 #include "opus.h"
 #include "rnnoise.h"
@@ -155,7 +149,7 @@ public:
 	static VOIPController &GetInstance( void ) { static VOIPController instance; return instance; }
 
 // [AK] Some of these functions only exist as stubs if compiling without sound.
-#ifdef NO_SOUND
+#if defined(NO_SOUND) || defined(ZANDRONUM_NO_VOICECHAT)
 
 	void Tick( void ) { }
 	void StartRecording( void ) { }
@@ -274,7 +268,11 @@ private:
 	bool IsUsingALSA( void ) const;
 
 	static FMOD_CREATESOUNDEXINFO CreateSoundExInfo( const unsigned int sampleRate, const unsigned int fileLength );
-	//static FMOD_RESULT F_CALLBACK ChannelCallback( FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *commanddata1, void *commanddata2 );
+#if FMOD_STUDIO
+	static FMOD_RESULT F_CALL ChannelCallback( FMOD_CHANNELCONTROL *channel, FMOD_CHANNELCONTROL_TYPE controltype, FMOD_CHANNELCONTROL_CALLBACK_TYPE type, void *commanddata1, void *commanddata2 );
+#else
+	static FMOD_RESULT F_CALL ChannelCallback( FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *commanddata1, void *commanddata2 );
+#endif
 
 	VOIPChannel *VoIPChannels[MAXPLAYERS];
 	float channelVolumes[MAXPLAYERS];
@@ -308,7 +306,7 @@ private:
 	// calculate the sound's volume based on distance.
 	FISoundChannel proximityInfo;
 
-#endif // NO_SOUND
+#endif // sound
 
 };
 
@@ -370,10 +368,5 @@ EXTERN_CVAR( Int, sv_allowvoicechat )
 EXTERN_CVAR( Bool, sv_proximityvoicechat )
 EXTERN_CVAR( Float, sv_minproximityrolloffdist )
 EXTERN_CVAR( Float, sv_maxproximityrolloffdist )
-
-#ifdef ZANDRONUM_VOICECHAT_LOCAL_NO_SOUND
-#undef ZANDRONUM_VOICECHAT_LOCAL_NO_SOUND
-#undef NO_SOUND
-#endif
 
 #endif // __VOICECHAT_H__

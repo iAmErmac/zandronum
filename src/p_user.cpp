@@ -4637,6 +4637,9 @@ bool P_IsSpectatorUnrestricted(const AActor *viewActor)
 // [AK] Resets the player's pitch limits anytime they need to be changed.
 void P_ResetPlayerPitchLimits(void)
 {
+	if (Renderer == NULL)
+		return;
+
 	const fixed_t maxPitch = ((NETWORK_GetState() != NETSTATE_SERVER) ? Renderer->GetMaxViewPitch(true) : 56) * ANGLE_1;
 	const fixed_t minPitch = -((NETWORK_GetState() != NETSTATE_SERVER) ? Renderer->GetMaxViewPitch(false) : 32) * ANGLE_1;
 

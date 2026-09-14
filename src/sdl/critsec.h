@@ -5,13 +5,29 @@
 #ifndef CRITSEC_H
 #define CRITSEC_H
 
+#ifdef __ANDROID__
+#include <mutex>
+#else
 #include "SDL.h"
 #include "SDL_thread.h"
 #include "i_system.h"
+#endif
 
 class FCriticalSection
 {
 public:
+	#ifdef __ANDROID__
+	void Enter()
+	{
+		CritSec.lock();
+	}
+	void Leave()
+	{
+		CritSec.unlock();
+	}
+	private:
+	std::mutex CritSec;
+	#else
 	FCriticalSection()
 	{
 		CritSec = SDL_CreateMutex();
@@ -43,6 +59,7 @@ public:
 	}
 private:
 	SDL_mutex *CritSec;
+	#endif
 };
 
 #endif

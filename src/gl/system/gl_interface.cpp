@@ -58,10 +58,10 @@ char myGlBeginCharArray[4] = {0,0,0,0};
 #define LPCSTR const char*
 
 #ifdef __ANDROID__
-#include <SDL.h>
+#include <EGL/egl.h>
 void * wglGetProcAddress(const char * name)
 {
-	return SDL_GL_GetProcAddress(name);
+	return reinterpret_cast<void *>(eglGetProcAddress(name));
 }
 #else
 #include <SDL.h>

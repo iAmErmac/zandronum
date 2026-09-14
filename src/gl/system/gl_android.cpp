@@ -27,6 +27,7 @@
 #include "m_random.h"
 #include "m_misc.h"
 #include "m_png.h"
+#include "../../../mobile/src/zandronum_android_host.h"
 
 extern TexFilter_s TexFilter[];
 EXTERN_CVAR(Float, skyoffset)
@@ -4471,9 +4472,11 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		return;
 	}
 
-	ResetState(width, height);
-	glViewport(0, 0, width, height);
-	glScissor(0, 0, width, height);
+	const int surfaceWidth = std::max(1, Zandronum_AndroidHost_GetWidth());
+	const int surfaceHeight = std::max(1, Zandronum_AndroidHost_GetHeight());
+	ResetState(surfaceWidth, surfaceHeight);
+	glViewport(0, 0, surfaceWidth, surfaceHeight);
+	glScissor(0, 0, surfaceWidth, surfaceHeight);
 	glDisable(GL_SCISSOR_TEST);
 	glDisable(GL_DEPTH_TEST);
 	glEnable(GL_BLEND);

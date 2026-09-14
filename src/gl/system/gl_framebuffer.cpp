@@ -275,14 +275,14 @@ void OpenGLFrameBuffer::Update()
 //==========================================================================
 #include "gl/renderer/gl_renderstate.h"
 #ifdef __ANDROID__
-#include "../../../mobile/src/zandronum_android_lifecycle.h"
+#include "../../../mobile/src/zandronum_android_host.h"
 #endif
 void OpenGLFrameBuffer::Swap()
 {
 	#ifdef __ANDROID__
 	if (gl_AndroidNativeGLES_IsActive())
 	{
-		Zandronum_Android_ProcessSurfaceState(GetWidth(), GetHeight());
+		Zandronum_AndroidHost_ProcessSurfaceState();
 		gl_AndroidNativeGLES_RenderBootstrap(GetWidth(), GetHeight());
 		SwapBuffers();
 		swapped = true;

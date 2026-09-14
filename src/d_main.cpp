@@ -74,6 +74,7 @@
 #include "i_system.h"
 #ifdef __ANDROID__
 #include "gl/system/gl_android.h"
+#include "zandronum_android_host.h"
 #endif
 #include "i_sound.h"
 #include "i_video.h"
@@ -1021,14 +1022,20 @@ void D_Display ()
 		{
 			WI_Drawer();
 			CHAT_Render();
+			C_DrawConsole(false);
+			M_Drawer();
 		}
 		else if (gamestate == GS_FINALE)
 		{
 			F_Drawer();
+			C_DrawConsole(false);
+			M_Drawer();
 		}
 		else if (gamestate == GS_DEMOSCREEN)
 		{
 			D_PageDrawer();
+			C_DrawConsole(false);
+			M_Drawer();
 		}
 		else
 		{
@@ -1479,6 +1486,10 @@ void D_DoomLoop ()
 
 	for (;;)
 	{
+#ifdef __ANDROID__
+		if (Zandronum_AndroidHost_IsStopping())
+			return;
+#endif
 		const bool nativeWipeInProgress = gl_AndroidNativeGLES_IsActive() &&
 			gl_AndroidNativeGLES_IsWipeInProgress();
 		try
@@ -3394,14 +3405,22 @@ void D_DoomMain (void)
 				{
 					singledemo = true;				// quit after one demo
 					G_DeferedPlayDemo (v);
-					D_DoomLoop ();	// never returns
+					D_DoomLoop ();
+					#ifdef __ANDROID__
+					if (Zandronum_AndroidHost_IsStopping())
+						return;
+					#endif
 				}
 
 				v = Args->CheckValue ("-timedemo");
 				if (v)
 				{
 					G_TimeDemo (v);
-					D_DoomLoop ();	// never returns
+					D_DoomLoop ();
+					#ifdef __ANDROID__
+					if (Zandronum_AndroidHost_IsStopping())
+						return;
+					#endif
 				}
 
 			}
@@ -3508,7 +3527,11 @@ void D_DoomMain (void)
 
 		try
 		{
-			D_DoomLoop ();		// never returns
+			D_DoomLoop ();
+			#ifdef __ANDROID__
+			if (Zandronum_AndroidHost_IsStopping())
+				return;
+			#endif
 		}
 		catch (CRestartException &)
 		{

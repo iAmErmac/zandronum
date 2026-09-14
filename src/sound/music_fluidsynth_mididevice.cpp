@@ -93,7 +93,7 @@
 // PUBLIC DATA DEFINITIONS -------------------------------------------------
 
 #ifdef __ANDROID__
-CVAR(String, fluid_patchset, "./audiopack/snd_fluidsynth/fluidsynth.sf2", 0)
+CVAR(String, fluid_patchset, "/sdcard/zandronum/soundfonts/uzdoom.sf2", 0)
 #else
 CVAR(String, fluid_patchset, "", CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 #endif
@@ -108,21 +108,13 @@ CUSTOM_CVAR(Float, fluid_gain, 0.5, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 		currSong->FluidSettingNum("synth.gain", self);
 }
 
-#ifdef __ANDROID__ // Default off, sounds shit
-CUSTOM_CVAR(Bool, fluid_reverb, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-#else
 CUSTOM_CVAR(Bool, fluid_reverb, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-#endif
 {
 	if (currSong != NULL)
 		currSong->FluidSettingInt("synth.reverb.active", self);
 }
 
-#ifdef __ANDROID__ // Default off, sounds shit
-CUSTOM_CVAR(Bool, fluid_chorus, false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-#else
 CUSTOM_CVAR(Bool, fluid_chorus, true, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
-#endif
 {
 	if (currSong != NULL)
 		currSong->FluidSettingInt("synth.chorus.active", self);

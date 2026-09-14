@@ -1255,7 +1255,7 @@ add_executable( zdoom WIN32
 	za_misc.cpp #ZA
 	zstrformat.cpp
 	zstring.cpp
-	# [BL] Huffman is ZAN
+	# [BL] Huffman is Zandronum
 	huffman/bitreader.cpp
 	huffman/bitwriter.cpp
 	huffman/huffcodec.cpp
@@ -1458,7 +1458,7 @@ include_directories( .
 	g_raven
 	g_strife
 	g_shared
-	huffman #ZAN
+	huffman #Zandronum
 	Linux
 	oplsynth
 	sound

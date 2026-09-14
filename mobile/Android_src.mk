@@ -6,13 +6,12 @@ include $(CLEAR_VARS)
 LOCAL_MODULE    := main
 
 
-LOCAL_CFLAGS   :=  -D__MOBILE__ -DNO_SERVER_GUI -DNO_SOUND -DSDL2_COMPAT -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
+LOCAL_CFLAGS   :=  -D__MOBILE__ -DNO_SERVER_GUI -DFMOD_STUDIO=1 -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
 LOCAL_CPPFLAGS := -DNOASM -DDISABLE_SSE -DHAVE_FLUIDSYNTH -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DUSE_GLES -Wno-format-security -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
 #-std=gnu++1y -DHAVE_FLUIDSYNTH
 
 LOCAL_C_INCLUDES := \
  $(TOP_DIR)/ \
- $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/fluidsynth-lite/include \
  $(GZDOOM_TOP_PATH)/src/  \
  $(GZDOOM_TOP_PATH)/mobile/src/extrafiles  \
  $(GZDOOM_TOP_PATH)/mobile/src/sqlite \
@@ -21,11 +20,11 @@ LOCAL_C_INCLUDES := \
  $(GZDOOM_TOP_PATH)/lzma/C \
  $(GZDOOM_TOP_PATH)/bzip2 \
  $(GZDOOM_TOP_PATH)/src/ \
+ $(GZDOOM_TOP_PATH)/mobile/src \
  $(GZDOOM_TOP_PATH)/src/sound \
  $(GZDOOM_TOP_PATH)/src/textures \
  $(GZDOOM_TOP_PATH)/src/thingdef \
  $(GZDOOM_TOP_PATH)/src/posix \
- $(GZDOOM_TOP_PATH)/src/posix/sdl \
  $(GZDOOM_TOP_PATH)/src/g_doom \
  $(GZDOOM_TOP_PATH)/src/g_heretic \
  $(GZDOOM_TOP_PATH)/src/g_hexen \
@@ -35,15 +34,14 @@ LOCAL_C_INCLUDES := \
  $(GZDOOM_TOP_PATH)/src/huffman \
  $(GZDOOM_TOP_PATH)/src/sdl \
  $(GZDOOM_TOP_PATH)/rnnoise \
- $(SDL_INCLUDE_PATHS) \
- $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/openal/include/AL \
- $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/timidity/opus/include \
- $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/libsndfile-android/jni/ \
- $(TOP_DIR)/legacy-mobile/doom/src/main/jni/AudioLibs_OpenTouch/libmpg123 \
- $(TOP_DIR)/legacy-mobile/doom/src/main/jni/jpeg8d \
+ $(TOP_DIR)/AudioLibs_OpenTouch/fluidsynth-lite/include \
+ $(TOP_DIR)/AudioLibs_OpenTouch/timidity/opus/include \
+ $(TOP_DIR)/AudioLibs_OpenTouch/libsndfile-android/jni/ \
+ $(TOP_DIR)/AudioLibs_OpenTouch/libmpg123 \
+ $(TOP_DIR)/Clibs_OpenTouch/jpeg8d \
+ $(FMOD_ANDROID_CORE)/inc \
  $(TOP_DIR)/Clibs_OpenTouch \
- $(TOP_DIR)/openssl/openssl-1.1.1k-clang/include \
- $(GZDOOM_TOP_PATH)/mobile/src
+ $(TOP_DIR)/openssl/openssl-1.1.1k-clang/include
 
 
 #############################################################################
@@ -57,21 +55,18 @@ ANDROID_SRC_FILES = \
     ../src/gl/system/gl_gles_targets.cpp \
     ../src/gl/system/gl_android.cpp \
     ../mobile/src/zandronum_android_input.cpp \
-    ../mobile/src/zandronum_sdl_main.cpp \
+    ../mobile/src/zandronum_android_host.cpp \
+    ../mobile/src/zandronum_android_main.cpp \
+    ../mobile/src/zandronum_android_hardware.cpp \
+    ../mobile/src/zandronum_android_video.cpp \
+    ../mobile/src/zandronum_android_system.cpp \
+    ../mobile/src/zandronum_android_input_platform.cpp \
     ../GeoIP/GeoIP.c
 
-PLAT_SDL_SOURCES = \
-	sdl/crashcatcher.c \
-	sdl/hardware.cpp \
-	sdl/i_cd.cpp \
-	sdl/i_input_sdl2.cpp \
-	sdl/i_joystick.cpp \
-	sdl/i_main.cpp \
-	sdl/i_movie.cpp \
-	sdl/i_system.cpp \
-	sdl/sdlvideo.cpp \
-	sdl/sdlglvideo.cpp \
-	sdl/st_start.cpp
+PLAT_ANDROID_SOURCES = \
+	../mobile/src/android_cd.cpp \
+	../mobile/src/android_movie.cpp \
+	../mobile/src/android_startup.cpp
 
 
 GL_SOURCES = \
@@ -416,6 +411,7 @@ GAME_ALL = \
 	sfmt/SFMT.cpp \
 	sound/i_music.cpp \
 	sound/i_sound.cpp \
+	sound/fmodsound_studio.cpp \
 	sound/music_cd.cpp \
 	sound/music_dumb.cpp \
 	sound/music_gme.cpp \
@@ -489,14 +485,14 @@ LOCAL_SRC_FILES = \
     $(GL_SOURCES) \
     $(GAME_ALL) \
     $(ANDROID_SRC_FILES) \
-    $(PLAT_SDL_SOURCES) \
+    $(PLAT_ANDROID_SOURCES) \
 
 
-LOCAL_LDLIBS := -llog -lOpenSLES -lGLESv2 -lGLESv3
+LOCAL_LDLIBS := -llog -landroid -lOpenSLES -lGLESv2 -lGLESv3
 LOCAL_LDLIBS +=  -lEGL
 
-LOCAL_STATIC_LIBRARIES := sndfile mpg123 fluidsynth-static libjpeg zlib_zan31 lzma_zan31 gdtoa_zan31 dumb_zan31 gme_zan31 bzip2_zan31 logwritter opus opencrypto_static
-LOCAL_SHARED_LIBRARIES := openal SDL
+LOCAL_STATIC_LIBRARIES := sndfile mpg123 fluidsynth-static libjpeg zlib_zan31 lzma_zan31 gdtoa_zan31 dumb_zan31 gme_zan31 bzip2_zan31 logwritter opus silk celt rnnoise opencrypto_static
+LOCAL_SHARED_LIBRARIES := fmod_android
 
 #Strip unused functions/data
 LOCAL_CFLAGS += -fvisibility=hidden

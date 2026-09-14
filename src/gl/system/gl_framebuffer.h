@@ -15,6 +15,11 @@ class OpenGLFrameBuffer : public Win32GLFrameBuffer
 {
 	typedef Win32GLFrameBuffer Super;
 	DECLARE_CLASS(OpenGLFrameBuffer, Win32GLFrameBuffer)
+#elif defined(__ANDROID__)
+#include "../../../mobile/src/zandronum_android_video.h"
+class OpenGLFrameBuffer : public AndroidGLFB
+{
+	DECLARE_CLASS(OpenGLFrameBuffer, AndroidGLFB)
 #else
 #include "sdlglvideo.h"
 class OpenGLFrameBuffer : public SDLGLFB

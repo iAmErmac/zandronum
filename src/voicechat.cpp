@@ -59,7 +59,7 @@
 #include "team.h"
 #include "chat.h"
 
-#ifndef NO_SOUND
+#if !defined(NO_SOUND) && !defined(ZANDRONUM_NO_VOICECHAT)
 #include "fmod_errors.h"
 #endif
 
@@ -271,7 +271,7 @@ CCMD( voice_unignore_idx )
 }
 
 // [AK] Everything past this point only compiles if compiling with sound.
-#ifndef NO_SOUND
+#if !defined(NO_SOUND) && !defined(ZANDRONUM_NO_VOICECHAT)
 
 static void voicechat_SetChannelVolume( FCommandLine &argv, const bool isIndexCmd )
 {
@@ -961,7 +961,11 @@ void VOIPController::StartRecording( void )
 	}
 
 	int numRecordDrivers = 0;
+#if FMOD_STUDIO
+	FMOD_RESULT fmodErrorCode = system->getRecordNumDrivers( &numRecordDrivers, nullptr );
+#else
 	FMOD_RESULT fmodErrorCode = system->getRecordNumDrivers( &numRecordDrivers );
+#endif
 
 	// [AK] Try to start recording from the selected record driver.
 	if ( fmodErrorCode == FMOD_OK )
@@ -1357,11 +1361,19 @@ void VOIPController::RetrieveRecordDrivers( TArray<FString> &list ) const
 	list.Clear( );
 
 	// [AK] Don't retrieve any record drivers while using ALSA.
+#if FMOD_STUDIO
+	if (( system != nullptr ) && ( system->getRecordNumDrivers( &numDrivers, nullptr ) == FMOD_OK ) && ( IsUsingALSA( ) == false ))
+#else
 	if (( system != nullptr ) && ( system->getRecordNumDrivers( &numDrivers ) == FMOD_OK ) && ( IsUsingALSA( ) == false ))
+#endif
 	{
 		for ( int i = 0; i < numDrivers; i++ )
 		{
+#if FMOD_STUDIO
+			if ( system->getRecordDriverInfo( i, name, sizeof( name ), nullptr, nullptr, nullptr, nullptr, nullptr ) == FMOD_OK )
+#else
 			if ( system->getRecordDriverInfo( i, name, sizeof( name ), nullptr ) == FMOD_OK )
+#endif
 				list.Push( name );
 		}
 	}
@@ -1625,9 +1637,17 @@ FMOD_CREATESOUNDEXINFO VOIPController::CreateSoundExInfo( const unsigned int sam
 //
 //*****************************************************************************
 
-FMOD_RESULT F_CALLBACK VOIPController::ChannelCallback( FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *commanddata1, void *commanddata2 )
+#if FMOD_STUDIO
+FMOD_RESULT F_CALL VOIPController::ChannelCallback( FMOD_CHANNELCONTROL *channel, FMOD_CHANNELCONTROL_TYPE controltype, FMOD_CHANNELCONTROL_CALLBACK_TYPE type, void *commanddata1, void *commanddata2 )
+#else
+FMOD_RESULT F_CALL VOIPController::ChannelCallback( FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void *commanddata1, void *commanddata2 )
+#endif
 {
+#if FMOD_STUDIO
+	if ( controltype == FMOD_CHANNELCONTROL_CHANNEL && type == FMOD_CHANNELCONTROL_CALLBACK_END )
+#else
 	if ( type == FMOD_CHANNEL_CALLBACKTYPE_END )
+#endif
 	{
 		FMOD::Channel *castedChannel = reinterpret_cast<FMOD::Channel *>( channel );
 
@@ -1817,7 +1837,11 @@ void VOIPController::VOIPChannel::StartPlaying( void )
 	if ( channel != nullptr )
 		return;
 
+#if FMOD_STUDIO
+	const FMOD_RESULT fmodErrorCode = VOIPController::GetInstance( ).system->playSound( sound, nullptr, true, &channel );
+#else
 	const FMOD_RESULT fmodErrorCode = VOIPController::GetInstance( ).system->playSound( FMOD_CHANNEL_FREE, sound, true, &channel );
+#endif
 
 	if ( fmodErrorCode != FMOD_OK )
 	{
@@ -2029,7 +2053,14 @@ void VOIPController::VOIPChannel::UpdateEndDelay( const bool resetEpoch )
 	// the new base which we subtract the number of read samples by.
 	if ( resetEpoch )
 	{
+	#if FMOD_STUDIO
+		unsigned long long dspClock = 0;
+		channel->getDSPClock( &dspClock, nullptr );
+		dspEpochHi = static_cast<unsigned int>( dspClock >> 32 );
+		dspEpochLo = static_cast<unsigned int>( dspClock );
+	#else
 		VOIPController::GetInstance( ).system->getDSPClock( &dspEpochHi, &dspEpochLo );
+	#endif
 		UpdatePlayback( );
 
 		endDelaySamples = samplesPlayed;
@@ -2039,7 +2070,11 @@ void VOIPController::VOIPChannel::UpdateEndDelay( const bool resetEpoch )
 	// less than or equal to the "end delay" samples.
 	if ( samplesRead <= endDelaySamples )
 	{
+	#if FMOD_STUDIO
+		channel->setDelay( 0, ( static_cast<unsigned long long>( dspEpochHi ) << 32 ) | dspEpochLo );
+	#else
 		channel->setDelay( FMOD_DELAYTYPE_DSPCLOCK_END, dspEpochHi, dspEpochLo );
+	#endif
 		return;
 	}
 
@@ -2051,7 +2086,11 @@ void VOIPController::VOIPChannel::UpdateEndDelay( const bool resetEpoch )
 	// [AK] It's important to consider that the system and channel might not
 	// be playing at the same sample rates. Therefore, we must convert the
 	// number of samples with respect to the system's sample rate.
+	#if FMOD_STUDIO
+	VOIPController::GetInstance( ).system->getSoftwareFormat( &sysSampleRate, nullptr, nullptr );
+	#else
 	VOIPController::GetInstance( ).system->getSoftwareFormat( &sysSampleRate, nullptr, nullptr, nullptr, nullptr, nullptr );
+	#endif
 	float scalar = static_cast<float>( sysSampleRate ) / PLAYBACK_SAMPLE_RATE;
 
 	// [AK] The channel's pitch might've changed (e.g. listening underwater).
@@ -2065,11 +2104,17 @@ void VOIPController::VOIPChannel::UpdateEndDelay( const bool resetEpoch )
 		scalar /= channelGroupPitch;
 	}
 
+	#if FMOD_STUDIO
+		unsigned long long newDSPClock = ( static_cast<unsigned long long>( dspEpochHi ) << 32 ) | dspEpochLo;
+		newDSPClock += static_cast<unsigned long long>( ( samplesRead - endDelaySamples ) * scalar );
+		channel->setDelay( 0, newDSPClock );
+	#else
 	FMOD_64BIT_ADD( newDSPHi, newDSPLo, 0, static_cast<unsigned int>(( samplesRead - endDelaySamples ) * scalar ));
 	channel->setDelay( FMOD_DELAYTYPE_DSPCLOCK_END, newDSPHi, newDSPLo );
+	#endif
 }
 
-#endif // NO_SOUND
+#endif // sound
 
 //*****************************************************************************
 //
@@ -2430,7 +2475,7 @@ bool FOptionMenuMicTestBar::Selectable( void )
 //*****************************************************************************
 //	STATISTICS
 
-#ifndef NO_SOUND
+#if !defined(NO_SOUND) && !defined(ZANDRONUM_NO_VOICECHAT)
 
 ADD_STAT( voice )
 {

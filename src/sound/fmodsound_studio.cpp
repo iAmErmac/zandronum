@@ -55,6 +55,7 @@ extern HWND Window;
 //#include "except.h"
 #include "templates.h"
 #include "fmodsound_studio.h"
+#include "c_console.h"
 #include "c_cvars.h"
 #include "i_system.h"
 #include "i_music.h"
@@ -64,6 +65,9 @@ extern HWND Window;
 #include "cmdlib.h"
 #include "s_sound.h"
 #include "files.h"
+#ifdef __ANDROID__
+#include "fmod_errors.h"
+#endif
 
 #if FMOD_VERSION > 0x42899 && FMOD_VERSION < 0x43400
 #error You are trying to compile with an unsupported version of FMOD.
@@ -333,23 +337,23 @@ static const char *Enum_NameForNum(const FEnumList *list, int num)
 class FMODStreamCapsule : public SoundStream
 {
 public:
-	FMODStreamCapsule(FMOD::Sound *stream, FMODSoundRenderer *owner, const char *url)
+	FMODStreamCapsule(FMOD::Sound *stream, FMODSoundRenderer *owner, const char *url, BYTE *memory = NULL)
 		: Owner(owner), Stream(NULL), Channel(NULL),
-		  UserData(NULL), Callback(NULL), Reader(NULL), URL(url), Ended(false)
+		  UserData(NULL), Callback(NULL), Reader(NULL), URL(url), Memory(memory), Ended(false)
 	{
 		SetStream(stream);
 	}
 
     FMODStreamCapsule(FMOD::Sound *stream, FMODSoundRenderer *owner, FileReader *reader)
-        : Owner(owner), Stream(NULL), Channel(NULL),
-          UserData(NULL), Callback(NULL), Reader(reader), Ended(false)
+		: Owner(owner), Stream(NULL), Channel(NULL),
+		  UserData(NULL), Callback(NULL), Reader(reader), Memory(NULL), Ended(false)
     {
         SetStream(stream);
     }
 
 	FMODStreamCapsule(void *udata, SoundStreamCallback callback, FMODSoundRenderer *owner)
 		: Owner(owner), Stream(NULL), Channel(NULL),
-		  UserData(udata), Callback(callback), Reader(NULL), Ended(false)
+		  UserData(udata), Callback(callback), Reader(NULL), Memory(NULL), Ended(false)
 	{}
 
 	~FMODStreamCapsule()
@@ -366,6 +370,7 @@ public:
 		{
 			delete Reader;
 		}
+		delete[] Memory;
 	}
 
 	void SetStream(FMOD::Sound *stream)
@@ -400,6 +405,9 @@ public:
 #endif
 		if (result != FMOD_OK)
 		{
+		#ifdef __ANDROID__
+			DPrintf("FMOD stream playback failed: %s.\n", FMOD_ErrorString(result));
+		#endif
 			return false;
 		}
 		Channel->setChannelGroup(Owner->MusicGroup);
@@ -617,7 +625,7 @@ public:
 		return stats;
 	}
 
-	static FMOD_RESULT F_CALLBACK PCMReadCallback(FMOD_SOUND *sound, void *data, unsigned int datalen)
+	static FMOD_RESULT F_CALL PCMReadCallback(FMOD_SOUND *sound, void *data, unsigned int datalen)
 	{
 		FMOD_RESULT result;
 		FMODStreamCapsule *self;
@@ -635,7 +643,7 @@ public:
 		return FMOD_OK;
 	}
 
-	static FMOD_RESULT F_CALLBACK PCMSetPosCallback(FMOD_SOUND *sound, int subsound, unsigned int position, FMOD_TIMEUNIT postype)
+	static FMOD_RESULT F_CALL PCMSetPosCallback(FMOD_SOUND *sound, int subsound, unsigned int position, FMOD_TIMEUNIT postype)
 	{
 		// This is useful if the user calls Channel::setPosition and you want
 		// to seek your data accordingly.
@@ -648,8 +656,9 @@ private:
 	FMOD::Channel *Channel;
 	void *UserData;
 	SoundStreamCallback Callback;
-    FileReader *Reader;
+	FileReader *Reader;
 	FString URL;
+	BYTE *Memory;
 	bool Ended;
 	bool JustStarted;
 	bool Starved;
@@ -728,11 +737,11 @@ bool FMODSoundRenderer::Init()
 	}
 
 	// Create a System object and initialize.
+	Sys = NULL;
 	result = FMOD::System_Create(&Sys);
 	if (result != FMOD_OK)
 	{
-		Sys = NULL;
-		Printf(TEXTCOLOR_ORANGE"Failed to create FMOD system object: Error %d\n", result);
+		Printf(TEXTCOLOR_ORANGE"Failed to create FMOD system object: %s\n", FMOD_ErrorString(result));
 		return false;
 	}
 
@@ -848,7 +857,7 @@ bool FMODSoundRenderer::Init()
 	}
 
 #ifdef __ANDROID__
-    result = Sys->setOutput(FMOD_OUTPUTTYPE_OPENSL);
+	result = Sys->setOutput(FMOD_OUTPUTTYPE_AUDIOTRACK);
 #endif
 
 	result = Sys->getNumDrivers(&driver);
@@ -1040,8 +1049,6 @@ bool FMODSoundRenderer::Init()
 	for (;;)
 	{
 		result = Sys->init(MAX(*snd_channels, MAX_CHANNELS), initflags, 0);
-		//result = Sys->init(128, FMOD_INIT_NORMAL, 0);
-		Printf(TEXTCOLOR_RED"  Sys->init returned %d\n",result);
 		if (result == FMOD_ERR_OUTPUT_CREATEBUFFER)
 		{ 
 			// Possible causes of a buffer creation failure:
@@ -1754,9 +1761,9 @@ static void SetCustomLoopPts(FMOD::Sound *sound)
 //==========================================================================
 
 #if FMOD_STUDIO
-static FMOD_RESULT F_CALLBACK open_reader_callback(const char *name, unsigned int *filesize, void **handle, void *userdata)
+static FMOD_RESULT F_CALL open_reader_callback(const char *name, unsigned int *filesize, void **handle, void *userdata)
 #else
-static FMOD_RESULT F_CALLBACK open_reader_callback(const char *name, int unicode, unsigned int *filesize, void **handle, void **userdata)
+static FMOD_RESULT F_CALL open_reader_callback(const char *name, int unicode, unsigned int *filesize, void **handle, void **userdata)
 #endif
 {
     FileReader *reader = NULL;
@@ -1774,12 +1781,12 @@ static FMOD_RESULT F_CALLBACK open_reader_callback(const char *name, int unicode
     return FMOD_OK;
 }
 
-static FMOD_RESULT F_CALLBACK close_reader_callback(void *handle, void *userdata)
+static FMOD_RESULT F_CALL close_reader_callback(void *handle, void *userdata)
 {
     return FMOD_OK;
 }
 
-static FMOD_RESULT F_CALLBACK read_reader_callback(void *handle, void *buffer, unsigned int sizebytes, unsigned int *bytesread, void *userdata)
+static FMOD_RESULT F_CALL read_reader_callback(void *handle, void *buffer, unsigned int sizebytes, unsigned int *bytesread, void *userdata)
 {
     FileReader *reader = reinterpret_cast<FileReader*>(handle);
     *bytesread = reader->Read(buffer, sizebytes);
@@ -1787,7 +1794,7 @@ static FMOD_RESULT F_CALLBACK read_reader_callback(void *handle, void *buffer, u
     return FMOD_ERR_FILE_EOF;
 }
 
-static FMOD_RESULT F_CALLBACK seek_reader_callback(void *handle, unsigned int pos, void *userdata)
+static FMOD_RESULT F_CALL seek_reader_callback(void *handle, unsigned int pos, void *userdata)
 {
     FileReader *reader = reinterpret_cast<FileReader*>(handle);
     if(reader->Seek(pos, SEEK_SET) == 0)
@@ -1811,6 +1818,7 @@ SoundStream *FMODSoundRenderer::OpenStream(const char *filename_or_data, int fla
 	FMOD::Sound *stream;
 	FMOD_RESULT result;
 	bool url;
+	BYTE *memory = NULL;
 	FString patches;
 
 	InitCreateSoundExInfo(&exinfo);
@@ -1823,6 +1831,11 @@ SoundStream *FMODSoundRenderer::OpenStream(const char *filename_or_data, int fla
 	{
 		mode |= FMOD_OPENMEMORY;
 		offset = 0;
+		if (length <= 0)
+			return NULL;
+		memory = new BYTE[length];
+		memcpy(memory, filename_or_data, length);
+		filename_or_data = reinterpret_cast<const char *>(memory);
 	}
 	exinfo.length = length;
 	exinfo.fileoffset = offset;
@@ -1872,8 +1885,12 @@ SoundStream *FMODSoundRenderer::OpenStream(const char *filename_or_data, int fla
 	if (result == FMOD_OK)
 	{
 		SetCustomLoopPts(stream);
-		return new FMODStreamCapsule(stream, this, url ? filename_or_data : NULL);
+		return new FMODStreamCapsule(stream, this, url ? filename_or_data : NULL, memory);
 	}
+	#ifdef __ANDROID__
+	DPrintf("FMOD stream creation failed: %s.\n", FMOD_ErrorString(result));
+	#endif
+	delete[] memory;
 	return NULL;
 }
 //==========================================================================
@@ -2893,7 +2910,7 @@ unsigned int FMODSoundRenderer::GetSampleLength(SoundHandle sfx)
 //
 //==========================================================================
 
-FMOD_RESULT F_CALLBACK FMODSoundRenderer::ChannelCallback
+FMOD_RESULT F_CALL FMODSoundRenderer::ChannelCallback
 #if FMOD_STUDIO
 	(FMOD_CHANNELCONTROL *channel, FMOD_CHANNELCONTROL_TYPE controltype, FMOD_CHANNELCONTROL_CALLBACK_TYPE type, void *data1, void *data2)
 #else
@@ -2939,9 +2956,9 @@ FMOD_RESULT F_CALLBACK FMODSoundRenderer::ChannelCallback
 //==========================================================================
 
 #if FMOD_STUDIO
-float F_CALLBACK FMODSoundRenderer::RolloffCallback(FMOD_CHANNELCONTROL *channel, float distance)
+float F_CALL FMODSoundRenderer::RolloffCallback(FMOD_CHANNELCONTROL *channel, float distance)
 #else
-float F_CALLBACK FMODSoundRenderer::RolloffCallback(FMOD_CHANNEL *channel, float distance)
+float F_CALL FMODSoundRenderer::RolloffCallback(FMOD_CHANNEL *channel, float distance)
 #endif
 {
 #if FMOD_STUDIO
