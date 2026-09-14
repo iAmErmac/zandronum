@@ -23,6 +23,8 @@
 #include "gl/textures/gl_material.h"
 #include "gl/textures/gl_skyboxtexture.h"
 #include "gl/system/gl_cvars.h"
+#include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_shader.h"
 #include "f_wipe.h"
 #include "m_random.h"
 #include "m_misc.h"
@@ -237,6 +239,7 @@ namespace
 		int textureFilter;
 		FGLESTargetDescriptor sceneTarget;
 		FGLESTargetDescriptor cameraTarget;
+		FGLESViewDescriptor viewContract;
 		FAndroidNativeWipe wipe;
 		GLint sceneTextureUniform;
 		GLint sceneBrightmapUniform;
@@ -487,16 +490,6 @@ namespace
 	CVAR(Bool, gl_android_test_pattern, false, CVAR_DEBUGONLY)
 	CVAR(Bool, gl_android_shader_test_failure, false, CVAR_DEBUGONLY)
 
-	static bool HasExtension(const char *name)
-	{
-		for (GLint index = 0; index < Capabilities.extensionCount; ++index)
-		{
-			const char *extension = reinterpret_cast<const char *>(glGetStringi(GL_EXTENSIONS, index));
-			if (extension != NULL && strcmp(extension, name) == 0) return true;
-		}
-		return false;
-	}
-
 	static bool IsPaletteTexture(GLuint texture)
 	{
 		if (texture == 0) return false;
@@ -515,10 +508,7 @@ namespace
 
 	static GLenum CheckError(const char *site)
 	{
-		GLenum error = glGetError();
-		if (error != GL_NO_ERROR)
-			Printf("Android GLES error at %s: 0x%04x.\n", site, error);
-		return error;
+		return gl_GLES_CheckErrors(site);
 	}
 
 	static float ClampUnit(float value)
@@ -526,47 +516,13 @@ namespace
 		return value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value);
 	}
 
-	static GLuint CompileShader(GLenum type, const char *source, const char *label, const char *defines)
-	{
-		GLuint shader = glCreateShader(type);
-		glShaderSource(shader, 1, &source, NULL);
-		glCompileShader(shader);
-		GLint compiled = GL_FALSE;
-		glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-		if (!compiled)
-		{
-			char log[1024] = {};
-			GLsizei length = 0;
-			glGetShaderInfoLog(shader, sizeof(log) - 1, &length, log);
-			Printf("Android GLES %s shader defines:\n%s\nsource:\n%s\n", label, defines, source);
-			I_FatalError("Android GLES %s shader failed: %s", label, log);
-		}
-		return shader;
-	}
-
 	static GLuint LinkProgram(const char *vertexSource, const char *fragmentSource, const char *label,
 		const char *defines = "")
 	{
-		GLuint vertex = CompileShader(GL_VERTEX_SHADER, vertexSource, label, defines);
-		GLuint fragment = CompileShader(GL_FRAGMENT_SHADER, fragmentSource, label, defines);
-		GLuint program = glCreateProgram();
-		glAttachShader(program, vertex);
-		glAttachShader(program, fragment);
-		glBindAttribLocation(program, 0, "a_position");
-		glBindAttribLocation(program, 1, "a_uv");
-		glBindAttribLocation(program, 2, "a_color");
-		glBindAttribLocation(program, 3, "a_normal");
-		glBindAttribLocation(program, 4, "a_secondary");
-		glLinkProgram(program);
-		GLint linked = GL_FALSE;
-		glGetProgramiv(program, GL_LINK_STATUS, &linked);
-		glDeleteShader(vertex);
-		glDeleteShader(fragment);
-		if (!linked)
+		char log[1024] = {};
+		GLuint program = gl_GLES_LinkProgram(vertexSource, fragmentSource, label, log, sizeof(log));
+		if (program == 0)
 		{
-			char log[1024] = {};
-			GLsizei length = 0;
-			glGetProgramInfoLog(program, sizeof(log) - 1, &length, log);
 			Printf("Android GLES %s defines:\n%s\nvertex source:\n%s\nfragment source:\n%s\n",
 				label, defines, vertexSource, fragmentSource);
 			I_FatalError("Android GLES %s program failed: %s", label, log);
@@ -623,6 +579,7 @@ namespace
 		Resources.textureFilter = -1;
 		Resources.sceneTarget = {};
 		Resources.cameraTarget = {};
+		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
 		NativeOffscreenRender = false;
 		ResetNativeGlowLocations();
@@ -780,6 +737,7 @@ namespace
 		Resources.checkerTexture = 0;
 		Resources.sceneTarget = {};
 		Resources.cameraTarget = {};
+		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
 		NativeOffscreenRender = false;
 		ResetNativeGlowLocations();
@@ -1021,6 +979,7 @@ namespace
 			}
 			return false;
 		}
+		Resources.sceneTarget.hostOwnsPresentation = true;
 		return true;
 	}
 
@@ -1330,6 +1289,30 @@ namespace
 					projection[12 + row] * view[column * 4 + 3];
 			}
 		}
+		memcpy(Resources.viewContract.viewMatrix, view, sizeof(view));
+		memcpy(Resources.viewContract.projectionMatrix, projection, sizeof(projection));
+		memcpy(Resources.viewContract.viewProjectionMatrix, Resources.viewProjection,
+			sizeof(Resources.viewProjection));
+		Resources.viewContract.cameraPosition[0] = cameraX;
+		Resources.viewContract.cameraPosition[1] = cameraY;
+		Resources.viewContract.cameraPosition[2] = cameraZ;
+		Resources.viewContract.viewIndex = 0;
+		Resources.viewContract.inactiveViewIndex = 1;
+		Resources.viewContract.active = true;
+	}
+
+	static void PublishFrameContract()
+	{
+		Resources.viewContract.viewportX = 0;
+		Resources.viewContract.viewportY = 0;
+		Resources.viewContract.viewportWidth = Resources.sceneTarget.renderWidth;
+		Resources.viewContract.viewportHeight = Resources.sceneTarget.renderHeight;
+		FGLESFrameDescriptor frame = {};
+		frame.frameNumber = Resources.frame;
+		frame.timeSeconds = static_cast<double>(Resources.frame) / 35.0;
+		frame.targetWidth = Resources.sceneTarget.renderWidth;
+		frame.targetHeight = Resources.sceneTarget.renderHeight;
+		gl_GLES_SetFrameContract(frame, Resources.sceneTarget, Resources.viewContract);
 	}
 
 	static unsigned int AddSceneVertex(const FSceneVertex &vertex)
@@ -2205,40 +2188,35 @@ void gl_AndroidNativeGLES_UseProgram(unsigned int handle)
 
 bool gl_AndroidNativeGLES_CollectCapabilities()
 {
-	const char *version = reinterpret_cast<const char *>(glGetString(GL_VERSION));
-	if (version == NULL || strncmp(version, "OpenGL ES ", 10) != 0)
-		I_FatalError("Android GLES context did not report an OpenGL ES version.");
-
-	int major = 0, minor = 0;
-	if (sscanf(version, "OpenGL ES %d.%d", &major, &minor) != 2 || major < 3 || (major == 3 && minor < 2))
-		I_FatalError("Android GLES 3.2 is required, got %s.", version);
-
-	Capabilities.majorVersion = major;
-	Capabilities.minorVersion = minor;
-	Capabilities.vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
-	Capabilities.renderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
-	Capabilities.version = version;
-	Capabilities.shadingLanguageVersion = reinterpret_cast<const char *>(glGetString(GL_SHADING_LANGUAGE_VERSION));
+	FGLESContextInfo context = {};
+	if (!gl_GLES_InstallDirectContext(3, 2, &context))
+		I_FatalError("Android GLES 3.2 context is unavailable.");
+	Capabilities.majorVersion = context.majorVersion;
+	Capabilities.minorVersion = context.minorVersion;
+	Capabilities.vendor = context.vendor;
+	Capabilities.renderer = context.renderer;
+	Capabilities.version = context.version;
+	Capabilities.shadingLanguageVersion = context.shadingLanguageVersion;
 	Capabilities.hasVertexBuffers = true;
 	Capabilities.hasVertexArrays = true;
 	Capabilities.hasUniformBuffers = true;
 	Capabilities.hasFramebuffers = true;
-	Capabilities.hasDepthStencil = true;
+	Capabilities.hasDepthStencil = context.hasDepthStencil;
 	Capabilities.hasBufferMapping = false;
-	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &Capabilities.maxTextureSize);
-	glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &Capabilities.maxTextureUnits);
-	glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &Capabilities.maxVertexUniformVectors);
-	glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &Capabilities.maxFragmentUniformVectors);
-	glGetIntegerv(GL_NUM_EXTENSIONS, &Capabilities.extensionCount);
+	Capabilities.maxTextureSize = context.maxTextureSize;
+	Capabilities.maxTextureUnits = context.maxTextureUnits;
+	Capabilities.maxVertexUniformVectors = context.maxVertexUniformVectors;
+	Capabilities.maxFragmentUniformVectors = context.maxFragmentUniformVectors;
+	Capabilities.extensionCount = context.extensionCount;
 	if (Capabilities.maxTextureSize <= 0 || Capabilities.maxTextureUnits <= 0 ||
 		Capabilities.maxVertexUniformVectors <= 0 || Capabilities.maxFragmentUniformVectors <= 0 ||
 		Capabilities.extensionCount < 0)
 		I_FatalError("Android GLES capability enumeration returned invalid limits.");
-	Capabilities.hasAnisotropicFiltering = HasExtension("GL_EXT_texture_filter_anisotropic");
-	Capabilities.hasAstcCompression = HasExtension("GL_KHR_texture_compression_astc_ldr");
+	Capabilities.hasAnisotropicFiltering = context.hasAnisotropicFiltering;
+	Capabilities.hasAstcCompression = gl_GLES_HasExtension("GL_KHR_texture_compression_astc_ldr");
 	Capabilities.hasEtc2Compression = true;
-	Capabilities.hasDebugLabels = HasExtension("GL_KHR_debug");
-	Capabilities.hasMultiview = HasExtension("GL_OVR_multiview2") || HasExtension("GL_ANDROID_extension_pack_es31a");
+	Capabilities.hasDebugLabels = context.hasDebugLabels;
+	Capabilities.hasMultiview = context.hasMultiview;
 	CapabilitiesReady = true;
 	return true;
 }
@@ -3783,6 +3761,7 @@ void gl_AndroidNativeGLES_OnContextLost()
 	InvalidateResources();
 	gl_AndroidNativeGLES_InvalidateTextures();
 	gl_AndroidNativeGLES_InvalidateFlatBuffers();
+	gl_GLES_ShutdownContext();
 	CapabilitiesReady = false;
 	memset(&Capabilities, 0, sizeof(Capabilities));
 	Printf("Android GLES context lost; native resource names invalidated.\n");
@@ -4472,8 +4451,8 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		return;
 	}
 
-	const int surfaceWidth = std::max(1, Zandronum_AndroidHost_GetWidth());
-	const int surfaceHeight = std::max(1, Zandronum_AndroidHost_GetHeight());
+	const int surfaceWidth = std::max(1, Resources.sceneTarget.renderWidth);
+	const int surfaceHeight = std::max(1, Resources.sceneTarget.renderHeight);
 	ResetState(surfaceWidth, surfaceHeight);
 	glViewport(0, 0, surfaceWidth, surfaceHeight);
 	glScissor(0, 0, surfaceWidth, surfaceHeight);
@@ -4531,6 +4510,7 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	const GLenum error = CheckError("present");
 	if (error != GL_NO_ERROR)
 		I_FatalError("Android GLES frame failed.");
+	PublishFrameContract();
 	++Resources.frame;
 	if (Resources.frame == 1 || (Resources.frame % 120) == 0)
 		DPrintf("Android GLES frame %u at %dx%d.\n", Resources.frame, width, height);

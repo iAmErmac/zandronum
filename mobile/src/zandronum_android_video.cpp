@@ -2,7 +2,9 @@
 
 #ifdef __ANDROID__
 
+#include "c_console.h"
 #include "gl/system/gl_framebuffer.h"
+#include "gl/system/gl_gles_context.h"
 #include "gl/renderer/gl_renderer.h"
 #include "zandronum_android_host.h"
 
@@ -95,18 +97,10 @@ bool AndroidGLFB::IsFullscreen()
 	return true;
 }
 
-void AndroidGLFB::SetVSync(bool)
-{
-}
-
 void AndroidGLFB::SwapBuffers()
 {
 	I_WaitForFPSLimit();
-	Zandronum_AndroidHost_SwapBuffers();
-}
-
-void AndroidGLFB::NewRefreshRate()
-{
+	gl_GLES_PresentFrame();
 }
 
 bool AndroidGLFB::CanUpdate()
@@ -116,6 +110,12 @@ bool AndroidGLFB::CanUpdate()
 
 void AndroidGLFB::SetGammaTable(WORD *)
 {
+	static bool reported = false;
+	if (!reported)
+	{
+		reported = true;
+		Printf("Android hardware gamma tables are unsupported; display correction stays in the GLES present pass.\n");
+	}
 }
 
 void AndroidGLFB::InitializeState()

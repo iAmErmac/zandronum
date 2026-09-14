@@ -28,10 +28,12 @@
 #include "i_system.h"
 #include "m_argv.h"
 #include "networkheaders.h"
+#include "textures/textures.h"
 #include "templates.h"
 #include "v_text.h"
 #include "x86.h"
 #include "zstring.h"
+#include "bitmap.h"
 
 #include "LogWritter.h"
 #include "zandronum_android_host.h"
@@ -307,7 +309,18 @@ unsigned int I_MakeRNGSeed()
 	return seed;
 }
 
-bool I_SetCursor(FTexture *)
+bool I_SetCursor(FTexture *cursorpic)
 {
-	return false;
+	if (cursorpic == nullptr || cursorpic->UseType == FTexture::TEX_Null)
+		return Zandronum_AndroidHost_SetPointerIcon(nullptr, 0, 0, 0, 0);
+	if (cursorpic->GetWidth() > 32 || cursorpic->GetHeight() > 32)
+		return false;
+	FBitmap bitmap;
+	if (!bitmap.Create(cursorpic->GetWidth(), cursorpic->GetHeight()))
+		return false;
+	cursorpic->CopyTrueColorPixels(&bitmap, 0, 0);
+	const int hotX = clamp<int>(cursorpic->LeftOffset, 0, cursorpic->GetWidth() - 1);
+	const int hotY = clamp<int>(cursorpic->TopOffset, 0, cursorpic->GetHeight() - 1);
+	return Zandronum_AndroidHost_SetPointerIcon(
+		reinterpret_cast<const int *>(bitmap.GetPixels()), bitmap.GetWidth(), bitmap.GetHeight(), hotX, hotY);
 }

@@ -36,6 +36,10 @@ endif( "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" S
 
 option( DYN_FLUIDSYNTH "Dynamically load fluidsynth" ON )
 
+if( WIN32 )
+	option( GLES_WGL_SMOKE "Build the opt-in Windows GLES/WGL mono smoke executable." OFF )
+endif( WIN32 )
+
 if( CMAKE_SIZEOF_VOID_P MATCHES "8" )
 	set( X64 64 )
 endif( CMAKE_SIZEOF_VOID_P MATCHES "8" )
@@ -1451,6 +1455,18 @@ endif(${CMAKE_SYSTEM_NAME} STREQUAL "SunOS")
 
 # [BB] Added GeoIP, huffman & sqlite
 target_link_libraries( zdoom ${ZDOOM_LIBS} gdtoa dumb lzma GeoIP sqlite3 )
+
+if( WIN32 AND GLES_WGL_SMOKE )
+	add_executable( zandronum_gles_wgl_smoke
+		gl/system/gl_gles_context.cpp
+		gl/system/gl_gles_targets.cpp
+		gl/system/gl_gles_shader.cpp
+		gl/system/gl_gles_wgl_smoke.cpp )
+	target_include_directories( zandronum_gles_wgl_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} )
+	target_link_libraries( zandronum_gles_wgl_smoke opengl32 user32 gdi32 )
+	set_target_properties( zandronum_gles_wgl_smoke PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY ${ZDOOM_OUTPUT_DIR} )
+endif( WIN32 AND GLES_WGL_SMOKE )
 include_directories( .
 	g_doom
 	g_heretic

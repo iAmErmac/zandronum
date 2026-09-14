@@ -27,6 +27,7 @@ IVideo *Video;
 int currentrenderer = 1;
 static std::atomic<int> AndroidFPSLimit(0);
 static std::atomic<int64_t> AndroidNextFrameDeadline(0);
+static const int AndroidMaximumFPS = 240;
 
 static int64_t AndroidMonotonicNanoseconds()
 {
@@ -121,7 +122,7 @@ void I_SetFPSLimit(int limit)
 	if (cl_capfps || limit == 0)
 		limit = 0;
 	else
-		limit = clamp(limit, TICRATE, 1000);
+		limit = clamp(limit, TICRATE, AndroidMaximumFPS);
 	AndroidFPSLimit.store(limit, std::memory_order_relaxed);
 	AndroidNextFrameDeadline.store(0, std::memory_order_relaxed);
 }
@@ -150,12 +151,12 @@ void I_WaitForFPSLimit()
 	AndroidNextFrameDeadline.store(deadline, std::memory_order_relaxed);
 }
 
-CUSTOM_CVAR(Int, vid_maxfps, 200, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+CUSTOM_CVAR(Int, vid_maxfps, 240, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 {
 	if (vid_maxfps < TICRATE && vid_maxfps != 0)
 		vid_maxfps = TICRATE;
-	else if (vid_maxfps > 1000)
-		vid_maxfps = 1000;
+	else if (vid_maxfps > AndroidMaximumFPS)
+		vid_maxfps = AndroidMaximumFPS;
 	if (!cl_capfps)
 		I_SetFPSLimit(vid_maxfps);
 }

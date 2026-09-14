@@ -53,6 +53,8 @@ ANDROID_SRC_FILES = \
     ../mobile/src/sqlite/sqlite3.c \
     ../mobile/src/extrafiles/gl_load.c \
     ../src/gl/system/gl_gles_targets.cpp \
+    ../src/gl/system/gl_gles_context.cpp \
+    ../src/gl/system/gl_gles_shader.cpp \
     ../src/gl/system/gl_android.cpp \
     ../mobile/src/zandronum_android_input.cpp \
     ../mobile/src/zandronum_android_host.cpp \

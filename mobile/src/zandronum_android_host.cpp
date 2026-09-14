@@ -18,6 +18,7 @@
 #include "LogWritter.h"
 #include "fmod_android.h"
 #include "gl/system/gl_android.h"
+#include "gl/system/gl_gles_context.h"
 #include "zandronum_android_input.h"
 
 extern int main_android(int argc, char **argv);
@@ -108,6 +109,24 @@ namespace
 	void HostLog(const char *message)
 	{
 		__android_log_print(ANDROID_LOG_ERROR, "Zandronum", "%s", message);
+	}
+
+	bool PresentGLESFrame(void *)
+	{
+		return Zandronum_AndroidHost_SwapBuffers();
+	}
+
+	void LogGLESMessage(void *, const char *message)
+	{
+		HostLog(message);
+	}
+
+	void RegisterGLESHostCallbacks()
+	{
+		FGLESHostCallbacks callbacks = {};
+		callbacks.present = &PresentGLESFrame;
+		callbacks.log = &LogGLESMessage;
+		gl_GLES_RegisterHostCallbacks(&callbacks);
 	}
 
 	bool CreateWindowSurface()
@@ -239,6 +258,7 @@ namespace
 			Starting = false;
 			return;
 		}
+		RegisterGLESHostCallbacks();
 
 		JavaVM *vm;
 		{
@@ -377,6 +397,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 	{
 		if (CreateWindowSurface())
 		{
+			RegisterGLESHostCallbacks();
 			gl_AndroidNativeGLES_OnContextRestored(SurfaceWidth, SurfaceHeight);
 		}
 	}
@@ -713,6 +734,40 @@ std::string Zandronum_AndroidHost_GetClipboard(bool primary)
 	if (activityClass != nullptr)
 		env->DeleteLocalRef(activityClass);
 	return result;
+}
+
+bool Zandronum_AndroidHost_SetPointerIcon(const int *pixels, int width, int height,
+	int hotX, int hotY)
+{
+	JavaVM *vm;
+	jobject activity;
+	if (!GetActivityBridge(vm, activity))
+		return false;
+	JavaThreadAttachment attachment(vm);
+	JNIEnv *env = attachment.GetEnv();
+	if (env == nullptr)
+		return false;
+	jclass activityClass = env->GetObjectClass(activity);
+	jmethodID method = activityClass == nullptr ? nullptr : env->GetMethodID(activityClass,
+		"setPointerIcon", "(II[III)Z");
+	jintArray javaPixels = nullptr;
+	if (method != nullptr && pixels != nullptr && width > 0 && height > 0)
+	{
+		javaPixels = env->NewIntArray(width * height);
+		if (javaPixels != nullptr)
+			env->SetIntArrayRegion(javaPixels, 0, width * height,
+				reinterpret_cast<const jint *>(pixels));
+	}
+	jboolean result = JNI_FALSE;
+	if (method != nullptr)
+		result = env->CallBooleanMethod(activity, method, width, height, javaPixels, hotX, hotY);
+	const bool success = result == JNI_TRUE && !env->ExceptionCheck();
+	ClearJavaException(env);
+	if (javaPixels != nullptr)
+		env->DeleteLocalRef(javaPixels);
+	if (activityClass != nullptr)
+		env->DeleteLocalRef(activityClass);
+	return success;
 }
 
 #endif

@@ -1,7 +1,8 @@
 #ifndef ZANDRONUM_GL_GLES_TARGETS_H
 #define ZANDRONUM_GL_GLES_TARGETS_H
 
-#include <GLES3/gl32.h>
+#include "gl/system/gl_gles_api.h"
+#include "gl/system/gl_gles_contract.h"
 
 struct FGLESTargetDescriptor
 {
@@ -15,6 +16,7 @@ struct FGLESTargetDescriptor
 	int renderWidth;
 	int renderHeight;
 	int sampleCount;
+	bool hostOwnsPresentation;
 };
 
 bool gl_GLES_CreateRenderTarget(FGLESTargetDescriptor *target, int width, int height,

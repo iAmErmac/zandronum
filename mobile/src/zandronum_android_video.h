@@ -36,9 +36,7 @@ public:
 	bool IsLocked() override;
 	bool IsValid() override;
 	bool IsFullscreen() override;
-	void SetVSync(bool vsync) override;
 	void SwapBuffers();
-	void NewRefreshRate() override;
 	int GetTrueHeight() override { return GetHeight(); }
 
 protected:
