@@ -137,7 +137,7 @@ public:
 
 	void Bind(int cm, int clamp = 0, int translation = 0, int overrideshader = 0);
 	void BindPatch(int cm, int translation = 0, int overrideshader = 0);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	unsigned int BindNative(int cm, int translation, bool repeat, bool allowhires = true) const;
 	unsigned int BindNativeBrightmap(bool repeat) const;
 	void RemapNativeTexCoords(float *u, float *v) const;

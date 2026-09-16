@@ -19,15 +19,15 @@ namespace
 bool CD_Init() { ReportUnsupportedCD(); return false; }
 bool CD_Init(int) { ReportUnsupportedCD(); return false; }
 bool CD_InitID(unsigned int, int) { ReportUnsupportedCD(); return false; }
-void CD_Close() {}
-void CD_Eject() {}
+void CD_Close() { ReportUnsupportedCD(); }
+void CD_Eject() { ReportUnsupportedCD(); }
 bool CD_UnEject() { ReportUnsupportedCD(); return false; }
-void CD_Stop() {}
+void CD_Stop() { ReportUnsupportedCD(); }
 bool CD_Play(int, bool) { ReportUnsupportedCD(); return false; }
 void CD_PlayNoWait(int, bool) { ReportUnsupportedCD(); }
 bool CD_PlayCD(bool) { ReportUnsupportedCD(); return false; }
 void CD_PlayCDNoWait(bool) { ReportUnsupportedCD(); }
-void CD_Pause() {}
+void CD_Pause() { ReportUnsupportedCD(); }
 bool CD_Resume() { ReportUnsupportedCD(); return false; }
-ECDModes CD_GetMode() { return CDMode_Unknown; }
+ECDModes CD_GetMode() { ReportUnsupportedCD(); return CDMode_Unknown; }
 bool CD_CheckTrack(int) { ReportUnsupportedCD(); return false; }

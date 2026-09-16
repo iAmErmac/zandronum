@@ -159,7 +159,9 @@ EXTERN_CVAR (Int, vid_renderer)
 FString GetEngineString ( )
 {
 	FString engine;
-	engine.Format ( "%s (%s)", GAMESIG, ( vid_renderer ? "GL" : "Software" ) );
+	const char *rendererName = vid_renderer == RENDERER_SOFTWARE ? "Software" :
+		(vid_renderer == RENDERER_GLES ? "OpenGL ES" : "OpenGL");
+	engine.Format ( "%s (%s)", GAMESIG, rendererName );
 	return engine;
 }
 

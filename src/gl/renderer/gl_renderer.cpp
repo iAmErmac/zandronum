@@ -52,7 +52,6 @@
 
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_framebuffer.h"
-#include "gl/system/gl_threads.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
@@ -69,8 +68,8 @@
 #include "gl/models/gl_models.h"
 #include <math.h>
 #include <vector>
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 //===========================================================================
@@ -79,35 +78,35 @@
 //
 //===========================================================================
 
-#ifdef __ANDROID__
-void gl_AndroidNativeGLES_RegisterShaderPrograms()
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+void gl_GLES_RegisterShaderPrograms()
 {
 	if (GLRenderer == NULL || GLRenderer->mShaderManager == NULL) return;
 	const char *names[] =
 	{
-		"android/opaque", "android/masked", "android/fog", "android/palette", "android/present"
+		"gles/opaque", "gles/masked", "gles/fog", "gles/palette", "gles/present"
 	};
 	for (unsigned int i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
 	{
-		const unsigned int handle = gl_AndroidNativeGLES_GetShaderProgram(names[i]);
-		if (handle != 0) GLRenderer->mShaderManager->RegisterAndroidNativeProgram(names[i], handle);
+		const unsigned int handle = gl_GLES_GetShaderProgram(names[i]);
+		if (handle != 0) GLRenderer->mShaderManager->RegisterGLESProgram(names[i], handle);
 	}
 }
 
-void gl_AndroidNativeGLES_UnregisterShaderPrograms()
+void gl_GLES_UnregisterShaderPrograms()
 {
 	if (GLRenderer != NULL && GLRenderer->mShaderManager != NULL)
-		GLRenderer->mShaderManager->ClearAndroidNativePrograms();
+		GLRenderer->mShaderManager->ClearGLESPrograms();
 }
 
-unsigned int gl_AndroidNativeGLES_BindShaderProgram(const char *name, unsigned int fallback)
+unsigned int gl_GLES_BindShaderProgram(const char *name, unsigned int fallback)
 {
 	if (GLRenderer != NULL && GLRenderer->mShaderManager != NULL)
 	{
-		const unsigned int handle = GLRenderer->mShaderManager->BindAndroidNativeProgram(name);
+		const unsigned int handle = GLRenderer->mShaderManager->BindGLESProgram(name);
 		if (handle != 0) return handle;
 	}
-	gl_AndroidNativeGLES_UseProgram(fallback);
+	gl_GLES_UseProgram(fallback);
 	return fallback;
 }
 #endif
@@ -147,10 +146,9 @@ void FGLRenderer::Initialize()
 	mFBID = 0;
 	SetupLevel();
 	mShaderManager = new FShaderManager;
-	#ifdef __ANDROID__
-	gl_AndroidNativeGLES_RegisterShaderPrograms();
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	gl_GLES_RegisterShaderPrograms();
 	#endif
-	//mThreadManager = new FGLThreadManager;
 }
 
 FGLRenderer::~FGLRenderer() 
@@ -158,7 +156,6 @@ FGLRenderer::~FGLRenderer()
 	gl_CleanModelData();
 	gl_DeleteAllAttachedLights();
 	FMaterial::FlushAll();
-	//if (mThreadManager != NULL) delete mThreadManager;
 	if (mShaderManager != NULL) delete mShaderManager;
 	if (mVBO != NULL) delete mVBO;
 	if (glpart2) delete glpart2;
@@ -300,6 +297,12 @@ unsigned char *FGLRenderer::GetTextureBuffer(FTexture *tex, int &w, int &h)
 
 void FGLRenderer::ClearBorders()
 {
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
 	OpenGLFrameBuffer *glscreen = static_cast<OpenGLFrameBuffer*>(screen);
 
 	// Letterbox time! Draw black top and bottom borders.
@@ -336,6 +339,7 @@ void FGLRenderer::ClearBorders()
 	gl_RenderState.EnableTexture(true);
 
 	glViewport(0, (trueHeight - height) / 2, width, height); 
+#endif
 }
 
 //==========================================================================
@@ -346,8 +350,8 @@ void FGLRenderer::ClearBorders()
 
 void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		FMaterial *nativeMaterial = FMaterial::ValidateTexture(img);
 		if (nativeMaterial == NULL) return;
@@ -421,20 +425,20 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		const bool alphaChannel = parms.alphaChannel;
 		const unsigned int texture = nativeMaterial->BindNative(alphaChannel ? CM_SHADE : CM_DEFAULT,
 			alphaChannel ? 0 : translation, false, false);
-		EAndroidNativeBlendMode blendMode = ANDROID_BLEND_OPAQUE;
+		EGLESBlendMode blendMode = GLES_BLEND_OPAQUE;
 		if (parms.style.BlendOp == STYLEOP_Add)
-			blendMode = parms.style.DestAlpha == STYLEALPHA_One ? ANDROID_BLEND_ADD : ANDROID_BLEND_ALPHA;
-		else if (parms.style.BlendOp == STYLEOP_Sub) blendMode = ANDROID_BLEND_SUBTRACT;
-		else if (parms.style.BlendOp == STYLEOP_RevSub) blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
-		else if (parms.alpha < FRACUNIT || parms.style.BlendOp != STYLEOP_None) blendMode = ANDROID_BLEND_ALPHA;
+			blendMode = parms.style.DestAlpha == STYLEALPHA_One ? GLES_BLEND_ADD : GLES_BLEND_ALPHA;
+		else if (parms.style.BlendOp == STYLEOP_Sub) blendMode = GLES_BLEND_SUBTRACT;
+		else if (parms.style.BlendOp == STYLEOP_RevSub) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
+		else if (parms.alpha < FRACUNIT || parms.style.BlendOp != STYLEOP_None) blendMode = GLES_BLEND_ALPHA;
 		unsigned int materialFlags = 0;
-		if (alphaChannel) materialFlags |= ANDROID_MATERIAL_RED_IS_ALPHA;
-		if (parms.style.Flags & STYLEF_RedIsAlpha) materialFlags |= ANDROID_MATERIAL_RED_IS_ALPHA;
-		if (parms.style.Flags & STYLEF_InvertOverlay) materialFlags |= ANDROID_MATERIAL_INVERT;
-		if (parms.style.Flags & STYLEF_FadeToBlack) materialFlags |= ANDROID_MATERIAL_FADE_TO_BLACK;
-		if (parms.style.Flags & STYLEF_InvertSource) materialFlags |= ANDROID_MATERIAL_INVERT_SOURCE;
-		if (parms.style.Flags & STYLEF_ColorIsFixed) materialFlags |= ANDROID_MATERIAL_COLOR_FIXED;
-		gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, color, FIXED2FLOAT(parms.alpha),
+		if (alphaChannel) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
+		if (parms.style.Flags & STYLEF_RedIsAlpha) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
+		if (parms.style.Flags & STYLEF_InvertOverlay) materialFlags |= GLES_MATERIAL_INVERT;
+		if (parms.style.Flags & STYLEF_FadeToBlack) materialFlags |= GLES_MATERIAL_FADE_TO_BLACK;
+		if (parms.style.Flags & STYLEF_InvertSource) materialFlags |= GLES_MATERIAL_INVERT_SOURCE;
+		if (parms.style.Flags & STYLEF_ColorIsFixed) materialFlags |= GLES_MATERIAL_COLOR_FIXED;
+		gl_GLES_AddHUDQuad(positions, texcoords, color, FIXED2FLOAT(parms.alpha),
 			parms.masked != 0, texture, blendMode, materialFlags);
 		if (colorOverlay != 0 && APART(colorOverlay) != 0)
 		{
@@ -444,13 +448,14 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 				GPART(colorOverlay) / 255.0f,
 				BPART(colorOverlay) / 255.0f
 			};
-			gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, overlayColor,
-				APART(colorOverlay) / 255.0f, false, texture, ANDROID_BLEND_ALPHA,
-				ANDROID_MATERIAL_COLOR_OVERLAY);
+			gl_GLES_AddHUDQuad(positions, texcoords, overlayColor,
+				APART(colorOverlay) / 255.0f, false, texture, GLES_BLEND_ALPHA,
+				GLES_MATERIAL_COLOR_OVERLAY);
 		}
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 
 	double xscale = parms.destwidth / parms.texwidth;
 	double yscale = parms.destheight / parms.texheight;
@@ -585,6 +590,7 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 	gl_RenderState.SetTextureMode(TM_MODULATE);
 	gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	gl_RenderState.BlendEquation(GL_FUNC_ADD);
+#endif
 }
 
 //==========================================================================
@@ -595,8 +601,8 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 color)
 {
 	PalEntry p = color? (PalEntry)color : GPalette.BaseColors[palcolor];
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		const float width = screen != NULL && screen->GetWidth() > 0 ?
 			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
@@ -625,8 +631,8 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 			}
 			const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
 			const float alpha = color != 0 && p.a != 0 ? p.a / 255.0f : 1.0f;
-			gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
-				alpha < 0.999f ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE);
+			gl_GLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
+				alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
 		}
 		else
 		{
@@ -634,7 +640,8 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 		}
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 	gl_RenderState.EnableTexture(false);
 	gl_RenderState.Apply(true);
 	glColor3ub(p.r, p.g, p.b);
@@ -643,6 +650,7 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 	glVertex2i(x2, y2);
 	glEnd();
 	gl_RenderState.EnableTexture(true);
+#endif
 }
 
 //==========================================================================
@@ -653,8 +661,8 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 {
 	PalEntry p = color? (PalEntry)color : GPalette.BaseColors[palcolor];
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		const float width = screen != NULL && screen->GetWidth() > 0 ?
 			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
@@ -671,11 +679,12 @@ void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 		};
 		const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
 		const float alpha = color != 0 && p.a != 0 ? p.a / 255.0f : 1.0f;
-		gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
-			alpha < 0.999f ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE);
+		gl_GLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
+			alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 	gl_RenderState.EnableTexture(false);
 	gl_RenderState.Apply(true);
 	glColor3ub(p.r, p.g, p.b);
@@ -683,6 +692,7 @@ void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 	glVertex2i(x1, y1);
 	glEnd();
 	gl_RenderState.EnableTexture(true);
+#endif
 }
 
 //===========================================================================
@@ -693,8 +703,8 @@ void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 
 void FGLRenderer::Dim(PalEntry color, float damount, int x1, int y1, int w, int h)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (damount <= 0.0f || w <= 0 || h <= 0) return;
 		const float width = screen != NULL && screen->GetWidth() > 0 ?
@@ -711,11 +721,12 @@ void FGLRenderer::Dim(PalEntry color, float damount, int x1, int y1, int w, int 
 			right, bottom, 0.0f, right, top, 0.0f
 		};
 		const float rgb[3] = { color.r / 255.0f, color.g / 255.0f, color.b / 255.0f };
-		gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, damount, false, 0,
-			ANDROID_BLEND_ALPHA);
+		gl_GLES_AddHUDQuad(positions, NULL, rgb, damount, false, 0,
+			GLES_BLEND_ALPHA);
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 	float r, g, b;
 	
 	gl_RenderState.EnableTexture(false);
@@ -736,6 +747,7 @@ void FGLRenderer::Dim(PalEntry color, float damount, int x1, int y1, int w, int 
 	glEnd();
 	
 	gl_RenderState.EnableTexture(true);
+#endif
 }
 
 //==========================================================================
@@ -745,8 +757,8 @@ void FGLRenderer::Dim(PalEntry color, float damount, int x1, int y1, int w, int 
 //==========================================================================
 void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *src, bool local_origin)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (src == NULL || right <= left || bottom <= top) return;
 		FMaterial *nativeMaterial = FMaterial::ValidateTexture(src);
@@ -772,11 +784,12 @@ void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *
 		};
 		const float texcoords[8] = { u1, v1, u1, v2, u2, v2, u2, v1 };
 		const unsigned int nativeTexture = nativeMaterial->BindNative(CM_DEFAULT, 0, true);
-		gl_AndroidNativeGLES_AddHUDPolygon(positions, texcoords, 4, NULL, 1.0f,
-			nativeMaterial->isMasked(), nativeTexture, true, ANDROID_BLEND_OPAQUE);
+		gl_GLES_AddHUDPolygon(positions, texcoords, 4, NULL, 1.0f,
+			nativeMaterial->isMasked(), nativeTexture, true, GLES_BLEND_OPAQUE);
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 	float fU1,fU2,fV1,fV2;
 
 	FMaterial *gltexture=FMaterial::ValidateTexture(src);
@@ -808,6 +821,7 @@ void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *
 	glTexCoord2f(fU2, fV1); glVertex2f(right, top);
 	glTexCoord2f(fU2, fV2); glVertex2f(right, bottom);
 	glEnd();
+#endif
 }
 
 //==========================================================================
@@ -817,8 +831,8 @@ void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *
 //==========================================================================
 void FGLRenderer::Clear(int left, int top, int right, int bottom, int palcolor, uint32 color)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (right <= left || bottom <= top) return;
 		const float width = screen != NULL && screen->GetWidth() > 0 ?
@@ -839,11 +853,12 @@ void FGLRenderer::Clear(int left, int top, int right, int bottom, int palcolor, 
 		const PalEntry fill = palcolor == -1 || color != 0 ?
 			static_cast<PalEntry>(color) : GPalette.BaseColors[palcolor];
 		const float rgb[3] = { fill.r / 255.0f, fill.g / 255.0f, fill.b / 255.0f };
-		gl_AndroidNativeGLES_AddHUDQuad(positions, NULL, rgb, 1.0f, false, 0,
-			ANDROID_BLEND_OPAQUE);
+		gl_GLES_AddHUDQuad(positions, NULL, rgb, 1.0f, false, 0,
+			GLES_BLEND_OPAQUE);
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 	int rt;
 	int offY = 0;
 	PalEntry p = palcolor==-1 || color != 0? (PalEntry)color : GPalette.BaseColors[palcolor];
@@ -871,6 +886,7 @@ void FGLRenderer::Clear(int left, int top, int right, int bottom, int palcolor, 
 	glClearColor(0.f, 0.f, 0.f, 0.f);
 	
 	glDisable(GL_SCISSOR_TEST);
+#endif
 }
 
 //==========================================================================
@@ -885,8 +901,8 @@ void FGLRenderer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoint
 	double originx, double originy, double scalex, double scaley,
 	angle_t rotation, FDynamicColormap *colormap, int lightlevel)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (texture == NULL || points == NULL || npoints < 3) return;
 		FMaterial *nativeMaterial = FMaterial::ValidateTexture(texture);
@@ -934,12 +950,13 @@ void FGLRenderer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoint
 			light.b / 255.0f
 		};
 		const unsigned int nativeTexture = nativeMaterial->BindNative(cm.colormap, 0, true);
-		gl_AndroidNativeGLES_AddHUDPolygon(&positions[0], &texcoords[0],
+		gl_GLES_AddHUDPolygon(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(npoints), color, 1.0f, nativeMaterial->isMasked(),
-			nativeTexture, true, ANDROID_BLEND_OPAQUE);
+			nativeTexture, true, GLES_BLEND_OPAQUE);
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 	if (npoints < 3)
 	{ // This is no polygon.
 		return;
@@ -994,5 +1011,6 @@ void FGLRenderer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoint
 		glVertex3f(points[i].X, points[i].Y /* + yoffs */, 0);
 	}
 	glEnd();
+#endif
 }
 

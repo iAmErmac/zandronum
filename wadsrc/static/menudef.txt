@@ -1860,6 +1860,7 @@ OptionValue Renderers
 {
 	0.0, "Software"
 	1.0, "OpenGL"
+	2.0, "OpenGL ES"
 }
 
 OptionMenu VideoModeMenu

@@ -1,12 +1,18 @@
-#include "gl/system/gl_android.h"
+#include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_gles_targets.h"
+#include "gl/system/gl_gles_internal.h"
+#include "gl/system/gl_gles_portal.h"
+#include "gl/system/gl_gles_present.h"
+#include "gl/system/gl_gles_scene.h"
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 
+#if defined(__ANDROID__)
 #include <GLES3/gl32.h>
+#endif
+#include <chrono>
 #include <algorithm>
 #include <math.h>
-#include <stdio.h>
 #include <string.h>
 #include <vector>
 
@@ -25,11 +31,11 @@
 #include "gl/system/gl_cvars.h"
 #include "gl/system/gl_gles_context.h"
 #include "gl/system/gl_gles_shader.h"
+#include "gl/system/gl_gles_dispatch.h"
 #include "f_wipe.h"
 #include "m_random.h"
 #include "m_misc.h"
 #include "m_png.h"
-#include "../../../mobile/src/zandronum_android_host.h"
 
 extern TexFilter_s TexFilter[];
 EXTERN_CVAR(Float, skyoffset)
@@ -38,18 +44,11 @@ EXTERN_CVAR(Float, vid_brightness)
 EXTERN_CVAR(Float, vid_contrast)
 EXTERN_CVAR(Int, gl_vid_multisample)
 EXTERN_CVAR(Bool, gl_no_skyclear)
+EXTERN_CVAR(Int, screenblocks)
 extern int skyfog;
 
 namespace
 {
-	static const unsigned int ANDROID_NATIVE_MAX_LIGHTS = 16;
-
-	struct FSkyPrimitiveRange
-	{
-		GLsizei firstIndex;
-		GLsizei indexCount;
-	};
-
 	struct FBootstrapVertex
 	{
 		GLfloat x, y, z;
@@ -79,24 +78,24 @@ namespace
 		bool palette;
 		bool flat;
 		bool hud;
+		bool wipeOverlay;
 		bool model;
 		bool cullBackFaces;
 		bool skyMask;
 		bool flood;
 		GLsizei floodWallFirstIndex;
 		unsigned int materialFlags;
-		EAndroidNativeBlendMode blendMode;
+		EGLESBlendMode blendMode;
 		float sortDepth;
 		float fogColor[3];
 		float fogDensity;
 		float glowTopColor[4];
 		float glowBottomColor[4];
+		size_t lightOffset;
 		unsigned int lightCount;
 		unsigned int lightNormalCount;
 		unsigned int lightSubtractiveCount;
 		float lightPlaneNormal[3];
-		float lightPositionRadius[ANDROID_NATIVE_MAX_LIGHTS * 4];
-		float lightColor[ANDROID_NATIVE_MAX_LIGHTS * 4];
 		// Keep the camera that produced this batch beside its geometry. Nested
 		// portal collection must not replace the outer scene's view uniforms.
 		float viewProjection[16];
@@ -129,6 +128,10 @@ namespace
 	struct FNativePortalTarget
 	{
 		unsigned int id;
+		unsigned int stencilSlot;
+		bool framebufferFallback;
+		int fallbackTargetIndex;
+		bool fallbackTargetReady;
 		int parentId;
 		size_t firstBatch;
 		size_t endBatch;
@@ -156,6 +159,7 @@ namespace
 		bool savedClipPlaneEnabled;
 		float savedClipPlane[4];
 		FNativeSkyRecord sky;
+		bool clearScreen;
 		FMaterial *skyMaterial;
 		float skyXOffset;
 		float skyYOffset;
@@ -171,65 +175,16 @@ namespace
 		bool skyFogEnabled;
 	};
 
-	struct FAndroidNativeTexture
-	{
-		const void *key;
-		int colormap;
-		int translation;
-		int width;
-		int height;
-		bool repeat;
-		bool allowhires;
-		bool palette;
-		bool framebufferContent;
-		GLuint texture;
-		std::vector<unsigned char> pixels;
-	};
-
-	struct FAndroidNativeWipe
-	{
-		enum
-		{
-			MeltWidth = 320,
-			MeltHeight = 200,
-			BurnWidth = 64,
-			BurnHeight = 64
-		};
-
-		GLuint startTexture;
-		GLuint endTexture;
-		GLuint maskTexture;
-		bool startReady;
-		bool endReady;
-		bool endCapturePending;
-		bool active;
-		int type;
-		int maskWidth;
-		int maskHeight;
-		unsigned int lastTime;
-		unsigned int tickRemainderMs;
-		int simulatedTicks;
-		int meltY[MeltWidth];
-		BYTE burnArray[BurnWidth * (BurnHeight + 5)];
-		int burnDensity;
-		int burnTime;
-		std::vector<BYTE> maskPixels;
-	};
-
-	struct FAndroidGLESResources
+	struct FGLESResources
 	{
 		GLuint sceneProgram;
 		GLuint fogProgram;
 		GLuint fogMaskedProgram;
 		GLuint maskedProgram;
 		GLuint paletteProgram;
-		GLuint presentProgram;
 		GLuint sceneVertexArray;
 		GLuint sceneVertexBuffer;
 		GLuint sceneIndexBuffer;
-		GLuint skyVertexArray;
-		GLuint skyVertexBuffer;
-		GLuint skyIndexBuffer;
 		GLuint vertexArray;
 		GLuint vertexBuffer;
 		GLuint indexBuffer;
@@ -240,7 +195,7 @@ namespace
 		FGLESTargetDescriptor sceneTarget;
 		FGLESTargetDescriptor cameraTarget;
 		FGLESViewDescriptor viewContract;
-		FAndroidNativeWipe wipe;
+		FGLESViewArea nativeViewArea;
 		GLint sceneTextureUniform;
 		GLint sceneBrightmapUniform;
 		GLint sceneUseBrightmap;
@@ -347,18 +302,6 @@ namespace
 		GLint fogMaskedDynamicLightTexture;
 		GLint fogMaskedClipPlane;
 		GLint fogMaskedClipPlaneEnabled;
-		GLint presentTexture;
-		GLint presentTextureTransform;
-		GLint presentDepth;
-		GLint presentWipeStart;
-		GLint presentWipeEnd;
-		GLint presentWipeMask;
-		GLint presentWipeProgress;
-		GLint presentWipeType;
-		GLint presentWipeActive;
-		GLint presentGamma;
-		GLint presentBrightness;
-		GLint presentContrast;
 		GLint fogColor;
 		GLint fogDensity;
 		unsigned int frame;
@@ -369,7 +312,6 @@ namespace
 		std::vector<FSceneBatch> sceneBatches;
 		std::vector<FNativePortalTarget> portalTargets;
 		FNativeSkyRecord outerSky;
-		std::vector<FAndroidNativeTexture> nativeTextures;
 		FMaterial *skyMaterial;
 		float skyXOffset;
 		float skyYOffset;
@@ -383,12 +325,6 @@ namespace
 		PalEntry skyLowerCapColor;
 		PalEntry skyFogColor;
 		bool skyFogEnabled;
-		FSkyPrimitiveRange skyUpperCap;
-		FSkyPrimitiveRange skyUpperStrips[4];
-		FSkyPrimitiveRange skyLowerCap;
-		FSkyPrimitiveRange skyLowerStrips[4];
-		FSkyPrimitiveRange skyboxFaces[6];
-		int skyColumns;
 		unsigned int sceneSpriteCount;
 		float viewProjection[16];
 		float cameraX;
@@ -403,23 +339,33 @@ namespace
 		float clipPlane[4];
 		bool sceneReady;
 		bool ready;
-		bool stateWarningLogged;
 		bool framebufferWarningLogged;
 	};
 
-	static FAndroidGLESInfo Capabilities = {};
-	static FAndroidGLESResources Resources = {};
+	static FGLESNativeCapabilities Capabilities = {};
+	static FGLESResources Resources = {};
 	static bool CapabilitiesReady = false;
 	static bool NativeBackendEnabled = false;
 	static bool BootstrapPauseLogged = false;
 	static bool SceneInputLogged = false;
 	static bool SkyLogged = false;
+	static std::chrono::steady_clock::time_point NativeFrameStart;
+	static bool NativePortalCapacityLogged = false;
 	static bool FlatCollectionDeferred = false;
 	static FGLESTargetDescriptor *NativeActiveTarget = NULL;
 	static bool NativeOffscreenRender = false;
+	static bool NativeWipeOverlayCollecting = false;
 	static GLuint NativeGlowPrograms[5] = {};
 	static GLint NativeGlowTopLocations[5] = { -1, -1, -1, -1, -1 };
 	static GLint NativeGlowBottomLocations[5] = { -1, -1, -1, -1, -1 };
+
+	static void SetNativeFullViewport(int width, int height)
+	{
+		glViewport(0, 0, width, height);
+		glScissor(0, 0, width, height);
+		glDisable(GL_SCISSOR_TEST);
+	}
+
 	static void ResetNativeGlowLocations()
 	{
 		memset(NativeGlowPrograms, 0, sizeof(NativeGlowPrograms));
@@ -452,10 +398,9 @@ namespace
 			glUniform4fv(NativeGlowBottomLocations[slot], 1, batch.glowBottomColor);
 	}
 	static std::vector<unsigned int> NativePortalCaptureStack;
-	static const unsigned int AndroidNativeMaxSceneVertices = 1u << 20;
-	// Bits 0 and 1 belong to the outer sky and flood masks. Each portal target
-	// owns a non-overlapping pair in the remaining eight-bit stencil value.
-	static const unsigned int AndroidNativeMaxPortalTargets = 3;
+	// Bits 0 and 1 belong to the outer sky and flood masks. The remaining
+	// stencil pairs are reused after a portal capture is closed.
+	static const unsigned int GLESNativePortalSlots = 3;
 	static GLuint NativePortalStencilBit(unsigned int id)
 	{
 		return 1u << (2u + id * 2u);
@@ -463,6 +408,40 @@ namespace
 	static GLuint NativePortalSkyStencilBit(unsigned int id)
 	{
 		return 1u << (3u + id * 2u);
+	}
+	static unsigned int FindNativePortalStencilSlot()
+	{
+		bool used[GLESNativePortalSlots] = {};
+		size_t scopeStart = 0;
+		for (size_t index = 0; index < NativePortalCaptureStack.size(); ++index)
+		{
+			const unsigned int portalId = NativePortalCaptureStack[index];
+			if (portalId < Resources.portalTargets.size() &&
+				Resources.portalTargets[portalId].framebufferFallback)
+				scopeStart = index;
+		}
+		for (size_t index = scopeStart; index < NativePortalCaptureStack.size(); ++index)
+		{
+			const unsigned int portalId = NativePortalCaptureStack[index];
+			if (portalId < Resources.portalTargets.size())
+			{
+				const unsigned int slot = Resources.portalTargets[portalId].stencilSlot;
+				if (slot < GLESNativePortalSlots) used[slot] = true;
+			}
+		}
+		for (unsigned int slot = 0; slot < GLESNativePortalSlots; ++slot)
+			if (!used[slot]) return slot;
+		if (!NativePortalCapacityLogged)
+		{
+			NativePortalCapacityLogged = true;
+			gl_GLES_Report("portal", "native portal nesting reached three stencil pairs; deeper captures use isolated framebuffer targets");
+		}
+		return ~0u;
+	}
+	static bool CanAppendSceneGeometry(size_t vertexCount, size_t indexCount, const char *kind)
+	{
+		return gl_GLESInternalSceneCanAppend(Resources.sceneVertices.size(),
+			Resources.sceneIndices.size(), vertexCount, indexCount, kind);
 	}
 	static void ResetNativeSkyRecord(FNativeSkyRecord &record, int portalId, GLuint stencilBit)
 	{
@@ -487,23 +466,17 @@ namespace
 
 	// The native scene is the normal path. The debug switch keeps the indexed
 	// test surface available when checking context and shader setup.
-	CVAR(Bool, gl_android_test_pattern, false, CVAR_DEBUGONLY)
-	CVAR(Bool, gl_android_shader_test_failure, false, CVAR_DEBUGONLY)
+	CVAR(Bool, gl_gles_test_pattern, false, CVAR_DEBUGONLY)
+	CVAR(Bool, gl_gles_shader_test_failure, false, CVAR_DEBUGONLY)
 
 	static bool IsPaletteTexture(GLuint texture)
 	{
-		if (texture == 0) return false;
-		for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-		{
-			const FAndroidNativeTexture &entry = Resources.nativeTextures[i];
-			if (entry.texture == texture) return entry.palette;
-		}
-		return false;
+		return gl_GLESInternalIsPaletteTexture(texture);
 	}
 
 	static GLuint BindNativeProgram(GLuint fallback, const char *name)
 	{
-		return static_cast<GLuint>(gl_AndroidNativeGLES_BindShaderProgram(name, fallback));
+		return static_cast<GLuint>(gl_GLES_BindShaderProgram(name, fallback));
 	}
 
 	static GLenum CheckError(const char *site)
@@ -523,9 +496,9 @@ namespace
 		GLuint program = gl_GLES_LinkProgram(vertexSource, fragmentSource, label, log, sizeof(log));
 		if (program == 0)
 		{
-			Printf("Android GLES %s defines:\n%s\nvertex source:\n%s\nfragment source:\n%s\n",
+			DPrintf("Zandronum GLES %s defines:\n%s\nvertex source:\n%s\nfragment source:\n%s\n",
 				label, defines, vertexSource, fragmentSource);
-			I_FatalError("Android GLES %s program failed: %s", label, log);
+			I_FatalError("Zandronum GLES %s program failed: %s", label, log);
 		}
 		return program;
 	}
@@ -537,22 +510,17 @@ namespace
 		if (Resources.fogMaskedProgram != 0) glDeleteProgram(Resources.fogMaskedProgram);
 		if (Resources.maskedProgram != 0) glDeleteProgram(Resources.maskedProgram);
 		if (Resources.paletteProgram != 0) glDeleteProgram(Resources.paletteProgram);
-		if (Resources.presentProgram != 0) glDeleteProgram(Resources.presentProgram);
+		gl_GLESInternalPresentDestroy();
+		gl_GLESInternalPortalDestroy();
 		if (Resources.sceneVertexBuffer != 0) glDeleteBuffers(1, &Resources.sceneVertexBuffer);
 		if (Resources.sceneIndexBuffer != 0) glDeleteBuffers(1, &Resources.sceneIndexBuffer);
 		if (Resources.sceneVertexArray != 0) glDeleteVertexArrays(1, &Resources.sceneVertexArray);
-		if (Resources.skyVertexBuffer != 0) glDeleteBuffers(1, &Resources.skyVertexBuffer);
-		if (Resources.skyIndexBuffer != 0) glDeleteBuffers(1, &Resources.skyIndexBuffer);
-		if (Resources.skyVertexArray != 0) glDeleteVertexArrays(1, &Resources.skyVertexArray);
 		if (Resources.vertexBuffer != 0) glDeleteBuffers(1, &Resources.vertexBuffer);
 		if (Resources.indexBuffer != 0) glDeleteBuffers(1, &Resources.indexBuffer);
 		if (Resources.vertexArray != 0) glDeleteVertexArrays(1, &Resources.vertexArray);
 		if (Resources.checkerTexture != 0) glDeleteTextures(1, &Resources.checkerTexture);
-		if (Resources.wipe.startTexture != 0) glDeleteTextures(1, &Resources.wipe.startTexture);
-		if (Resources.wipe.endTexture != 0) glDeleteTextures(1, &Resources.wipe.endTexture);
-		if (Resources.wipe.maskTexture != 0) glDeleteTextures(1, &Resources.wipe.maskTexture);
-		for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-			if (Resources.nativeTextures[i].texture != 0) glDeleteTextures(1, &Resources.nativeTextures[i].texture);
+		gl_GLESInternalWipeDestroy();
+		gl_GLESInternalDeleteMaterialTextures();
 		if (Resources.checkerSampler != 0) glDeleteSamplers(1, &Resources.checkerSampler);
 		if (Resources.sceneSampler != 0) glDeleteSamplers(1, &Resources.sceneSampler);
 		gl_GLES_DestroyRenderTarget(&Resources.sceneTarget);
@@ -562,18 +530,13 @@ namespace
 		Resources.fogMaskedProgram = 0;
 		Resources.maskedProgram = 0;
 		Resources.paletteProgram = 0;
-		Resources.presentProgram = 0;
 		Resources.sceneVertexBuffer = 0;
 		Resources.sceneIndexBuffer = 0;
 		Resources.sceneVertexArray = 0;
-		Resources.skyVertexBuffer = 0;
-		Resources.skyIndexBuffer = 0;
-		Resources.skyVertexArray = 0;
 		Resources.vertexBuffer = 0;
 		Resources.indexBuffer = 0;
 		Resources.vertexArray = 0;
 		Resources.checkerTexture = 0;
-		Resources.wipe = {};
 		Resources.checkerSampler = 0;
 		Resources.sceneSampler = 0;
 		Resources.textureFilter = -1;
@@ -684,24 +647,13 @@ namespace
 		Resources.fogMaskedDynamicLightTexture = -1;
 		Resources.fogMaskedClipPlane = -1;
 		Resources.fogMaskedClipPlaneEnabled = -1;
-		Resources.presentTexture = -1;
-		Resources.presentTextureTransform = -1;
-		Resources.presentDepth = -1;
-		Resources.presentWipeStart = -1;
-		Resources.presentWipeEnd = -1;
-		Resources.presentWipeMask = -1;
-		Resources.presentWipeProgress = -1;
-		Resources.presentWipeType = -1;
-		Resources.presentWipeActive = -1;
-		Resources.presentGamma = -1;
-		Resources.presentBrightness = -1;
-		Resources.presentContrast = -1;
 		Resources.fogColor = -1;
 		Resources.fogDensity = -1;
 		Resources.sceneIndexCount = 0;
 		Resources.sceneVertices.clear();
 		Resources.sceneIndices.clear();
 		Resources.sceneBatches.clear();
+		gl_GLESInternalSceneClearLights();
 		Resources.portalTargets.clear();
 		NativePortalCaptureStack.clear();
 		Resources.skyMaterial = NULL;
@@ -711,7 +663,7 @@ namespace
 		Resources.skyLayerXOffset = 0.0f;
 		Resources.skyLayerYOffset = 0.0f;
 		Resources.sky2 = false;
-		if (clearTextureCache) Resources.nativeTextures.clear();
+		if (clearTextureCache) gl_GLESInternalClearMaterials(false);
 		Resources.sceneReady = false;
 		memset(Resources.viewProjection, 0, sizeof(Resources.viewProjection));
 		Resources.ready = false;
@@ -724,24 +676,22 @@ namespace
 		Resources.fogMaskedProgram = 0;
 		Resources.maskedProgram = 0;
 		Resources.paletteProgram = 0;
-		Resources.presentProgram = 0;
+		gl_GLESInternalPresentContextLost();
+		gl_GLESInternalPortalContextLost();
 		Resources.sceneVertexBuffer = 0;
 		Resources.sceneIndexBuffer = 0;
 		Resources.sceneVertexArray = 0;
-		Resources.skyVertexBuffer = 0;
-		Resources.skyIndexBuffer = 0;
-		Resources.skyVertexArray = 0;
 		Resources.vertexBuffer = 0;
 		Resources.indexBuffer = 0;
 		Resources.vertexArray = 0;
 		Resources.checkerTexture = 0;
-		Resources.sceneTarget = {};
-		Resources.cameraTarget = {};
+		gl_GLES_InvalidateRenderTarget(&Resources.sceneTarget);
+		gl_GLES_InvalidateRenderTarget(&Resources.cameraTarget);
 		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
 		NativeOffscreenRender = false;
 		ResetNativeGlowLocations();
-		Resources.wipe = {};
+		gl_GLESInternalWipeContextLost();
 		Resources.checkerSampler = 0;
 		Resources.sceneSampler = 0;
 		Resources.textureFilter = -1;
@@ -846,24 +796,13 @@ namespace
 		Resources.fogMaskedDynamicLightTexture = -1;
 		Resources.fogMaskedClipPlane = -1;
 		Resources.fogMaskedClipPlaneEnabled = -1;
-		Resources.presentTexture = -1;
-		Resources.presentTextureTransform = -1;
-		Resources.presentDepth = -1;
-		Resources.presentWipeStart = -1;
-		Resources.presentWipeEnd = -1;
-		Resources.presentWipeMask = -1;
-		Resources.presentWipeProgress = -1;
-		Resources.presentWipeType = -1;
-		Resources.presentWipeActive = -1;
-		Resources.presentGamma = -1;
-		Resources.presentBrightness = -1;
-		Resources.presentContrast = -1;
 		Resources.fogColor = -1;
 		Resources.fogDensity = -1;
 		Resources.sceneIndexCount = 0;
 		Resources.sceneVertices.clear();
 		Resources.sceneIndices.clear();
 		Resources.sceneBatches.clear();
+		gl_GLESInternalSceneClearLights();
 		Resources.portalTargets.clear();
 		NativePortalCaptureStack.clear();
 		Resources.skyMaterial = NULL;
@@ -873,44 +812,12 @@ namespace
 		Resources.skyLayerXOffset = 0.0f;
 		Resources.skyLayerYOffset = 0.0f;
 		Resources.sky2 = false;
-		for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-			Resources.nativeTextures[i].texture = 0;
+		gl_GLESInternalInvalidateMaterials();
 		Resources.sceneReady = false;
 		memset(Resources.viewProjection, 0, sizeof(Resources.viewProjection));
 		Resources.ready = false;
-		Resources.stateWarningLogged = false;
+		gl_GLESInternalStateContextLost();
 		Resources.framebufferWarningLogged = false;
-	}
-
-	static void ResetState(int width, int height)
-	{
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		glViewport(0, 0, width, height);
-		glScissor(0, 0, width, height);
-		glDisable(GL_SCISSOR_TEST);
-		glEnable(GL_DEPTH_TEST);
-		glDepthMask(GL_TRUE);
-		glDepthFunc(GL_LESS);
-		glDisable(GL_STENCIL_TEST);
-		glStencilMask(0xffffffffu);
-		glStencilFunc(GL_ALWAYS, 0, 0xffffffffu);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-		glDisable(GL_CULL_FACE);
-		glCullFace(GL_BACK);
-		glDisable(GL_POLYGON_OFFSET_FILL);
-		glEnable(GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-		glBlendEquation(GL_FUNC_ADD);
-		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-		glActiveTexture(GL_TEXTURE0);
-		glBindSampler(0, 0);
-		glActiveTexture(GL_TEXTURE1);
-		glBindSampler(1, 0);
-		glActiveTexture(GL_TEXTURE2);
-		glBindSampler(2, 0);
-		glActiveTexture(GL_TEXTURE0);
-		glBindVertexArray(0);
-		glUseProgram(0);
 	}
 
 	static void BuildCheckerTexture()
@@ -975,222 +882,12 @@ namespace
 			if (!Resources.framebufferWarningLogged)
 			{
 				Resources.framebufferWarningLogged = true;
-				Printf("Android GLES render target could not be allocated at %dx%d.\n", width, height);
+				Printf("Zandronum GLES render target could not be allocated at %dx%d.\n", width, height);
 			}
 			return false;
 		}
 		Resources.sceneTarget.hostOwnsPresentation = true;
 		return true;
-	}
-
-	static bool BuildWipeTexture(GLuint &texture, int width, int height, bool linear = false)
-	{
-		if (texture != 0) return true;
-		if (width <= 0 || height <= 0) return false;
-		GLint previousActiveTexture = GL_TEXTURE0;
-		GLint previousTexture = 0;
-		glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
-		glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-		glGenTextures(1, &texture);
-		glBindTexture(GL_TEXTURE_2D, texture);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
-			GL_UNSIGNED_BYTE, NULL);
-		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-		glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-		if (CheckError("wipe texture allocation") != GL_NO_ERROR)
-		{
-			glDeleteTextures(1, &texture);
-			texture = 0;
-			return false;
-		}
-		return true;
-	}
-
-	static bool CaptureWipeTexture(GLuint texture)
-	{
-		if (texture == 0 || Resources.sceneTarget.resolveFramebuffer == 0) return false;
-		GLint previousDrawFramebuffer = 0;
-		GLint previousReadFramebuffer = 0;
-		GLint previousActiveTexture = GL_TEXTURE0;
-		GLint previousTexture = 0;
-		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
-		glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
-		glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
-		glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-		glBindFramebuffer(GL_FRAMEBUFFER, Resources.sceneTarget.resolveFramebuffer);
-		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-		{
-			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
-			glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-			return false;
-		}
-		glBindTexture(GL_TEXTURE_2D, texture);
-		glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0,
-			Resources.sceneTarget.renderWidth, Resources.sceneTarget.renderHeight);
-		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-		glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
-		return CheckError("wipe scene capture") == GL_NO_ERROR;
-	}
-
-	static void SetWipeMaskPixel(std::vector<BYTE> &pixels, int width, int x, int y, BYTE value)
-	{
-		const size_t offset = (static_cast<size_t>(y) * width + x) * 4;
-		pixels[offset + 0] = value;
-		pixels[offset + 1] = value;
-		pixels[offset + 2] = value;
-		pixels[offset + 3] = 255;
-	}
-
-	static bool UploadWipeMask()
-	{
-		FAndroidNativeWipe &wipe = Resources.wipe;
-		if (wipe.maskTexture == 0 || wipe.maskPixels.empty()) return false;
-		GLint previousActiveTexture = GL_TEXTURE0;
-		GLint previousTexture = 0;
-		glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
-		glActiveTexture(GL_TEXTURE3);
-		glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-		glBindTexture(GL_TEXTURE_2D, wipe.maskTexture);
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, wipe.maskWidth, wipe.maskHeight,
-			GL_RGBA, GL_UNSIGNED_BYTE, wipe.maskPixels.data());
-		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-		glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-		return CheckError("wipe mask upload") == GL_NO_ERROR;
-	}
-
-	static void BuildMeltMask()
-	{
-		FAndroidNativeWipe &wipe = Resources.wipe;
-		wipe.maskWidth = FAndroidNativeWipe::MeltWidth;
-		// Store each column's fall distance as a 16-bit value in a 1D mask.
-		// The present shader uses it to move the old column, rather than merely
-		// choosing between the old and new frame at one horizontal boundary.
-		wipe.maskHeight = 1;
-		wipe.maskPixels.resize(static_cast<size_t>(wipe.maskWidth) * wipe.maskHeight * 4);
-		for (int x = 0; x < FAndroidNativeWipe::MeltWidth; ++x)
-		{
-			const int y = std::max(0, std::min(static_cast<int>(FAndroidNativeWipe::MeltHeight), wipe.meltY[x]));
-			const unsigned int encoded = static_cast<unsigned int>(
-				(y * 65535 + FAndroidNativeWipe::MeltHeight / 2) /
-				FAndroidNativeWipe::MeltHeight);
-			const size_t offset = static_cast<size_t>(x) * 4;
-			wipe.maskPixels[offset + 0] = static_cast<BYTE>(encoded & 0xff);
-			wipe.maskPixels[offset + 1] = static_cast<BYTE>(encoded >> 8);
-			wipe.maskPixels[offset + 2] = 0;
-			wipe.maskPixels[offset + 3] = 255;
-		}
-	}
-
-	static void BuildBurnMask()
-	{
-		FAndroidNativeWipe &wipe = Resources.wipe;
-		wipe.maskWidth = FAndroidNativeWipe::BurnWidth;
-		wipe.maskHeight = FAndroidNativeWipe::BurnHeight;
-		wipe.maskPixels.resize(static_cast<size_t>(wipe.maskWidth) * wipe.maskHeight * 4);
-		for (int y = 0; y < FAndroidNativeWipe::BurnHeight; ++y)
-		{
-			for (int x = 0; x < FAndroidNativeWipe::BurnWidth; ++x)
-			{
-				const BYTE value = clamp<int>(wipe.burnArray[y * FAndroidNativeWipe::BurnWidth + x] * 2, 0, 255);
-				SetWipeMaskPixel(wipe.maskPixels, FAndroidNativeWipe::BurnWidth, x, y, value);
-			}
-		}
-	}
-
-	static void InitializeWipeState(int type)
-	{
-		FAndroidNativeWipe &wipe = Resources.wipe;
-		wipe.type = type;
-		wipe.lastTime = I_MSTime();
-		wipe.tickRemainderMs = 0;
-		wipe.simulatedTicks = 0;
-		wipe.maskWidth = 0;
-		wipe.maskHeight = 0;
-		wipe.maskPixels.clear();
-		if (type == wipe_Melt)
-		{
-			wipe.meltY[0] = -(M_Random() & 15);
-			for (int i = 1; i < FAndroidNativeWipe::MeltWidth; ++i)
-			{
-				const int offset = (M_Random() % 3) - 1;
-				wipe.meltY[i] = std::max(-15, std::min(0, wipe.meltY[i - 1] + offset));
-			}
-			BuildMeltMask();
-		}
-		else if (type == wipe_Burn)
-		{
-			wipe.burnDensity = 4;
-			wipe.burnTime = 0;
-			memset(wipe.burnArray, 0, sizeof(wipe.burnArray));
-			BuildBurnMask();
-		}
-	}
-
-	static bool AdvanceWipeTicks(int ticks)
-	{
-		FAndroidNativeWipe &wipe = Resources.wipe;
-		bool done = false;
-		while (ticks-- > 0)
-		{
-			++wipe.simulatedTicks;
-			if (wipe.type == wipe_Melt)
-			{
-				done = true;
-				for (int i = 0; i < FAndroidNativeWipe::MeltWidth; ++i)
-				{
-					if (wipe.meltY[i] < 0)
-					{
-						++wipe.meltY[i];
-						done = false;
-					}
-					else if (wipe.meltY[i] < FAndroidNativeWipe::MeltHeight)
-					{
-						const int dy = wipe.meltY[i] < 16 ? wipe.meltY[i] + 1 : 8;
-						wipe.meltY[i] = std::min(wipe.meltY[i] + dy, static_cast<int>(FAndroidNativeWipe::MeltHeight));
-						done = false;
-					}
-				}
-				BuildMeltMask();
-			}
-			else if (wipe.type == wipe_Burn)
-			{
-				wipe.burnTime++;
-				done = false;
-				int subTicks = 2;
-				while (!done && subTicks-- > 0)
-				{
-					wipe.burnDensity = wipe_CalcBurn(wipe.burnArray,
-						FAndroidNativeWipe::BurnWidth, FAndroidNativeWipe::BurnHeight,
-						wipe.burnDensity);
-					done = wipe.burnDensity < 0;
-				}
-				BuildBurnMask();
-			}
-			else
-			{
-				done = wipe.simulatedTicks >= 32;
-			}
-		}
-		if (wipe.type == wipe_Burn && wipe.burnTime > 40)
-			done = true;
-		if (wipe.type == wipe_Fade)
-			return wipe.simulatedTicks >= 32;
-		return done;
-	}
-
-	static void AbortWipe()
-	{
-		if (Resources.wipe.startTexture != 0) glDeleteTextures(1, &Resources.wipe.startTexture);
-		if (Resources.wipe.endTexture != 0) glDeleteTextures(1, &Resources.wipe.endTexture);
-		if (Resources.wipe.maskTexture != 0) glDeleteTextures(1, &Resources.wipe.maskTexture);
-		Resources.wipe = {};
 	}
 
 	static void BuildViewProjection(float cameraX, float cameraY, float cameraZ,
@@ -1301,23 +998,9 @@ namespace
 		Resources.viewContract.active = true;
 	}
 
-	static void PublishFrameContract()
-	{
-		Resources.viewContract.viewportX = 0;
-		Resources.viewContract.viewportY = 0;
-		Resources.viewContract.viewportWidth = Resources.sceneTarget.renderWidth;
-		Resources.viewContract.viewportHeight = Resources.sceneTarget.renderHeight;
-		FGLESFrameDescriptor frame = {};
-		frame.frameNumber = Resources.frame;
-		frame.timeSeconds = static_cast<double>(Resources.frame) / 35.0;
-		frame.targetWidth = Resources.sceneTarget.renderWidth;
-		frame.targetHeight = Resources.sceneTarget.renderHeight;
-		gl_GLES_SetFrameContract(frame, Resources.sceneTarget, Resources.viewContract);
-	}
-
 	static unsigned int AddSceneVertex(const FSceneVertex &vertex)
 	{
-		if (Resources.sceneVertices.size() >= AndroidNativeMaxSceneVertices) return 0xffffffffu;
+		if (!CanAppendSceneGeometry(1, 0, "vertex")) return 0xffffffffu;
 		Resources.sceneVertices.push_back(vertex);
 		return static_cast<unsigned int>(Resources.sceneVertices.size() - 1);
 	}
@@ -1325,20 +1008,55 @@ namespace
 	static void CopyNativeLightData(FSceneBatch &batch, const float *lightData,
 		const unsigned int *lightCounts)
 	{
-		if (lightData == NULL || lightCounts == NULL) return;
-		// The engine stores two vec4 records per light: position and color.
-		batch.lightNormalCount = std::min(lightCounts[0] / 2, ANDROID_NATIVE_MAX_LIGHTS);
-		batch.lightSubtractiveCount = std::min(lightCounts[1] / 2, ANDROID_NATIVE_MAX_LIGHTS);
-		batch.lightCount = std::min(lightCounts[2] / 2, ANDROID_NATIVE_MAX_LIGHTS);
-		if (batch.lightSubtractiveCount > batch.lightCount) batch.lightSubtractiveCount = batch.lightCount;
-		if (batch.lightNormalCount > batch.lightSubtractiveCount) batch.lightNormalCount = batch.lightSubtractiveCount;
-		for (unsigned int light = 0; light < batch.lightCount; ++light)
-		{
-			memcpy(batch.lightPositionRadius + light * 4, lightData + light * 8,
-				4 * sizeof(float));
-			memcpy(batch.lightColor + light * 4, lightData + light * 8 + 4,
-				4 * sizeof(float));
-		}
+		FGLESSceneLightSelection selection = {};
+		gl_GLESInternalSceneAppendLights(lightData, lightCounts, &selection);
+		batch.lightOffset = selection.streamOffset;
+		batch.lightCount = selection.lightCount;
+		batch.lightNormalCount = selection.normalCount;
+		batch.lightSubtractiveCount = selection.subtractiveCount;
+	}
+
+	static void GetNativeLightUpload(const FSceneBatch &batch, unsigned int firstLight,
+		unsigned int maxLightCount,
+		const GLfloat *&positions, const GLfloat *&colors, unsigned int &normalCount,
+		unsigned int &subtractiveCount, unsigned int &lightCount)
+	{
+		FGLESSceneLightSelection selection = {};
+		selection.streamOffset = batch.lightOffset;
+		selection.lightCount = batch.lightCount;
+		selection.normalCount = batch.lightNormalCount;
+		selection.subtractiveCount = batch.lightSubtractiveCount;
+		FGLESSceneLightUpload upload = {};
+		gl_GLESInternalSceneGetLightUpload(selection, firstLight, maxLightCount, &upload);
+		positions = upload.positions;
+		colors = upload.colors;
+		normalCount = upload.normalCount;
+		subtractiveCount = upload.subtractiveCount;
+		lightCount = upload.lightCount;
+	}
+
+	static void DrawNativeLightOverflow(const FSceneBatch &batch, GLuint dynamicLightTexture,
+		GLuint program, GLint lightPositionRadius, GLint lightColor, GLint lightCounts,
+		GLint projectedLights, GLsizei indexCount, size_t firstIndex)
+	{
+		FGLESSceneLightPass pass = {};
+		pass.selection.streamOffset = batch.lightOffset;
+		pass.selection.lightCount = batch.lightCount;
+		pass.selection.normalCount = batch.lightNormalCount;
+		pass.selection.subtractiveCount = batch.lightSubtractiveCount;
+		memcpy(pass.planeNormal, batch.lightPlaneNormal, sizeof(pass.planeNormal));
+		pass.dynamicLightTexture = dynamicLightTexture;
+		pass.checkerTexture = Resources.checkerTexture;
+		pass.program = program;
+		pass.positionUniform = lightPositionRadius;
+		pass.colorUniform = lightColor;
+		pass.countsUniform = lightCounts;
+		pass.projectedUniform = projectedLights;
+		pass.indexCount = indexCount;
+		pass.firstIndex = firstIndex;
+		pass.translucent = batch.translucent;
+		pass.blendMode = static_cast<int>(batch.blendMode);
+		gl_GLESInternalSceneDrawLightOverflow(pass);
 	}
 
 	static void SetLightPlaneNormal(FSceneBatch &batch, const FSceneVertex &a,
@@ -1370,15 +1088,24 @@ namespace
 		memcpy(batch.clipPlane, Resources.clipPlane, sizeof(batch.clipPlane));
 		batch.portalId = NativePortalCaptureStack.empty() ? -1 :
 			static_cast<int>(NativePortalCaptureStack.back());
+		batch.wipeOverlay = NativeWipeOverlayCollecting;
+	}
+
+	static bool HasNativeWipeOverlay()
+	{
+		for (size_t i = 0; i < Resources.sceneBatches.size(); ++i)
+			if (Resources.sceneBatches[i].wipeOverlay) return true;
+		return false;
 	}
 
 	static void AddSceneQuad(const FSceneVertex &a, const FSceneVertex &b,
 		const FSceneVertex &c, const FSceneVertex &d, GLuint texture, bool masked, bool fog, bool translucent, bool repeat,
-		EAndroidNativeBlendMode blendMode, const float *fogColor, float fogDensity, unsigned int materialFlags,
+		EGLESBlendMode blendMode, const float *fogColor, float fogDensity, unsigned int materialFlags,
 		const float *lightData, const unsigned int *lightCounts, GLuint brightmap = 0,
 		int brightmapDesaturation = 0, const float *topGlowColor = NULL,
 		const float *bottomGlowColor = NULL)
 	{
+		if (!CanAppendSceneGeometry(4, 6, "quad")) return;
 		const unsigned int first = AddSceneVertex(a);
 		const unsigned int second = AddSceneVertex(b);
 		const unsigned int third = AddSceneVertex(c);
@@ -1407,7 +1134,7 @@ namespace
 		batch.brightmapDesaturation = brightmapDesaturation;
 		batch.masked = masked;
 		batch.fog = fog;
-		batch.translucent = translucent || blendMode != ANDROID_BLEND_OPAQUE;
+		batch.translucent = translucent || blendMode != GLES_BLEND_OPAQUE;
 		batch.repeat = repeat;
 		batch.palette = IsPaletteTexture(texture);
 		batch.materialFlags = materialFlags;
@@ -1429,14 +1156,38 @@ namespace
 
 	static void AddHUDQuad(const FSceneVertex &a, const FSceneVertex &b,
 		const FSceneVertex &c, const FSceneVertex &d, GLuint texture, bool masked,
-		EAndroidNativeBlendMode blendMode, unsigned int materialFlags)
+		EGLESBlendMode blendMode, unsigned int materialFlags)
 	{
 		const size_t batchCount = Resources.sceneBatches.size();
-		const bool translucent = masked || blendMode != ANDROID_BLEND_OPAQUE || a.a < 0.999f ||
+		const bool translucent = masked || blendMode != GLES_BLEND_OPAQUE || a.a < 0.999f ||
 			b.a < 0.999f || c.a < 0.999f || d.a < 0.999f;
 		AddSceneQuad(a, b, c, d, texture, masked, false, translucent, false, blendMode, NULL, 0.0f, materialFlags,
 			NULL, NULL);
-		if (Resources.sceneBatches.size() > batchCount) Resources.sceneBatches.back().hud = true;
+		if (Resources.sceneBatches.size() <= batchCount) return;
+		FSceneBatch &batch = Resources.sceneBatches.back();
+		batch.hud = true;
+		if (!batch.wipeOverlay || Resources.sceneBatches.size() < 2) return;
+
+		FSceneBatch &previous = Resources.sceneBatches[Resources.sceneBatches.size() - 2];
+		const bool compatible = previous.hud && previous.wipeOverlay &&
+			previous.firstIndex + previous.indexCount == batch.firstIndex &&
+			previous.texture == batch.texture && previous.brightmap == batch.brightmap &&
+			previous.brightmapDesaturation == batch.brightmapDesaturation &&
+			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.translucent == batch.translucent && previous.repeat == batch.repeat &&
+			previous.palette == batch.palette && previous.model == batch.model &&
+			previous.cullBackFaces == batch.cullBackFaces &&
+			previous.materialFlags == batch.materialFlags &&
+			previous.blendMode == batch.blendMode && previous.portalId == batch.portalId &&
+			previous.clipPlaneEnabled == batch.clipPlaneEnabled &&
+			memcmp(previous.viewProjection, batch.viewProjection, sizeof(batch.viewProjection)) == 0 &&
+			memcmp(previous.cameraPosition, batch.cameraPosition, sizeof(batch.cameraPosition)) == 0 &&
+			memcmp(previous.clipPlane, batch.clipPlane, sizeof(batch.clipPlane)) == 0;
+		if (compatible)
+		{
+			previous.indexCount += batch.indexCount;
+			Resources.sceneBatches.pop_back();
+		}
 	}
 
 	static void UploadSceneGeometry()
@@ -1444,29 +1195,24 @@ namespace
 		Resources.sceneIndexCount = static_cast<GLsizei>(Resources.sceneIndices.size());
 		Resources.sceneReady = Resources.sceneIndexCount > 0;
 		if (!Resources.sceneReady) return;
-		glBindVertexArray(Resources.sceneVertexArray);
-		glBindBuffer(GL_ARRAY_BUFFER, Resources.sceneVertexBuffer);
-		glBufferData(GL_ARRAY_BUFFER, Resources.sceneVertices.size() * sizeof(FSceneVertex),
-			&Resources.sceneVertices[0], GL_DYNAMIC_DRAW);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Resources.sceneIndexBuffer);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, Resources.sceneIndices.size() * sizeof(GLuint),
-			&Resources.sceneIndices[0], GL_DYNAMIC_DRAW);
-		glBindVertexArray(0);
-		CheckError("scene geometry upload");
+		gl_GLESInternalSceneUploadGeometry(Resources.sceneVertexArray,
+			Resources.sceneVertexBuffer, Resources.sceneIndexBuffer,
+			&Resources.sceneVertices[0], Resources.sceneVertices.size() * sizeof(FSceneVertex),
+			Resources.sceneIndices.data(), Resources.sceneIndices.size());
 	}
 
 	static void AddSkyMaskCaps(FNativeSkyRecord &sky)
 	{
 		if (sky.capsAdded || !sky.capEligible) return;
-		if (Resources.sceneVertices.size() + 8 > AndroidNativeMaxSceneVertices)
-		{
-			++sky.rejected;
-			return;
-		}
 		const float extent = 32767.0f;
 		const float heights[2] = { extent, -extent };
 		for (int cap = 0; cap < 2; ++cap)
 		{
+			if (!CanAppendSceneGeometry(4, 6, "sky cap"))
+			{
+				++sky.rejected;
+				return;
+			}
 			const unsigned int firstVertex = static_cast<unsigned int>(Resources.sceneVertices.size());
 			const float y = heights[cap];
 			const float positions[12] =
@@ -1502,249 +1248,6 @@ namespace
 			sky.maskBatches.push_back(Resources.sceneBatches.size() - 1);
 		}
 		sky.capsAdded = true;
-	}
-
-	static GLsizei UploadSkyGeometry(FMaterial *material, float xOffset, float yOffset, bool mirrored)
-	{
-		// Keep Zandronum's four-row, 60-degree dome and expose each primitive range explicitly.
-		const float radius = 10000.0f;
-		const int rows = 4;
-		const int columns = 4 * std::max(gl_sky_detail > 0 ? gl_sky_detail : 1, 1);
-		Resources.skyColumns = columns;
-		std::vector<FSceneVertex> vertices;
-		std::vector<GLushort> indices;
-		vertices.reserve((columns + rows * (columns + 1)) * 2);
-		indices.reserve((columns * 3 + rows * (columns + 1) * 2) * 2);
-		Resources.skyUpperCap = {};
-		Resources.skyLowerCap = {};
-		for (int row = 0; row < rows; ++row)
-		{
-			Resources.skyUpperStrips[row] = {};
-			Resources.skyLowerStrips[row] = {};
-		}
-		const int textureWidth = material != NULL ?
-			std::max(1, material->TextureWidth(GLUSE_TEXTURE)) : 256;
-		const int textureHeight = material != NULL ?
-			std::max(1, material->TextureHeight(GLUSE_TEXTURE)) : 128;
-		float timesRepeat = static_cast<float>(static_cast<short>(4.0f * (256.0f / textureWidth)));
-		if (timesRepeat == 0.0f) timesRepeat = 1.0f;
-		const float textureVOffset = yOffset / static_cast<float>(textureHeight);
-		float verticalScale = 1.0f;
-		float verticalOffset = 0.0f;
-		float textureVScale = 1.0f;
-		if (material == NULL)
-		{
-			// The source sky-fog pass renders the unscaled dome without a material.
-		}
-		else if (textureHeight < 128)
-		{
-			verticalOffset = -1250.0f;
-			verticalScale = 128.0f / 230.0f;
-			// Keep Zandronum's integer small-sky texture scale.
-			textureVScale = static_cast<float>(128 / textureHeight);
-		}
-		else if (textureHeight < 200)
-		{
-			verticalOffset = -1250.0f;
-			verticalScale = textureHeight / 230.0f;
-		}
-		else if (textureHeight <= 240)
-		{
-			verticalOffset = (200.0f - textureHeight + material->tex->SkyOffset + skyoffset) * 57.0f;
-			verticalScale = 1.0f + ((textureHeight - 200.0f) / 200.0f) * 1.17f;
-		}
-		else
-		{
-			verticalOffset = (-40.0f + material->tex->SkyOffset + skyoffset) * 57.0f;
-			verticalScale = 1.2f * 1.17f;
-			textureVScale = 240.0f / textureHeight;
-		}
-		const float skyCenter[3] = { Resources.cameraX, Resources.cameraZ + verticalOffset, Resources.cameraY };
-		const float rotation = (-180.0f + xOffset) * 3.14159265359f / 180.0f;
-		const float rotationCos = cosf(rotation);
-		const float rotationSin = sinf(rotation);
-		auto addVertex = [&](int row, int column, bool lower)
-		{
-			const float side = 1.04719755f * (rows - row) / rows;
-			const float ringRadius = radius * cosf(side);
-			float ringHeight = radius * sinf(side);
-			if (lower) ringHeight = -ringHeight;
-			ringHeight *= verticalScale;
-			// The source translates non-terminal rows after scaling the dome.
-			if (row != rows) ringHeight += 300.0f;
-			const float angle = 6.28318531f * column / columns;
-			const float localX = -ringRadius * cosf(angle);
-			const float localZ = ringRadius * sinf(angle);
-			const float sourceU = -timesRepeat * column / columns;
-			const float u = mirrored ? -sourceU : sourceU;
-			const float v = lower ? (1.0f + (rows - row) / static_cast<float>(rows)) :
-				(row / static_cast<float>(rows));
-			const float rotatedX = rotationCos * localX + rotationSin * localZ;
-			const float rotatedZ = -rotationSin * localX + rotationCos * localZ;
-			FSceneVertex vertex = {};
-			vertex.x = skyCenter[0] + rotatedX;
-			vertex.y = skyCenter[1] + ringHeight - 1.0f;
-			vertex.z = skyCenter[2] + rotatedZ;
-			vertex.u = u;
-			vertex.v = v * textureVScale + textureVOffset;
-			vertex.r = vertex.g = vertex.b = 1.0f;
-			vertex.a = row == 0 ? 0.0f : 1.0f;
-			vertices.push_back(vertex);
-		};
-		auto addHemisphere = [&](bool lower)
-		{
-			FSkyPrimitiveRange &cap = lower ? Resources.skyLowerCap : Resources.skyUpperCap;
-			FSkyPrimitiveRange *strips = lower ? Resources.skyLowerStrips : Resources.skyUpperStrips;
-			// Keep the cap independent from the alpha-faded strips. A center and
-			// duplicated perimeter make the solid polygon closed at every detail.
-			const int capRow = material == NULL ? 0 : 1;
-			const float capSide = 1.04719755f * (rows - capRow) / rows;
-			const float capHeight = radius * sinf(capSide) * verticalScale;
-			FSceneVertex capCenter = {};
-			capCenter.x = skyCenter[0];
-			capCenter.y = skyCenter[1] + (lower ? -capHeight : capHeight) + 300.0f - 1.0f;
-			capCenter.z = skyCenter[2];
-			capCenter.u = capCenter.v = 0.0f;
-			capCenter.r = capCenter.g = capCenter.b = capCenter.a = 1.0f;
-			const GLushort capCenterVertex = static_cast<GLushort>(vertices.size());
-			vertices.push_back(capCenter);
-			const GLushort firstVertex = static_cast<GLushort>(vertices.size());
-			for (int column = 0; column <= columns; ++column)
-				addVertex(capRow, column, lower);
-			cap.firstIndex = static_cast<GLsizei>(indices.size());
-			for (int column = 0; column < columns; ++column)
-			{
-				indices.push_back(capCenterVertex);
-				indices.push_back(static_cast<GLushort>(firstVertex + column));
-				indices.push_back(static_cast<GLushort>(firstVertex + column + 1));
-			}
-			cap.indexCount = static_cast<GLsizei>(indices.size()) - cap.firstIndex;
-			for (int row = 0; row < rows; ++row)
-			{
-				const GLushort rowStart = static_cast<GLushort>(vertices.size());
-				for (int column = 0; column <= columns; ++column)
-				{
-					addVertex(row + (lower ? 1 : 0), column, lower);
-					addVertex(row + (lower ? 0 : 1), column, lower);
-				}
-				strips[row].firstIndex = static_cast<GLsizei>(indices.size());
-				for (int column = 0; column < 2 * (columns + 1); ++column)
-					indices.push_back(static_cast<GLushort>(rowStart + column));
-				strips[row].indexCount = static_cast<GLsizei>(indices.size()) - strips[row].firstIndex;
-			}
-		};
-		addHemisphere(false);
-		addHemisphere(true);
-		glBindVertexArray(Resources.skyVertexArray);
-		glBindBuffer(GL_ARRAY_BUFFER, Resources.skyVertexBuffer);
-		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(FSceneVertex), &vertices[0], GL_DYNAMIC_DRAW);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Resources.skyIndexBuffer);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLushort), &indices[0], GL_DYNAMIC_DRAW);
-		glBindVertexArray(0);
-		return static_cast<GLsizei>(indices.size());
-	}
-
-	static void RotateSkyboxPoint(float x, float y, float z, float angle,
-		bool sky2, float &outX, float &outY, float &outZ)
-	{
-		const FVector3 &sourceAxis = sky2 ? glset.skyrotatevector2 : glset.skyrotatevector;
-		float axisX = sourceAxis.X;
-		float axisY = sourceAxis.Z;
-		float axisZ = sourceAxis.Y;
-		const float axisLength = sqrtf(axisX * axisX + axisY * axisY + axisZ * axisZ);
-		if (axisLength > 0.0001f)
-		{
-			axisX /= axisLength;
-			axisY /= axisLength;
-			axisZ /= axisLength;
-		}
-		else
-		{
-			axisX = 0.0f;
-			axisY = 0.0f;
-			axisZ = 1.0f;
-		}
-		const float radians = angle * 3.14159265359f / 180.0f;
-		const float sine = sinf(radians);
-		const float cosine = cosf(radians);
-		const float dot = axisX * x + axisY * y + axisZ * z;
-		const float crossX = axisY * z - axisZ * y;
-		const float crossY = axisZ * x - axisX * z;
-		const float crossZ = axisX * y - axisY * x;
-		const float oneMinusCosine = 1.0f - cosine;
-		outX = x * cosine + crossX * sine + axisX * dot * oneMinusCosine;
-		outY = y * cosine + crossY * sine + axisY * dot * oneMinusCosine;
-		outZ = z * cosine + crossZ * sine + axisZ * dot * oneMinusCosine;
-	}
-
-	static void UploadSkyboxGeometry(float xOffset, bool sky2, bool fliptop)
-	{
-		static const float sidePositions[4][4][3] =
-		{
-			{ { 128.0f, 128.0f, -128.0f }, { -128.0f, 128.0f, -128.0f },
-				{ -128.0f, -128.0f, -128.0f }, { 128.0f, -128.0f, -128.0f } },
-			{ { -128.0f, 128.0f, -128.0f }, { -128.0f, 128.0f, 128.0f },
-				{ -128.0f, -128.0f, 128.0f }, { -128.0f, -128.0f, -128.0f } },
-			{ { -128.0f, 128.0f, 128.0f }, { 128.0f, 128.0f, 128.0f },
-				{ 128.0f, -128.0f, 128.0f }, { -128.0f, -128.0f, 128.0f } },
-			{ { 128.0f, 128.0f, 128.0f }, { 128.0f, 128.0f, -128.0f },
-				{ 128.0f, -128.0f, -128.0f }, { 128.0f, -128.0f, 128.0f } }
-		};
-		static const float topPositions[2][4][3] =
-		{
-			{ { 128.0f, 128.0f, -128.0f }, { -128.0f, 128.0f, -128.0f },
-				{ -128.0f, 128.0f, 128.0f }, { 128.0f, 128.0f, 128.0f } },
-			{ { 128.0f, 128.0f, 128.0f }, { -128.0f, 128.0f, 128.0f },
-				{ -128.0f, 128.0f, -128.0f }, { 128.0f, 128.0f, -128.0f } }
-		};
-		static const float bottomPositions[4][3] =
-		{
-			{ 128.0f, -128.0f, -128.0f }, { -128.0f, -128.0f, -128.0f },
-			{ -128.0f, -128.0f, 128.0f }, { 128.0f, -128.0f, 128.0f }
-		};
-		std::vector<FSceneVertex> vertices;
-		std::vector<GLushort> indices;
-		vertices.reserve(24);
-		indices.reserve(36);
-		const float centerX = Resources.cameraX;
-		const float centerY = Resources.cameraZ;
-		const float centerZ = Resources.cameraY;
-		const float rotation = -180.0f + xOffset;
-		for (int face = 0; face < 6; ++face)
-		{
-			Resources.skyboxFaces[face] = {};
-			const GLushort firstVertex = static_cast<GLushort>(vertices.size());
-			for (int vertexIndex = 0; vertexIndex < 4; ++vertexIndex)
-			{
-				const float *position = face < 4 ? sidePositions[face][vertexIndex] :
-					(face == 4 ? topPositions[fliptop ? 1 : 0][vertexIndex] : bottomPositions[vertexIndex]);
-				float rotatedX, rotatedY, rotatedZ;
-				RotateSkyboxPoint(position[0], position[1], position[2], rotation, sky2,
-					rotatedX, rotatedY, rotatedZ);
-				FSceneVertex vertex = {};
-				vertex.x = centerX + rotatedX;
-				vertex.y = centerY + rotatedY;
-				vertex.z = centerZ + rotatedZ;
-				vertex.u = vertexIndex == 1 || vertexIndex == 2 ? 1.0f : 0.0f;
-				vertex.v = vertexIndex >= 2 ? 1.0f : 0.0f;
-				vertex.r = vertex.g = vertex.b = vertex.a = 1.0f;
-				vertices.push_back(vertex);
-			}
-			Resources.skyboxFaces[face].firstIndex = static_cast<GLsizei>(indices.size());
-			indices.push_back(firstVertex + 0);
-			indices.push_back(firstVertex + 1);
-			indices.push_back(firstVertex + 2);
-			indices.push_back(firstVertex + 2);
-			indices.push_back(firstVertex + 3);
-			indices.push_back(firstVertex + 0);
-			Resources.skyboxFaces[face].indexCount = 6;
-		}
-		glBindVertexArray(Resources.skyVertexArray);
-		glBindBuffer(GL_ARRAY_BUFFER, Resources.skyVertexBuffer);
-		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(FSceneVertex), &vertices[0], GL_DYNAMIC_DRAW);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Resources.skyIndexBuffer);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLushort), &indices[0], GL_DYNAMIC_DRAW);
-		glBindVertexArray(0);
 	}
 
 	static bool BuildResources(int width, int height)
@@ -1785,9 +1288,10 @@ namespace
 			"uniform int u_brightmap_desaturation;\n"
 			"uniform int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[16];\n"
-			"uniform vec4 u_light_color[16];\n"
+			"uniform vec4 u_light_position_radius[32];\n"
+			"uniform vec4 u_light_color[32];\n"
 			"uniform ivec3 u_light_counts;\n"
+			"uniform int u_light_only_mode;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1797,8 +1301,8 @@ namespace
 			"uniform vec4 u_glow_bottom_color;\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 16; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
 		static const char *maskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1815,9 +1319,10 @@ namespace
 			"uniform float u_alpha_cutoff;\n"
 			"uniform int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[16];\n"
-			"uniform vec4 u_light_color[16];\n"
+			"uniform vec4 u_light_position_radius[32];\n"
+			"uniform vec4 u_light_color[32];\n"
 			"uniform ivec3 u_light_counts;\n"
+			"uniform int u_light_only_mode;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1827,8 +1332,8 @@ namespace
 			"uniform vec4 u_glow_bottom_color;\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 16; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; if (texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; if (texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
 		static const char *fogFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1847,9 +1352,10 @@ namespace
 			"uniform float u_fog_density;\n"
 			"uniform int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[16];\n"
-			"uniform vec4 u_light_color[16];\n"
+			"uniform vec4 u_light_position_radius[32];\n"
+			"uniform vec4 u_light_color[32];\n"
 			"uniform ivec3 u_light_counts;\n"
+			"uniform int u_light_only_mode;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1859,8 +1365,8 @@ namespace
 			"uniform vec4 u_glow_bottom_color;\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 16; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
 		static const char *fogMaskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1880,9 +1386,10 @@ namespace
 			"uniform float u_alpha_cutoff;\n"
 			"uniform int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[16];\n"
-			"uniform vec4 u_light_color[16];\n"
+			"uniform vec4 u_light_position_radius[32];\n"
+			"uniform vec4 u_light_color[32];\n"
 			"uniform ivec3 u_light_counts;\n"
+			"uniform int u_light_only_mode;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1892,8 +1399,8 @@ namespace
 			"uniform vec4 u_glow_bottom_color;\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 16; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; if (texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; if (texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
 		static const char *paletteFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1909,9 +1416,10 @@ namespace
 			"uniform int u_brightmap_desaturation;\n"
 			"uniform int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[16];\n"
-			"uniform vec4 u_light_color[16];\n"
+			"uniform vec4 u_light_position_radius[32];\n"
+			"uniform vec4 u_light_color[32];\n"
 			"uniform ivec3 u_light_counts;\n"
+			"uniform int u_light_only_mode;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1921,42 +1429,16 @@ namespace
 			"uniform vec4 u_glow_bottom_color;\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 16; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
-		static const char *presentVertexSource =
-			"#version 320 es\n"
-			"layout(location = 0) in vec3 a_position;\n"
-			"layout(location = 1) in vec2 a_uv;\n"
-			"uniform vec4 u_texture_transform;\n"
-			"uniform float u_depth;\n"
-			"out vec2 v_uv;\n"
-			"void main() { gl_Position = vec4(a_position.xy, u_depth, 1.0); v_uv = a_uv * u_texture_transform.xy + u_texture_transform.zw; }\n";
-		static const char *presentFragmentSource =
-			"#version 320 es\n"
-			"precision highp float;\n"
-			"in vec2 v_uv;\n"
-			"layout(location = 0) out vec4 frag_color;\n"
-			"uniform sampler2D u_texture;\n"
-			"uniform sampler2D u_wipe_start;\n"
-			"uniform sampler2D u_wipe_end;\n"
-			"uniform sampler2D u_wipe_mask;\n"
-			"uniform float u_wipe_progress;\n"
-			"uniform int u_wipe_type;\n"
-			"uniform bool u_wipe_active;\n"
-			"uniform float u_gamma;\n"
-			"uniform float u_brightness;\n"
-			"uniform float u_contrast;\n"
-			"vec4 wipe_color() { vec4 current = texture(u_texture, v_uv); if (!u_wipe_active) return current; vec4 start = texture(u_wipe_start, v_uv); vec4 finish = texture(u_wipe_end, v_uv); float progress = clamp(u_wipe_progress, 0.0, 1.0); if (u_wipe_type == 1) { float column = floor(clamp(v_uv.x, 0.0, 0.999999) * 320.0); vec4 packed = texture(u_wipe_mask, vec2((column + 0.5) / 320.0, 0.5)); float encoded = floor(packed.r * 255.0 + 0.5) + floor(packed.g * 255.0 + 0.5) * 256.0; float fall = encoded / 65535.0 * 200.0; float fallUv = fall / 200.0; if (v_uv.y <= 1.0 - fallUv) return texture(u_wipe_start, vec2(v_uv.x, clamp(v_uv.y + fallUv, 0.0, 1.0))); return finish; } if (u_wipe_type == 2) { float burn = texture(u_wipe_mask, v_uv).r; return mix(start, finish, burn); } return mix(start, finish, progress); }\n"
-			"void main() { vec4 color = wipe_color(); color.rgb = max((color.rgb - 0.5) * u_contrast + 0.5 + u_brightness * 0.5, vec3(0.0)); color.rgb = pow(color.rgb, vec3(1.0 / max(u_gamma, 0.1))); frag_color = color; }\n";
-
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a *= texel.r * v_color.r; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
 		Resources.sceneProgram = LinkProgram(sceneVertexSource, sceneFragmentSource, "opaque scene");
 		Resources.maskedProgram = LinkProgram(sceneVertexSource, maskedFragmentSource, "masked scene");
 		Resources.fogProgram = LinkProgram(sceneVertexSource, fogFragmentSource, "fogged scene");
 		Resources.fogMaskedProgram = LinkProgram(sceneVertexSource, fogMaskedFragmentSource, "fogged masked scene");
-		const char *paletteSource = gl_android_shader_test_failure ?
+		const char *paletteSource = gl_gles_shader_test_failure ?
 			"#version 320 es\nthis is an intentional shader test failure\n" : paletteFragmentSource;
 		Resources.paletteProgram = LinkProgram(sceneVertexSource, paletteSource, "paletted/translated scene", "MATERIAL_PALETTE");
-		Resources.presentProgram = LinkProgram(presentVertexSource, presentFragmentSource, "present");
+		if (!gl_GLESInternalPresentInitialize() || !gl_GLESInternalPortalInitialize()) return false;
 		Resources.sceneTextureUniform = glGetUniformLocation(Resources.sceneProgram, "u_texture");
 		Resources.sceneBrightmapUniform = glGetUniformLocation(Resources.sceneProgram, "u_brightmap");
 		Resources.sceneUseBrightmap = glGetUniformLocation(Resources.sceneProgram, "u_use_brightmap");
@@ -2065,18 +1547,6 @@ namespace
 		Resources.fogMaskedDynamicLightTexture = glGetUniformLocation(Resources.fogMaskedProgram, "u_dynamic_light_texture");
 		Resources.fogMaskedClipPlane = glGetUniformLocation(Resources.fogMaskedProgram, "u_clip_plane");
 		Resources.fogMaskedClipPlaneEnabled = glGetUniformLocation(Resources.fogMaskedProgram, "u_clip_plane_enabled");
-		Resources.presentTexture = glGetUniformLocation(Resources.presentProgram, "u_texture");
-		Resources.presentTextureTransform = glGetUniformLocation(Resources.presentProgram, "u_texture_transform");
-		Resources.presentDepth = glGetUniformLocation(Resources.presentProgram, "u_depth");
-		Resources.presentWipeStart = glGetUniformLocation(Resources.presentProgram, "u_wipe_start");
-		Resources.presentWipeEnd = glGetUniformLocation(Resources.presentProgram, "u_wipe_end");
-		Resources.presentWipeMask = glGetUniformLocation(Resources.presentProgram, "u_wipe_mask");
-		Resources.presentWipeProgress = glGetUniformLocation(Resources.presentProgram, "u_wipe_progress");
-		Resources.presentWipeType = glGetUniformLocation(Resources.presentProgram, "u_wipe_type");
-		Resources.presentWipeActive = glGetUniformLocation(Resources.presentProgram, "u_wipe_active");
-		Resources.presentGamma = glGetUniformLocation(Resources.presentProgram, "u_gamma");
-		Resources.presentBrightness = glGetUniformLocation(Resources.presentProgram, "u_brightness");
-		Resources.presentContrast = glGetUniformLocation(Resources.presentProgram, "u_contrast");
 
 		static const FBootstrapVertex vertices[] =
 		{
@@ -2124,23 +1594,6 @@ namespace
 		glEnableVertexAttribArray(4);
 		glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(12 * sizeof(GLfloat)));
 		glBindVertexArray(0);
-		glGenVertexArrays(1, &Resources.skyVertexArray);
-		glGenBuffers(1, &Resources.skyVertexBuffer);
-		glGenBuffers(1, &Resources.skyIndexBuffer);
-		glBindVertexArray(Resources.skyVertexArray);
-		glBindBuffer(GL_ARRAY_BUFFER, Resources.skyVertexBuffer);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Resources.skyIndexBuffer);
-		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(0));
-		glEnableVertexAttribArray(1);
-		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(6 * sizeof(GLfloat)));
-		glEnableVertexAttribArray(2);
-		glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(8 * sizeof(GLfloat)));
-		glEnableVertexAttribArray(3);
-		glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(3 * sizeof(GLfloat)));
-		glEnableVertexAttribArray(4);
-		glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(12 * sizeof(GLfloat)));
-		glBindVertexArray(0);
 		BuildCheckerTexture();
 		ConfigureNativeSamplers();
 		if (!BuildFramebuffer(width, height)) return false;
@@ -2148,7 +1601,7 @@ namespace
 		Resources.viewProjection[5] = 1.0f;
 		Resources.viewProjection[10] = 1.0f;
 		Resources.viewProjection[15] = 1.0f;
-		ResetState(width, height);
+		gl_GLESInternalResetState(width, height);
 		Resources.ready = true;
 		CheckError("native GLES resource setup");
 		return Resources.ready;
@@ -2160,37 +1613,53 @@ static bool InitializeResources(int width, int height, bool preserveTextureCache
 	DeleteResources(!preserveTextureCache);
 	NativeBackendEnabled = true;
 	Resources.frame = 0;
+	gl_GLESInternalPortalBeginFrame();
 	if (!BuildResources(width, height))
 	{
 		DeleteResources(!preserveTextureCache);
-		I_FatalError("Android GLES resources could not be created.");
+		I_FatalError("Zandronum GLES resources could not be created.");
 	}
 	return true;
 }
 }
 
-unsigned int gl_AndroidNativeGLES_GetShaderProgram(const char *name)
+unsigned int gl_GLES_GetShaderProgram(const char *name)
 {
 	if (name == NULL || !Resources.ready) return 0;
-	if (strcmp(name, "android/opaque") == 0) return Resources.sceneProgram;
-	if (strcmp(name, "android/masked") == 0) return Resources.maskedProgram;
-	if (strcmp(name, "android/fog") == 0) return Resources.fogProgram;
-	if (strcmp(name, "android/fog-masked") == 0) return Resources.fogMaskedProgram;
-	if (strcmp(name, "android/palette") == 0) return Resources.paletteProgram;
-	if (strcmp(name, "android/present") == 0) return Resources.presentProgram;
+	if (strcmp(name, "gles/opaque") == 0) return Resources.sceneProgram;
+	if (strcmp(name, "gles/masked") == 0) return Resources.maskedProgram;
+	if (strcmp(name, "gles/fog") == 0) return Resources.fogProgram;
+	if (strcmp(name, "gles/fog-masked") == 0) return Resources.fogMaskedProgram;
+	if (strcmp(name, "gles/palette") == 0) return Resources.paletteProgram;
+	if (strcmp(name, "gles/present") == 0) return gl_GLESInternalPresentGetProgram();
 	return 0;
 }
 
-void gl_AndroidNativeGLES_UseProgram(unsigned int handle)
+void gl_GLES_UseProgram(unsigned int handle)
 {
 	glUseProgram(static_cast<GLuint>(handle));
 }
 
-bool gl_AndroidNativeGLES_CollectCapabilities()
+bool gl_GLES_CollectCapabilities()
 {
 	FGLESContextInfo context = {};
+	#ifdef __ANDROID__
 	if (!gl_GLES_InstallDirectContext(3, 2, &context))
-		I_FatalError("Android GLES 3.2 context is unavailable.");
+		I_FatalError("Zandronum GLES 3.2 context is unavailable.");
+	#else
+	if (!gl_GLES_HasContext())
+	{
+		gl_GLES_Report("capabilities", "desktop context was not loaded before renderer initialization");
+		return false;
+	}
+	context = gl_GLES_GetContextInfo();
+	if (context.isGLES || context.majorVersion < 3 ||
+		(context.majorVersion == 3 && context.minorVersion < 3))
+	{
+		gl_GLES_Report("capabilities", "desktop GLES backend requires an OpenGL 3.3 core context");
+		return false;
+	}
+	#endif
 	Capabilities.majorVersion = context.majorVersion;
 	Capabilities.minorVersion = context.minorVersion;
 	Capabilities.vendor = context.vendor;
@@ -2211,38 +1680,60 @@ bool gl_AndroidNativeGLES_CollectCapabilities()
 	if (Capabilities.maxTextureSize <= 0 || Capabilities.maxTextureUnits <= 0 ||
 		Capabilities.maxVertexUniformVectors <= 0 || Capabilities.maxFragmentUniformVectors <= 0 ||
 		Capabilities.extensionCount < 0)
-		I_FatalError("Android GLES capability enumeration returned invalid limits.");
+		I_FatalError("Zandronum GLES capability enumeration returned invalid limits.");
 	Capabilities.hasAnisotropicFiltering = context.hasAnisotropicFiltering;
 	Capabilities.hasAstcCompression = gl_GLES_HasExtension("GL_KHR_texture_compression_astc_ldr");
-	Capabilities.hasEtc2Compression = true;
+	Capabilities.hasEtc2Compression = context.isGLES;
 	Capabilities.hasDebugLabels = context.hasDebugLabels;
 	Capabilities.hasMultiview = context.hasMultiview;
 	CapabilitiesReady = true;
 	return true;
 }
 
-bool gl_AndroidNativeGLES_InitializeBootstrap(int width, int height)
+bool gl_GLES_InitializeBootstrap(int width, int height)
 {
 	return InitializeResources(width, height, false);
 }
 
-void gl_AndroidNativeGLES_BeginScene(float cameraX, float cameraY, float cameraZ,
+void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	float cameraYaw, float cameraPitch, float cameraRoll, float fieldOfView, float aspect, float fovRatio)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources()) return;
-	if (!SceneInputLogged)
+	if (!gl_GLES_CanUseResources()) return;
+	NativeFrameStart = std::chrono::steady_clock::now();
+	if (developer && !SceneInputLogged)
 	{
 		SceneInputLogged = true;
-		DPrintf("Android GLES scene input: %d segs, %d subsectors, %d vertices.\n", numsegs, numsubsectors, numvertexes);
+		DPrintf("Zandronum GLES scene input: %d segs, %d subsectors, %d vertices.\n", numsegs, numsubsectors, numvertexes);
+	}
+	Resources.nativeViewArea = {};
+	if (screen != NULL)
+	{
+		Resources.nativeViewArea = gl_GLESInternalComputeViewArea(screen->GetWidth(),
+			screen->GetHeight(), screen->GetTrueHeight(), screenblocks,
+			viewwindowx, viewwindowy, viewwidth, viewheight);
+		Resources.viewContract.viewportX = viewwindowx;
+		Resources.viewContract.viewportY = viewwindowy;
+		Resources.viewContract.viewportWidth = viewwidth;
+		Resources.viewContract.viewportHeight = viewheight;
+	}
+	if (developer && Resources.frame == 0 && Resources.nativeViewArea.valid)
+	{
+		const FGLESViewArea &area = Resources.nativeViewArea;
+		DPrintf("Zandronum GLES view: screenblocks=%d view=(%d,%d %dx%d) viewport=(%d,%d %dx%d) scissor=(%d,%d %dx%d).\n",
+			static_cast<int>(screenblocks), area.x, area.y, area.width, area.height,
+			area.renderX, area.renderY, area.renderWidth, area.renderHeight,
+			area.scissorX, area.scissorY, area.scissorWidth, area.scissorHeight);
 	}
 	BuildViewProjection(cameraX, cameraY, cameraZ, cameraYaw, cameraPitch, cameraRoll, fieldOfView, aspect, fovRatio);
 	Resources.sceneVertices.clear();
 	Resources.sceneIndices.clear();
+	gl_GLESInternalSceneClearLights();
 	Resources.sceneIndexCount = 0;
 	Resources.sceneReady = false;
 	Resources.sceneBatches.clear();
 	Resources.portalTargets.clear();
 	NativePortalCaptureStack.clear();
+	gl_GLESInternalPortalBeginFrame();
 	ResetNativeSkyRecord(Resources.outerSky, -1, 1u);
 	Resources.sceneSpriteCount = 0;
 	Resources.skyMaterial = NULL;
@@ -2262,15 +1753,18 @@ void gl_AndroidNativeGLES_BeginScene(float cameraX, float cameraY, float cameraZ
 	memset(Resources.clipPlane, 0, sizeof(Resources.clipPlane));
 }
 
-void gl_AndroidNativeGLES_ClearScene()
+void gl_GLES_ClearScene()
 {
-	if (!gl_AndroidNativeGLES_CanUseResources()) return;
+	if (!gl_GLES_CanUseResources()) return;
+	NativeWipeOverlayCollecting = false;
 	FlatCollectionDeferred = false;
 	Resources.sceneVertices.clear();
 	Resources.sceneIndices.clear();
 	Resources.sceneBatches.clear();
+	gl_GLESInternalSceneClearLights();
 	Resources.portalTargets.clear();
 	NativePortalCaptureStack.clear();
+	gl_GLESInternalPortalBeginFrame();
 	ResetNativeSkyRecord(Resources.outerSky, -1, 1u);
 	Resources.sceneIndexCount = 0;
 	Resources.sceneReady = false;
@@ -2292,20 +1786,20 @@ void gl_AndroidNativeGLES_ClearScene()
 	memset(Resources.clipPlane, 0, sizeof(Resources.clipPlane));
 }
 
-void gl_AndroidNativeGLES_SetFlatCollectionDeferred(bool deferred)
+void gl_GLES_SetFlatCollectionDeferred(bool deferred)
 {
 	FlatCollectionDeferred = deferred;
 }
 
-bool gl_AndroidNativeGLES_IsFlatCollectionDeferred()
+bool gl_GLES_IsFlatCollectionDeferred()
 {
 	return FlatCollectionDeferred;
 }
 
-void gl_AndroidNativeGLES_SetSky(FMaterial *material, float xOffset, float yOffset, bool mirrored,
+void gl_GLES_SetSky(FMaterial *material, float xOffset, float yOffset, bool mirrored,
 	bool sky2, PalEntry fadeColor)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || material == NULL || Resources.skyMaterial != NULL) return;
+	if (!gl_GLES_CanUseResources() || material == NULL || Resources.skyMaterial != NULL) return;
 	Resources.skyMaterial = material;
 	Resources.skyXOffset = xOffset;
 	Resources.skyYOffset = yOffset;
@@ -2334,27 +1828,32 @@ void gl_AndroidNativeGLES_SetSky(FMaterial *material, float xOffset, float yOffs
 	Resources.skyFogColor = fadeColor;
 	Resources.skyFogEnabled = !gl_fixedcolormap && skyfog > 0 &&
 		(fadeColor.r != 0 || fadeColor.g != 0 || fadeColor.b != 0);
-	if (!SkyLogged)
+	if (developer && !SkyLogged)
 	{
 		SkyLogged = true;
-		DPrintf("Android GLES basic sky material enabled (offset %.2f, %.2f).\n", xOffset, yOffset);
+		DPrintf("Zandronum GLES basic sky material enabled (offset %.2f, %.2f).\n", xOffset, yOffset);
 	}
 }
 
-void gl_AndroidNativeGLES_SetSkyLayer(FMaterial *material, float xOffset, float yOffset, bool mirrored)
+void gl_GLES_SetSkyLayer(FMaterial *material, float xOffset, float yOffset, bool mirrored)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || material == NULL || Resources.skyLayerMaterial != NULL) return;
+	if (!gl_GLES_CanUseResources() || material == NULL || Resources.skyLayerMaterial != NULL) return;
 	Resources.skyLayerMaterial = material;
 	Resources.skyLayerXOffset = xOffset;
 	Resources.skyLayerYOffset = yOffset;
 	Resources.skyLayerMirrored = mirrored;
 }
 
-void gl_AndroidNativeGLES_AddSkyMask(const float *positions)
+void gl_GLES_AddSkyMask(const float *positions)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL) return;
+	if (!gl_GLES_CanUseResources() || positions == NULL) return;
 	FNativeSkyRecord *sky = ActiveNativeSkyRecord();
 	if (sky == NULL) return;
+	if (!CanAppendSceneGeometry(4, 6, "sky mask"))
+	{
+		++sky->rejected;
+		return;
+	}
 	++sky->submitted;
 	for (int i = 0; i < 4; ++i)
 	{
@@ -2420,13 +1919,13 @@ void gl_AndroidNativeGLES_AddSkyMask(const float *positions)
 	}
 }
 
-void gl_AndroidNativeGLES_AddWall(const float *positions, const float *texcoords,
+void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
-	const float *fogColor, float fogDensity, EAndroidNativeBlendMode blendMode, unsigned int materialFlags,
+	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation,
 	const float *topGlowColor, const float *bottomGlowColor, const float *glowDistances)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL) return;
+	if (!gl_GLES_CanUseResources() || positions == NULL) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	FSceneVertex vertices[4];
@@ -2450,17 +1949,17 @@ void gl_AndroidNativeGLES_AddWall(const float *positions, const float *texcoords
 		brightmapDesaturation, topGlowColor, bottomGlowColor);
 }
 
-void gl_AndroidNativeGLES_AddFlat(const float *positions, const float *texcoords,
+void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
-	const float *fogColor, float fogDensity, EAndroidNativeBlendMode blendMode, unsigned int materialFlags,
+	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
+	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
 	const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
-	if (first + vertexCount > AndroidNativeMaxSceneVertices) return;
+	if (!CanAppendSceneGeometry(vertexCount, vertexCount >= 3 ? (vertexCount - 2) * 3 : 0, "flat")) return;
 	for (unsigned int i = 0; i < vertexCount; ++i)
 	{
 		FSceneVertex vertex = {};
@@ -2510,7 +2009,7 @@ void gl_AndroidNativeGLES_AddFlat(const float *positions, const float *texcoords
 		batch.brightmapDesaturation = brightmapDesaturation;
 		batch.masked = masked;
 		batch.fog = fog;
-		batch.translucent = alpha < 0.999f || blendMode != ANDROID_BLEND_OPAQUE;
+		batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 		batch.repeat = repeat;
 		batch.palette = IsPaletteTexture(texture);
 		batch.flat = true;
@@ -2536,12 +2035,12 @@ void gl_AndroidNativeGLES_AddFlat(const float *positions, const float *texcoords
 	}
 }
 
-void gl_AndroidNativeGLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
+void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
 	const float *texcoords, const float *color, unsigned int texture, bool fog,
 	const float *fogColor, float fogDensity)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || wallPositions == NULL || planePositions == NULL ||
-		texcoords == NULL || Resources.sceneVertices.size() + 8 > AndroidNativeMaxSceneVertices)
+	if (!gl_GLES_CanUseResources() || wallPositions == NULL || planePositions == NULL ||
+		texcoords == NULL || !CanAppendSceneGeometry(8, 12, "flood plane"))
 		return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
@@ -2613,16 +2112,16 @@ void gl_AndroidNativeGLES_AddFloodPlane(const float *wallPositions, const float 
 	Resources.sceneBatches.push_back(batch);
 }
 
-void gl_AndroidNativeGLES_AddHUDPolygon(const float *positions, const float *texcoords,
+void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, bool masked,
-	unsigned int texture, bool repeat, EAndroidNativeBlendMode blendMode, unsigned int materialFlags)
+	unsigned int texture, bool repeat, EGLESBlendMode blendMode, unsigned int materialFlags)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
+	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
 	const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
-	if (first + vertexCount > AndroidNativeMaxSceneVertices) return;
+	if (!CanAppendSceneGeometry(vertexCount, vertexCount >= 3 ? (vertexCount - 2) * 3 : 0, "HUD polygon")) return;
 	for (unsigned int i = 0; i < vertexCount; ++i)
 	{
 		FSceneVertex vertex = {};
@@ -2652,7 +2151,7 @@ void gl_AndroidNativeGLES_AddHUDPolygon(const float *positions, const float *tex
 	batch.indexCount = indexCount;
 	batch.texture = texture;
 	batch.masked = masked;
-	batch.translucent = alpha < 0.999f || blendMode != ANDROID_BLEND_OPAQUE;
+	batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 	batch.repeat = repeat;
 	batch.palette = IsPaletteTexture(texture);
 	batch.hud = true;
@@ -2662,26 +2161,26 @@ void gl_AndroidNativeGLES_AddHUDPolygon(const float *positions, const float *tex
 	Resources.sceneBatches.push_back(batch);
 }
 
-void gl_AndroidNativeGLES_AddSprite(const float *positions, const float *texcoords,
+void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
-	const float *fogColor, float fogDensity, EAndroidNativeBlendMode blendMode, unsigned int materialFlags,
+	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	unsigned int brightmap, int brightmapDesaturation)
 {
-	if (gl_AndroidNativeGLES_CanUseResources()) ++Resources.sceneSpriteCount;
-	gl_AndroidNativeGLES_AddWall(positions, texcoords, color, alpha, texture, masked, fog, false,
+	if (gl_GLES_CanUseResources()) ++Resources.sceneSpriteCount;
+	gl_GLES_AddWall(positions, texcoords, color, alpha, texture, masked, fog, false,
 		fogColor, fogDensity, blendMode, materialFlags, NULL, NULL, brightmap, brightmapDesaturation);
 }
 
-void gl_AndroidNativeGLES_AddModelSurface(const float *positions, const float *texcoords,
+void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
-	const float *fogColor, float fogDensity, EAndroidNativeBlendMode blendMode, unsigned int materialFlags,
+	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	const float *normals, unsigned int brightmap, int brightmapDesaturation, bool cullBackFaces)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL || indices == NULL ||
+	if (!gl_GLES_CanUseResources() || positions == NULL || indices == NULL ||
 		vertexCount == 0 || indexCount < 3 || (indexCount % 3) != 0) return;
 	const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
-	if (first + vertexCount > AndroidNativeMaxSceneVertices) return;
+	if (!CanAppendSceneGeometry(vertexCount, indexCount, "model surface")) return;
 	for (unsigned int index = 0; index < indexCount; ++index)
 		if (indices[index] >= vertexCount) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
@@ -2731,7 +2230,7 @@ void gl_AndroidNativeGLES_AddModelSurface(const float *positions, const float *t
 	batch.brightmapDesaturation = brightmapDesaturation;
 	batch.masked = masked;
 	batch.fog = fog;
-	batch.translucent = alpha < 0.999f || blendMode != ANDROID_BLEND_OPAQUE;
+	batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 	batch.repeat = false;
 	batch.palette = IsPaletteTexture(texture);
 	batch.model = true;
@@ -2749,11 +2248,11 @@ void gl_AndroidNativeGLES_AddModelSurface(const float *positions, const float *t
 	Resources.sceneBatches.push_back(batch);
 }
 
-void gl_AndroidNativeGLES_AddHUDQuad(const float *positions, const float *texcoords,
+void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
-	EAndroidNativeBlendMode blendMode, unsigned int materialFlags)
+	EGLESBlendMode blendMode, unsigned int materialFlags)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL) return;
+	if (!gl_GLES_CanUseResources() || positions == NULL) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	FSceneVertex vertices[4];
@@ -2773,8 +2272,8 @@ void gl_AndroidNativeGLES_AddHUDQuad(const float *positions, const float *texcoo
 	AddHUDQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, blendMode, materialFlags);
 }
 
-void gl_AndroidNativeGLES_AddScreenQuad(const float *color, float alpha,
-	EAndroidNativeBlendMode blendMode)
+void gl_GLES_AddScreenQuad(const float *color, float alpha,
+	EGLESBlendMode blendMode)
 {
 	static const float positions[12] =
 	{
@@ -2790,16 +2289,15 @@ void gl_AndroidNativeGLES_AddScreenQuad(const float *color, float alpha,
 		0.0f, 0.0f,
 		0.0f, 0.0f
 	};
-	gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, color, alpha, false, 0, blendMode, 0);
+	gl_GLES_AddHUDQuad(positions, texcoords, color, alpha, false, 0, blendMode, 0);
 }
 
-void gl_AndroidNativeGLES_EndScene()
+void gl_GLES_EndScene()
 {
-	if (!gl_AndroidNativeGLES_CanUseResources()) return;
+	if (!gl_GLES_CanUseResources()) return;
 	if (Resources.skyMaterial != NULL && Resources.outerSky.capEligible)
 		AddSkyMaskCaps(Resources.outerSky);
-	UploadSceneGeometry();
-	if (Resources.frame == 0 || (Resources.frame % 120) == 0)
+	if (developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
 	{
 		unsigned int skyMaskCount = static_cast<unsigned int>(Resources.outerSky.maskBatches.size());
 		unsigned int floodCount = 0;
@@ -2810,12 +2308,12 @@ void gl_AndroidNativeGLES_EndScene()
 			if (batch.flood) ++floodCount;
 			if (batch.flat) ++flatCount;
 		}
-		DPrintf("Android GLES scene: %u vertices, %u indices, %u batches.\n",
+		DPrintf("Zandronum GLES scene: %u vertices, %u indices, %u batches.\n",
 			static_cast<unsigned int>(Resources.sceneVertices.size()),
 			static_cast<unsigned int>(Resources.sceneIndices.size()),
 			static_cast<unsigned int>(Resources.sceneBatches.size()));
-		DPrintf("Android GLES scene sprites: %u.\n", Resources.sceneSpriteCount);
-		DPrintf("Android GLES scene masks: %u sky, %u flood, %u flat.\n",
+		DPrintf("Zandronum GLES scene sprites: %u.\n", Resources.sceneSpriteCount);
+		DPrintf("Zandronum GLES scene masks: %u sky, %u flood, %u flat.\n",
 			skyMaskCount, floodCount, flatCount);
 	}
 }
@@ -2864,13 +2362,13 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		glEnable(GL_BLEND);
 		glDepthMask(GL_FALSE);
 		GLenum equation = GL_FUNC_ADD;
-		if (batch.blendMode == ANDROID_BLEND_SUBTRACT) equation = GL_FUNC_SUBTRACT;
-		else if (batch.blendMode == ANDROID_BLEND_REVERSE_SUBTRACT) equation = GL_FUNC_REVERSE_SUBTRACT;
+		if (batch.blendMode == GLES_BLEND_SUBTRACT) equation = GL_FUNC_SUBTRACT;
+		else if (batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT) equation = GL_FUNC_REVERSE_SUBTRACT;
 		glBlendEquation(equation);
-		const bool additive = batch.blendMode == ANDROID_BLEND_ADD ||
-			batch.blendMode == ANDROID_BLEND_SUBTRACT || batch.blendMode == ANDROID_BLEND_REVERSE_SUBTRACT;
-		if (batch.blendMode == ANDROID_BLEND_FUZZ) glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
-		else if (batch.blendMode == ANDROID_BLEND_MULTIPLY) glBlendFunc(GL_DST_COLOR, GL_ZERO);
+		const bool additive = batch.blendMode == GLES_BLEND_ADD ||
+			batch.blendMode == GLES_BLEND_SUBTRACT || batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT;
+		if (batch.blendMode == GLES_BLEND_FUZZ) glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
+		else if (batch.blendMode == GLES_BLEND_MULTIPLY) glBlendFunc(GL_DST_COLOR, GL_ZERO);
 		else glBlendFunc(GL_SRC_ALPHA, additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 	}
 	else
@@ -2881,8 +2379,8 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	}
 	const GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
 		(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram));
-	const char *programName = batch.fog ? (batch.masked ? "android/portal-fog-masked" : "android/portal-fog") :
-		(batch.masked ? "android/portal-masked" : (batch.palette ? "android/portal-palette" : "android/portal-opaque"));
+	const char *programName = batch.fog ? (batch.masked ? "gles/portal-fog-masked" : "gles/portal-fog") :
+		(batch.masked ? "gles/portal-masked" : (batch.palette ? "gles/portal-palette" : "gles/portal-opaque"));
 	BindNativeProgram(program, programName);
 	SetNativeGlowUniforms(program, batch);
 	if (program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
@@ -3032,12 +2530,21 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ? 0.0f : 0.5f);
 	if (fogColor >= 0) glUniform4f(fogColor, batch.fogColor[0], batch.fogColor[1], batch.fogColor[2], 1.0f);
 	if (fogDensity >= 0) glUniform1f(fogDensity, batch.fogDensity / 64000.0f);
-	if (lightPositionRadius >= 0) glUniform4fv(lightPositionRadius, batch.lightCount, batch.lightPositionRadius);
-	if (lightColor >= 0) glUniform4fv(lightColor, batch.lightCount, batch.lightColor);
-	if (lightCounts >= 0) glUniform3i(lightCounts, static_cast<GLint>(batch.lightNormalCount),
-		static_cast<GLint>(batch.lightSubtractiveCount), static_cast<GLint>(batch.lightCount));
+	const GLfloat *lightPositions = NULL;
+	const GLfloat *lightColors = NULL;
+	unsigned int lightNormalCount = 0;
+	unsigned int lightSubtractiveCount = 0;
+	unsigned int lightCount = 0;
+	GetNativeLightUpload(batch, 0, GLES_MAX_LIGHTS, lightPositions, lightColors, lightNormalCount,
+		lightSubtractiveCount, lightCount);
+	if (lightPositionRadius >= 0 && lightCount > 0)
+		glUniform4fv(lightPositionRadius, lightCount, lightPositions);
+	if (lightColor >= 0 && lightCount > 0)
+		glUniform4fv(lightColor, lightCount, lightColors);
+	if (lightCounts >= 0) glUniform3i(lightCounts, static_cast<GLint>(lightNormalCount),
+		static_cast<GLint>(lightSubtractiveCount), static_cast<GLint>(lightCount));
 	if (lightPlaneNormal >= 0) glUniform3fv(lightPlaneNormal, 1, batch.lightPlaneNormal);
-	const bool projected = dynamicLightTexture != 0 && batch.lightCount > 0 &&
+	const bool projected = dynamicLightTexture != 0 && lightCount > 0 &&
 		(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
 	if (projectedLights >= 0) glUniform1i(projectedLights, projected ? 1 : 0);
 	if (dynamicLightSampler >= 0) glUniform1i(dynamicLightSampler, 2);
@@ -3058,6 +2565,34 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	glActiveTexture(GL_TEXTURE0);
 	glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_INT,
 		reinterpret_cast<const void *>(batch.firstIndex * sizeof(GLuint)));
+	DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
+		lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex);
+}
+
+static void DrawNativeWipeOverlay(const FGLESTargetDescriptor &target)
+{
+	if (!HasNativeWipeOverlay() || target.renderWidth <= 0 || target.renderHeight <= 0)
+		return;
+	gl_GLESInternalResetState(target.renderWidth, target.renderHeight);
+	glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
+	SetNativeFullViewport(target.renderWidth, target.renderHeight);
+	glDisable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glDisable(GL_STENCIL_TEST);
+	glDisable(GL_CULL_FACE);
+	glBindVertexArray(Resources.sceneVertexArray);
+	for (size_t i = 0; i < Resources.sceneBatches.size(); ++i)
+	{
+		const FSceneBatch &batch = Resources.sceneBatches[i];
+		if (batch.wipeOverlay) DrawNativePortalBatch(batch, 0, 0);
+	}
+	glBindVertexArray(0);
+	glDisable(GL_BLEND);
+	glBlendEquation(GL_FUNC_ADD);
+	glDepthMask(GL_TRUE);
+	gl_GLESInternalResetState(target.renderWidth, target.renderHeight);
+	if (gl_GLES_CheckErrors("wipe overlay") != GL_NO_ERROR)
+		I_FatalError("Zandronum GLES wipe overlay failed.");
 }
 
 static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bool writeStencil,
@@ -3066,7 +2601,7 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 	if (batch.firstIndex < 0 || batch.indexCount <= 0 ||
 		static_cast<size_t>(batch.firstIndex) + static_cast<size_t>(batch.indexCount) > Resources.sceneIndices.size())
 		return false;
-	BindNativeProgram(Resources.sceneProgram, "android/portal-mask");
+	BindNativeProgram(Resources.sceneProgram, "gles/portal-mask");
 	static const GLfloat identity[16] =
 	{
 		1.0f, 0.0f, 0.0f, 0.0f,
@@ -3112,8 +2647,9 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 	if (material == NULL || material->tex == NULL || !material->tex->gl_info.bSkybox) return false;
 	FSkyBox *skybox = static_cast<FSkyBox *>(material->tex);
 	if (skybox->faces[0] == NULL) return false;
-	UploadSkyboxGeometry(xOffset, sky2, fliptop);
-	glBindVertexArray(Resources.skyVertexArray);
+		gl_GLESInternalPortalUploadSkyboxGeometry(xOffset, sky2, fliptop,
+			Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 	const bool threeFace = skybox->faces[5] == NULL;
 	bool drawn = false;
 	for (int face = 0; face < 6; ++face)
@@ -3138,7 +2674,7 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 		}
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
-		const FSkyPrimitiveRange &range = Resources.skyboxFaces[face];
+		const FGLESSkyPrimitiveRange range = gl_GLESInternalPortalSkyboxFace(face);
 		glDrawElements(GL_TRIANGLES, range.indexCount, GL_UNSIGNED_SHORT,
 			reinterpret_cast<const void *>(range.firstIndex * sizeof(GLushort)));
 		drawn = true;
@@ -3169,7 +2705,7 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	glStencilMask(0x00);
 	glStencilFunc(GL_EQUAL, stencilRef, stencilMask);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-	BindNativeProgram(Resources.sceneProgram, "android/portal-sky");
+	BindNativeProgram(Resources.sceneProgram, "gles/portal-sky");
 	static const GLfloat identity[16] =
 	{
 		1.0f, 0.0f, 0.0f, 0.0f,
@@ -3194,7 +2730,7 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	if (Resources.sceneUseBrightmap >= 0) glUniform1i(Resources.sceneUseBrightmap, 0);
 	if (Resources.sceneBrightmapDesaturation >= 0) glUniform1i(Resources.sceneBrightmapDesaturation, 0);
 	if (Resources.sceneTextureUniform >= 0) glUniform1i(Resources.sceneTextureUniform, 0);
-	glBindVertexArray(Resources.skyVertexArray);
+	glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 	if (target.sky.capEligible && target.skyMaterial->tex->gl_info.bSkybox)
 	{
 		if (DrawNativeSkyboxLayer(target.skyMaterial, target.skyXOffset, target.sky2,
@@ -3214,8 +2750,9 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 		const bool caps = drawCaps && target.sky.capEligible;
 		const GLuint texture = material->BindNative(CM_DEFAULT, 0, true);
 		if (texture == 0) return false;
-		UploadSkyGeometry(material, xOffset, yOffset, mirrored);
-		glBindVertexArray(Resources.skyVertexArray);
+		gl_GLESInternalPortalUploadSkyGeometry(material, xOffset, yOffset, mirrored,
+			Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture);
 		glBindSampler(0, Resources.checkerSampler);
@@ -3226,14 +2763,14 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 				glUniform4f(Resources.sceneObjectColor, target.skyUpperCapColor.r / 255.0f,
 					target.skyUpperCapColor.g / 255.0f, target.skyUpperCapColor.b / 255.0f, 1.0f);
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, Resources.skyUpperCap.indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyUpperCap.firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		}
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, Resources.skyUpperStrips[row].indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(Resources.skyUpperStrips[row].firstIndex * sizeof(GLushort)));
+			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 		if (caps)
 		{
 			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
@@ -3241,14 +2778,14 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 				glUniform4f(Resources.sceneObjectColor, target.skyLowerCapColor.r / 255.0f,
 					target.skyLowerCapColor.g / 255.0f, target.skyLowerCapColor.b / 255.0f, 1.0f);
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, Resources.skyLowerCap.indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyLowerCap.firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		}
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, Resources.skyLowerStrips[row].indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(Resources.skyLowerStrips[row].firstIndex * sizeof(GLushort)));
+			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 		return true;
 	};
 	const bool firstLayerDrawn = drawSkyLayer(target.skyMaterial, target.skyXOffset, target.skyYOffset,
@@ -3258,8 +2795,9 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 			target.skyLayerMirrored, false);
 	if (firstLayerDrawn && target.skyFogEnabled && skyfog > 0)
 	{
-		UploadSkyGeometry(NULL, 0.0f, 0.0f, false);
-		glBindVertexArray(Resources.skyVertexArray);
+		gl_GLESInternalPortalUploadSkyGeometry(NULL, 0.0f, 0.0f, false,
+			Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 		if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 1);
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
 		if (Resources.sceneObjectColor >= 0)
@@ -3267,17 +2805,17 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 				target.skyFogColor.g / 255.0f, target.skyFogColor.b / 255.0f, skyfog / 255.0f);
 		glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 		if (target.sky.capEligible)
-			glDrawElements(GL_TRIANGLES, Resources.skyUpperCap.indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(Resources.skyUpperCap.firstIndex * sizeof(GLushort)));
+			glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, Resources.skyUpperStrips[row].indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(Resources.skyUpperStrips[row].firstIndex * sizeof(GLushort)));
+			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 		if (target.sky.capEligible)
-			glDrawElements(GL_TRIANGLES, Resources.skyLowerCap.indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(Resources.skyLowerCap.firstIndex * sizeof(GLushort)));
+			glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, Resources.skyLowerStrips[row].indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(Resources.skyLowerStrips[row].firstIndex * sizeof(GLushort)));
+			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 	}
 	if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
 	if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
@@ -3289,20 +2827,157 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	Resources.cameraZ = savedCameraZ;
 }
 
+static bool IsNativePortalDescendant(size_t targetIndex, unsigned int ancestorId)
+{
+	if (targetIndex >= Resources.portalTargets.size()) return false;
+	int parentId = Resources.portalTargets[targetIndex].parentId;
+	while (parentId >= 0 && static_cast<size_t>(parentId) < Resources.portalTargets.size())
+	{
+		if (static_cast<unsigned int>(parentId) == ancestorId) return true;
+		parentId = Resources.portalTargets[parentId].parentId;
+	}
+	return false;
+}
+
+static GLuint GetNativePortalParentStencilBit(const FNativePortalTarget &target)
+{
+	if (target.parentId < 0 || static_cast<size_t>(target.parentId) >= Resources.portalTargets.size())
+		return 0;
+	return NativePortalStencilBit(Resources.portalTargets[target.parentId].stencilSlot);
+}
+
+static void BindNativePortalSurface(FGLESTargetDescriptor *surface)
+{
+	if (surface == nullptr) return;
+	NativeActiveTarget = surface;
+	gl_GLES_BindRenderTarget(surface);
+	SetNativeFullViewport(surface->renderWidth, surface->renderHeight);
+	if (!NativeOffscreenRender && Resources.nativeViewArea.valid)
+		gl_GLESInternalSetSceneViewport(Resources.nativeViewArea);
+}
+
+static bool CompositeNativePortalFallback(const FNativePortalTarget &target,
+	FGLESTargetDescriptor *parentSurface)
+{
+	if (parentSurface == nullptr) return false;
+	FGLESTargetDescriptor *fallback = target.fallbackTargetReady ?
+		gl_GLESInternalPortalGetFallbackTarget(target.fallbackTargetIndex) : nullptr;
+	const GLuint sourceTexture = fallback != nullptr ? fallback->colorAttachment : 0;
+	const bool solidColor = sourceTexture == 0;
+	const GLuint parentStencilBit = GetNativePortalParentStencilBit(target);
+	std::vector<FGLESPortalMask> masks;
+	masks.reserve(target.maskBatches.size());
+	for (size_t maskIndex = 0; maskIndex < target.maskBatches.size(); ++maskIndex)
+	{
+		const size_t batchIndex = target.maskBatches[maskIndex];
+		if (batchIndex >= Resources.sceneBatches.size()) continue;
+		const FSceneBatch &mask = Resources.sceneBatches[batchIndex];
+		masks.push_back({ mask.indexCount,
+			static_cast<size_t>(mask.firstIndex) * sizeof(GLuint), mask.viewProjection });
+	}
+	FGLESPortalCompositeList composite = {};
+	composite.sourceTexture = sourceTexture;
+	composite.sceneVertexArray = Resources.sceneVertexArray;
+	composite.sceneSampler = Resources.sceneSampler;
+	composite.masks = masks.data();
+	composite.maskCount = masks.size();
+	composite.targetWidth = parentSurface->renderWidth;
+	composite.targetHeight = parentSurface->renderHeight;
+	composite.parentStencilBit = parentStencilBit;
+	composite.solidColor = solidColor;
+	return gl_GLESInternalPortalCompositeMasks(composite);
+}
+
+struct FNativePortalFallbackScope
+{
+	unsigned int targetId;
+	FGLESTargetDescriptor *targetSurface;
+	FGLESTargetDescriptor *parentSurface;
+};
+
 static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 {
 	if (Resources.portalTargets.empty()) return;
 	unsigned int drawnTargets = 0;
 	unsigned int drawnBatches = 0;
+	unsigned int fallbackTargets = 0;
+	FGLESTargetDescriptor *savedActiveTarget = NativeActiveTarget;
+	FGLESTargetDescriptor *rootSurface = savedActiveTarget != nullptr ?
+		savedActiveTarget : &Resources.sceneTarget;
+	std::vector<FNativePortalFallbackScope> fallbackScopes;
+	NativeActiveTarget = rootSurface;
 	glBindVertexArray(Resources.sceneVertexArray);
 	for (size_t targetIndex = 0; targetIndex < Resources.portalTargets.size(); ++targetIndex)
 	{
+		while (!fallbackScopes.empty() &&
+			!IsNativePortalDescendant(targetIndex, fallbackScopes.back().targetId))
+		{
+			const FNativePortalFallbackScope scope = fallbackScopes.back();
+			fallbackScopes.pop_back();
+			BindNativePortalSurface(scope.parentSurface);
+			if (scope.targetId < Resources.portalTargets.size() &&
+				!CompositeNativePortalFallback(Resources.portalTargets[scope.targetId], scope.parentSurface))
+				gl_GLES_Report("portal", "isolated capture could not be composited into its parent aperture");
+		}
+		int ancestorId = Resources.portalTargets[targetIndex].parentId;
+		bool failedFallbackAncestor = false;
+		while (ancestorId >= 0 && static_cast<size_t>(ancestorId) < Resources.portalTargets.size())
+		{
+			const FNativePortalTarget &ancestor = Resources.portalTargets[ancestorId];
+			if (ancestor.framebufferFallback && !ancestor.fallbackTargetReady)
+			{
+				failedFallbackAncestor = true;
+				break;
+			}
+			ancestorId = ancestor.parentId;
+		}
+		if (failedFallbackAncestor) continue;
 		FNativePortalTarget &target = Resources.portalTargets[targetIndex];
-		if (target.maskBatches.empty() || target.endBatch <= target.firstBatch) continue;
-		const GLuint stencilBit = NativePortalStencilBit(target.id);
+		if (target.maskBatches.empty()) continue;
+		if (target.parentId >= 0 && static_cast<size_t>(target.parentId) >= Resources.portalTargets.size())
+		{
+			gl_GLES_Report("portal", "native portal target has an invalid parent and was skipped");
+			continue;
+		}
+		FGLESTargetDescriptor *parentSurface = fallbackScopes.empty() ?
+			(NativeActiveTarget != nullptr ? NativeActiveTarget : rootSurface) :
+			fallbackScopes.back().targetSurface;
+		FGLESTargetDescriptor *targetSurface = parentSurface;
+		const GLuint stencilBit = NativePortalStencilBit(target.stencilSlot);
 		const GLuint skyStencilBit = target.sky.stencilBit;
-		const GLuint parentStencilBit = target.parentId >= 0 ?
-			NativePortalStencilBit(static_cast<unsigned int>(target.parentId)) : 0;
+		const GLuint parentStencilBit = GetNativePortalParentStencilBit(target);
+		if (target.framebufferFallback)
+		{
+			++fallbackTargets;
+			targetSurface = gl_GLESInternalPortalGetFallbackTarget(target.fallbackTargetIndex);
+			if (!target.fallbackTargetReady || targetSurface == nullptr || targetSurface->framebuffer == 0)
+			{
+				if (!CompositeNativePortalFallback(target, parentSurface))
+					gl_GLES_Report("portal", "unavailable isolated target could not draw its black aperture fallback");
+				++drawnTargets;
+				continue;
+			}
+			BindNativePortalSurface(targetSurface);
+			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+			glDepthMask(GL_TRUE);
+			glStencilMask(0xff);
+			glClearColor(0.025f, 0.045f, 0.075f, 1.0f);
+			glClearDepthf(1.0f);
+			glClearStencil(static_cast<GLint>(stencilBit));
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+			SetNativeFullViewport(targetSurface->renderWidth, targetSurface->renderHeight);
+			if (!NativeOffscreenRender && Resources.nativeViewArea.valid)
+				gl_GLESInternalSetSceneViewport(Resources.nativeViewArea);
+			glEnable(GL_DEPTH_TEST);
+			glDepthFunc(GL_LEQUAL);
+			glDepthMask(GL_TRUE);
+			glDisable(GL_BLEND);
+			glEnable(GL_STENCIL_TEST);
+			glStencilMask(0x00);
+			glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+			fallbackScopes.push_back({ target.id, targetSurface, parentSurface });
+		}
 		const size_t targetEndBatch = std::min(target.endBatch, Resources.sceneBatches.size());
 		const unsigned int targetSkyMaskCount = static_cast<unsigned int>(target.sky.maskBatches.size());
 		if (developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
@@ -3323,49 +2998,47 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 				else if (batch.flat) ++opaqueFlats;
 				else ++opaqueWalls;
 			}
-			DPrintf("Android GLES portal target %u (parent %d): mask=%u skyMask=%u walls=%u flats=%u "
+			DPrintf("Zandronum GLES portal target %u (parent %d): mask=%u skyMask=%u walls=%u flats=%u "
 				"floods=%u translucent=%u models=%u batches=[%u,%u).\\n",
 				target.id, target.parentId, static_cast<unsigned int>(target.maskBatches.size()), skyMasks,
 				opaqueWalls, opaqueFlats, floods, translucent, sprites,
 				static_cast<unsigned int>(target.firstBatch), static_cast<unsigned int>(targetEndBatch));
 		}
-		// Nested targets can only mark pixels already owned by their parent.
-		// Root targets keep the unrestricted mask used by the desktop portal pass.
-		glEnable(GL_DEPTH_TEST);
-		glDepthFunc(GL_LEQUAL);
-		glDepthMask(GL_FALSE);
-		glDisable(GL_BLEND);
-		glEnable(GL_STENCIL_TEST);
-		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-		glStencilMask(stencilBit);
-		glStencilFunc(GL_ALWAYS, stencilBit, stencilBit);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-		for (size_t maskIndex = 0; maskIndex < target.maskBatches.size(); ++maskIndex)
+		if (!target.framebufferFallback)
 		{
-			const size_t batchIndex = target.maskBatches[maskIndex];
-			if (batchIndex < Resources.sceneBatches.size())
-				DrawNativePortalMask(Resources.sceneBatches[batchIndex], stencilBit, true, true,
-					parentStencilBit, parentStencilBit);
+			glEnable(GL_DEPTH_TEST);
+			glDepthFunc(GL_LEQUAL);
+			glDepthMask(GL_FALSE);
+			glDisable(GL_BLEND);
+			glEnable(GL_STENCIL_TEST);
+			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			glStencilMask(stencilBit);
+			glStencilFunc(GL_ALWAYS, stencilBit, stencilBit);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+			for (size_t maskIndex = 0; maskIndex < target.maskBatches.size(); ++maskIndex)
+			{
+				const size_t batchIndex = target.maskBatches[maskIndex];
+				if (batchIndex < Resources.sceneBatches.size())
+					DrawNativePortalMask(Resources.sceneBatches[batchIndex], stencilBit, true, true,
+						parentStencilBit, parentStencilBit);
+			}
+			glStencilMask(0x00);
+			glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+			glDepthFunc(GL_ALWAYS);
+			glDepthMask(GL_TRUE);
+			glDepthRangef(1.0f, 1.0f);
+			for (size_t maskIndex = 0; maskIndex < target.maskBatches.size(); ++maskIndex)
+			{
+				const size_t batchIndex = target.maskBatches[maskIndex];
+				if (batchIndex < Resources.sceneBatches.size())
+					DrawNativePortalMask(Resources.sceneBatches[batchIndex], stencilBit, false);
+			}
+			glDepthRangef(0.0f, 1.0f);
+			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+			glDepthFunc(GL_LEQUAL);
+			glDepthMask(GL_TRUE);
 		}
-		// Give the captured view a fresh depth range inside its portal surface.
-		glStencilMask(0x00);
-		glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
-		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-		glDepthFunc(GL_ALWAYS);
-		glDepthMask(GL_TRUE);
-		// Match the desktop portal pass: reflected geometry starts at the far
-		// plane instead of being depth-tested against the mirror surface.
-		glDepthRangef(1.0f, 1.0f);
-		for (size_t maskIndex = 0; maskIndex < target.maskBatches.size(); ++maskIndex)
-		{
-			const size_t batchIndex = target.maskBatches[maskIndex];
-			if (batchIndex < Resources.sceneBatches.size())
-				DrawNativePortalMask(Resources.sceneBatches[batchIndex], stencilBit, false);
-		}
-		glDepthRangef(0.0f, 1.0f);
-		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-		glDepthFunc(GL_LEQUAL);
-		glDepthMask(GL_TRUE);
 		if (targetSkyMaskCount > 0)
 		{
 			// Sky walls own a second stencil bit inside the portal surface. This
@@ -3393,33 +3066,76 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 		target.sky.stencilRef = targetSkyMaskCount > 0 ? stencilBit | skyStencilBit : stencilBit;
 		target.sky.stencilMask = targetSkyMaskCount > 0 ? stencilBit | skyStencilBit : stencilBit;
 		DrawNativePortalSky(target, target.sky.stencilRef, target.sky.stencilMask);
-		std::vector<size_t> drawOrder;
+		if (target.clearScreen)
+		{
+			if (target.framebufferFallback)
+			{
+				glDisable(GL_SCISSOR_TEST);
+				glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+				glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+				glClear(GL_COLOR_BUFFER_BIT);
+			}
+			else
+			{
+				const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+				if (!gl_GLESInternalFillStencil(targetSurface->renderWidth, targetSurface->renderHeight,
+					stencilBit, stencilBit, clearColor))
+					gl_GLES_Report("portal", "native recursion termination fill failed");
+			}
+			++drawnTargets;
+			continue;
+		}
+		std::vector<FGLESSceneOrderRecord> orderRecords;
 		for (size_t batchIndex = target.firstBatch; batchIndex < targetEndBatch; ++batchIndex)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[batchIndex];
-			if (batch.portalId == static_cast<int>(target.id) && !batch.portalMask && !batch.skyMask && !batch.hud)
-				drawOrder.push_back(batchIndex);
+			FGLESSceneOrderRecord record = {};
+			record.batchIndex = batchIndex;
+			record.included = batch.portalId == static_cast<int>(target.id) &&
+				!batch.portalMask && !batch.skyMask && !batch.hud;
+			record.hud = batch.hud;
+			record.flood = batch.flood;
+			record.flat = batch.flat;
+			record.translucent = batch.translucent;
+			record.sortDepth = batch.sortDepth;
+			orderRecords.push_back(record);
 		}
-		std::stable_sort(drawOrder.begin(), drawOrder.end(), [](size_t left, size_t right)
-		{
-			const FSceneBatch &a = Resources.sceneBatches[left];
-			const FSceneBatch &b = Resources.sceneBatches[right];
-			if (a.hud != b.hud) return !a.hud;
-			if (a.hud) return left < right;
-			if (a.flood != b.flood) return !a.flood;
-			if (a.flat != b.flat) return !a.flat;
-			if (a.translucent != b.translucent) return !a.translucent;
-			if (a.translucent && a.sortDepth != b.sortDepth) return a.sortDepth > b.sortDepth;
-			return left < right;
-		});
+		const FGLESSceneDrawOrderView drawOrder = gl_GLESInternalSceneSortBatches(
+			orderRecords.data(), orderRecords.size(), GLES_SCENE_ORDER_PORTAL);
 		glStencilMask(0x00);
 		glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
-		for (size_t orderIndex = 0; orderIndex < drawOrder.size(); ++orderIndex)
+		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
 		{
-			DrawNativePortalBatch(Resources.sceneBatches[drawOrder[orderIndex]], dynamicLightTexture, stencilBit);
+			DrawNativePortalBatch(Resources.sceneBatches[drawOrder.indices[orderIndex]], dynamicLightTexture, stencilBit);
 			++drawnBatches;
 		}
 		++drawnTargets;
+		static bool fallbackPixelLogWritten = false;
+		if (developer && target.framebufferFallback && targetSurface != nullptr &&
+			!fallbackPixelLogWritten)
+		{
+			GLint previousRead = 0;
+			glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, targetSurface->resolveFramebuffer);
+			GLubyte center[4] = {};
+			glReadPixels(targetSurface->renderWidth / 2, targetSurface->renderHeight / 2,
+				1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
+			const GLenum readError = glGetError();
+			DPrintf("Zandronum GLES portal fallback target=%u center=%u,%u,%u,%u read=%s.\n",
+				target.id, center[0], center[1], center[2], center[3],
+				readError == GL_NO_ERROR ? "ok" : "failed");
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+			fallbackPixelLogWritten = true;
+		}
+	}
+	while (!fallbackScopes.empty())
+	{
+		const FNativePortalFallbackScope scope = fallbackScopes.back();
+		fallbackScopes.pop_back();
+		BindNativePortalSurface(scope.parentSurface);
+		if (scope.targetId < Resources.portalTargets.size() &&
+			!CompositeNativePortalFallback(Resources.portalTargets[scope.targetId], scope.parentSurface))
+			gl_GLES_Report("portal", "isolated capture could not be composited into its parent aperture");
 	}
 	glBindVertexArray(0);
 	glDisable(GL_STENCIL_TEST);
@@ -3429,23 +3145,34 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 	glDepthFunc(GL_LESS);
 	glDepthMask(GL_TRUE);
 	glDisable(GL_BLEND);
+	NativeActiveTarget = savedActiveTarget;
 	if (developer && drawnTargets > 0 &&
 		(Resources.frame == 0 || (Resources.frame % 120) == 0))
-		DPrintf("Android GLES portal targets: %u, batches: %u.\n", drawnTargets, drawnBatches);
+		DPrintf("Zandronum GLES portal targets: %u, batches: %u, isolated FBOs: %u.\n",
+			drawnTargets, drawnBatches, fallbackTargets);
 }
 
-unsigned int gl_AndroidNativeGLES_BeginPortalCapture()
+unsigned int gl_GLES_BeginPortalCapture()
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || NativePortalCaptureStack.size() >= 7 ||
-		Resources.portalTargets.size() >= AndroidNativeMaxPortalTargets)
+	if (!gl_GLES_CanUseResources())
 		return ~0u;
+	const unsigned int stencilSlot = FindNativePortalStencilSlot();
 	FNativePortalTarget target = {};
 	target.id = static_cast<unsigned int>(Resources.portalTargets.size());
+	target.framebufferFallback = stencilSlot == ~0u;
+	target.stencilSlot = target.framebufferFallback ? 0u : stencilSlot;
+	target.fallbackTargetIndex = -1;
+	if (target.framebufferFallback)
+	{
+		target.fallbackTargetReady = gl_GLESInternalPortalAcquireFallbackTarget(
+			Resources.sceneTarget.renderWidth, Resources.sceneTarget.renderHeight,
+			&target.fallbackTargetIndex);
+	}
 	target.parentId = NativePortalCaptureStack.empty() ? -1 :
 		static_cast<int>(NativePortalCaptureStack.back());
 	target.firstBatch = Resources.sceneBatches.size();
 	target.endBatch = target.firstBatch;
-	ResetNativeSkyRecord(target.sky, static_cast<int>(target.id), NativePortalSkyStencilBit(target.id));
+	ResetNativeSkyRecord(target.sky, static_cast<int>(target.id), NativePortalSkyStencilBit(target.stencilSlot));
 	memcpy(target.savedViewProjection, Resources.viewProjection, sizeof(target.savedViewProjection));
 	memcpy(target.savedCameraPosition, &Resources.cameraX, sizeof(target.savedCameraPosition));
 	target.savedCameraYaw = Resources.cameraYaw;
@@ -3470,14 +3197,26 @@ unsigned int gl_AndroidNativeGLES_BeginPortalCapture()
 	memcpy(target.savedClipPlane, Resources.clipPlane, sizeof(target.savedClipPlane));
 	Resources.portalTargets.push_back(target);
 	NativePortalCaptureStack.push_back(target.id);
+	if (developer && Resources.frame < 2 && target.id < 16)
+		DPrintf("Zandronum GLES begin portal capture %u parent %d stencil=%u fallback=%d.\n",
+			target.id, target.parentId, target.stencilSlot, target.framebufferFallback ? 1 : 0);
 	return target.id;
 }
 
-void gl_AndroidNativeGLES_AddPortalMask(unsigned int portalId, const float *positions)
+bool gl_GLES_ClearPortalCapture()
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || positions == NULL ||
+	if (!gl_GLES_CanUseResources() || NativePortalCaptureStack.empty()) return false;
+	const unsigned int portalId = NativePortalCaptureStack.back();
+	if (portalId >= Resources.portalTargets.size()) return false;
+	Resources.portalTargets[portalId].clearScreen = true;
+	return true;
+}
+
+void gl_GLES_AddPortalMask(unsigned int portalId, const float *positions)
+{
+	if (!gl_GLES_CanUseResources() || positions == NULL ||
 		portalId >= Resources.portalTargets.size()) return;
-	if (Resources.sceneVertices.size() + 4 > AndroidNativeMaxSceneVertices) return;
+	if (!CanAppendSceneGeometry(4, 6, "portal mask")) return;
 	const unsigned int firstVertex = static_cast<unsigned int>(Resources.sceneVertices.size());
 	const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
 	for (int i = 0; i < 4; ++i)
@@ -3508,10 +3247,10 @@ void gl_AndroidNativeGLES_AddPortalMask(unsigned int portalId, const float *posi
 	target.firstBatch = Resources.sceneBatches.size();
 }
 
-void gl_AndroidNativeGLES_SetPortalView(float cameraX, float cameraY, float cameraZ,
+void gl_GLES_SetPortalView(float cameraX, float cameraY, float cameraZ,
 	float cameraYaw, float cameraPitch, float cameraRoll, bool mirrored, bool planeMirrored)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || NativePortalCaptureStack.empty()) return;
+	if (!gl_GLES_CanUseResources() || NativePortalCaptureStack.empty()) return;
 	const unsigned int portalId = NativePortalCaptureStack.back();
 	if (portalId < Resources.portalTargets.size())
 	{
@@ -3527,9 +3266,9 @@ void gl_AndroidNativeGLES_SetPortalView(float cameraX, float cameraY, float came
 		mirrored, planeMirrored);
 }
 
-void gl_AndroidNativeGLES_SetPortalClipPlane(float a, float b, float c, float d)
+void gl_GLES_SetPortalClipPlane(float a, float b, float c, float d)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || NativePortalCaptureStack.empty()) return;
+	if (!gl_GLES_CanUseResources() || NativePortalCaptureStack.empty()) return;
 	Resources.clipPlane[0] = a;
 	Resources.clipPlane[1] = b;
 	Resources.clipPlane[2] = c;
@@ -3537,9 +3276,9 @@ void gl_AndroidNativeGLES_SetPortalClipPlane(float a, float b, float c, float d)
 	Resources.clipPlaneEnabled = true;
 }
 
-void gl_AndroidNativeGLES_EndPortalCapture(unsigned int portalId)
+void gl_GLES_EndPortalCapture(unsigned int portalId)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || NativePortalCaptureStack.empty() ||
+	if (!gl_GLES_CanUseResources() || NativePortalCaptureStack.empty() ||
 		NativePortalCaptureStack.back() != portalId || portalId >= Resources.portalTargets.size()) return;
 	FNativePortalTarget &target = Resources.portalTargets[portalId];
 	target.skyMaterial = Resources.skyMaterial;
@@ -3575,6 +3314,11 @@ void gl_AndroidNativeGLES_EndPortalCapture(unsigned int portalId)
 		}
 	}
 	NativePortalCaptureStack.pop_back();
+	if (developer && Resources.frame < 2 && target.id < 16)
+		DPrintf("Zandronum GLES end portal capture %u batches=[%u,%u) masks=%u.\n",
+			target.id, static_cast<unsigned int>(target.firstBatch),
+			static_cast<unsigned int>(target.endBatch),
+			static_cast<unsigned int>(target.maskBatches.size()));
 	memcpy(Resources.viewProjection, target.savedViewProjection, sizeof(Resources.viewProjection));
 	memcpy(&Resources.cameraX, target.savedCameraPosition, sizeof(target.savedCameraPosition));
 	Resources.cameraYaw = target.savedCameraYaw;
@@ -3599,147 +3343,38 @@ void gl_AndroidNativeGLES_EndPortalCapture(unsigned int portalId)
 	memcpy(Resources.clipPlane, target.savedClipPlane, sizeof(Resources.clipPlane));
 }
 
-unsigned int gl_AndroidNativeGLES_BindMaterial(const void *key, const unsigned char *pixels,
+unsigned int gl_GLES_BindMaterial(const void *key, const unsigned char *pixels,
 	int width, int height, bool repeat, int colormap, int translation, bool allowhires)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || key == NULL || pixels == NULL || width <= 0 || height <= 0)
+	if (!gl_GLES_CanUseResources() || key == NULL || pixels == NULL || width <= 0 || height <= 0)
 		return 0;
 	ConfigureNativeSamplers();
-	const size_t pixelBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-	for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-	{
-		FAndroidNativeTexture &entry = Resources.nativeTextures[i];
-		if (entry.key == key && entry.colormap == colormap && entry.translation == translation &&
-			entry.repeat == repeat && entry.allowhires == allowhires)
-		{
-			if (entry.framebufferContent && entry.texture != 0 && entry.width == width && entry.height == height)
-				return entry.texture;
-			if (entry.texture != 0 && entry.width == width && entry.height == height &&
-				entry.pixels.size() == pixelBytes && memcmp(&entry.pixels[0], pixels, pixelBytes) == 0)
-				return entry.texture;
-			break;
-		}
-	}
-	FAndroidNativeTexture *entry = NULL;
-	for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-	{
-		FAndroidNativeTexture &candidate = Resources.nativeTextures[i];
-		if (candidate.key == key && candidate.colormap == colormap && candidate.translation == translation &&
-			candidate.repeat == repeat && candidate.allowhires == allowhires)
-		{
-			entry = &candidate;
-			break;
-		}
-	}
-	if (entry == NULL)
-	{
-		FAndroidNativeTexture value = {};
-		value.key = key;
-		value.colormap = colormap;
-		value.translation = translation;
-		value.allowhires = allowhires;
-		value.width = width;
-		value.height = height;
-		value.repeat = repeat;
-		value.palette = colormap != CM_DEFAULT || translation != 0;
-		value.texture = 0;
-		Resources.nativeTextures.push_back(value);
-		entry = &Resources.nativeTextures.back();
-	}
-	if (entry->width != width || entry->height != height)
-	{
-		if (entry->texture != 0) glDeleteTextures(1, &entry->texture);
-		entry->texture = 0;
-		entry->width = width;
-		entry->height = height;
-		entry->framebufferContent = false;
-		entry->pixels.assign(pixels, pixels + pixelBytes);
-	}
-	else if (entry->texture != 0)
-	{
-		entry->framebufferContent = false;
-		entry->pixels.assign(pixels, pixels + pixelBytes);
-		glBindTexture(GL_TEXTURE_2D, entry->texture);
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-		glGenerateMipmap(GL_TEXTURE_2D);
-		glBindTexture(GL_TEXTURE_2D, 0);
-		if (CheckError("material texture update") != GL_NO_ERROR)
-		{
-			glDeleteTextures(1, &entry->texture);
-			entry->texture = 0;
-		}
-		else
-		{
-			return entry->texture;
-		}
-	}
-	else
-	{
-		entry->pixels.assign(pixels, pixels + pixelBytes);
-	}
-	glGenTextures(1, &entry->texture);
-	glBindTexture(GL_TEXTURE_2D, entry->texture);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-		&entry->pixels[0]);
-	glGenerateMipmap(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, 0);
-	if (CheckError("material texture upload") != GL_NO_ERROR)
-	{
-		glDeleteTextures(1, &entry->texture);
-		entry->texture = 0;
-	}
-	return entry->texture;
+	return gl_GLESInternalBindMaterial(true, key, pixels, width, height, repeat,
+		colormap, translation, allowhires, colormap != CM_DEFAULT || translation != 0);
 }
 
-unsigned int gl_AndroidNativeGLES_EnsureMaterialTexture(const void *key, int width, int height,
+unsigned int gl_GLES_EnsureMaterialTexture(const void *key, int width, int height,
 	bool repeat, int colormap, int translation, bool allowhires)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || key == NULL || width <= 0 || height <= 0)
+	if (!gl_GLES_CanUseResources() || key == NULL || width <= 0 || height <= 0)
 		return 0;
-	for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-	{
-		const FAndroidNativeTexture &entry = Resources.nativeTextures[i];
-		if (entry.key == key && entry.colormap == colormap && entry.translation == translation &&
-			entry.repeat == repeat && entry.allowhires == allowhires &&
-			entry.texture != 0 && entry.width == width && entry.height == height)
-			return entry.texture;
-	}
+	const GLuint texture = gl_GLESInternalFindMaterialTexture(key, colormap, translation,
+		repeat, allowhires, width, height);
+	if (texture != 0) return texture;
 	std::vector<unsigned char> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
-	return gl_AndroidNativeGLES_BindMaterial(key, pixels.data(), width, height, repeat,
+	return gl_GLES_BindMaterial(key, pixels.data(), width, height, repeat,
 		colormap, translation, allowhires);
 }
 
-void gl_AndroidNativeGLES_MarkMaterialFramebufferContent(const void *key, int colormap,
+void gl_GLES_MarkMaterialFramebufferContent(const void *key, int colormap,
 	int translation, bool repeat, bool allowhires)
 {
-	if (key == NULL) return;
-	for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-	{
-		FAndroidNativeTexture &entry = Resources.nativeTextures[i];
-		if (entry.key == key && entry.colormap == colormap && entry.translation == translation &&
-			entry.repeat == repeat && entry.allowhires == allowhires)
-		{
-			entry.framebufferContent = true;
-			return;
-		}
-	}
+	gl_GLESInternalMarkMaterialFramebufferContent(key, colormap, translation, repeat, allowhires);
 }
 
-void gl_AndroidNativeGLES_ClearMaterialCache()
+void gl_GLES_ClearMaterialCache()
 {
-	if (Resources.ready)
-	{
-		for (size_t i = 0; i < Resources.nativeTextures.size(); ++i)
-		{
-			if (Resources.nativeTextures[i].texture != 0)
-				glDeleteTextures(1, &Resources.nativeTextures[i].texture);
-		}
-	}
-	Resources.nativeTextures.clear();
+	gl_GLESInternalClearMaterials(Resources.ready);
 	Resources.skyMaterial = NULL;
 	Resources.skyXOffset = 0.0f;
 	Resources.skyYOffset = 0.0f;
@@ -3755,34 +3390,34 @@ void gl_AndroidNativeGLES_ClearMaterialCache()
 	Resources.skyFogEnabled = false;
 }
 
-void gl_AndroidNativeGLES_OnContextLost()
+void gl_GLES_OnContextLost()
 {
-	gl_AndroidNativeGLES_UnregisterShaderPrograms();
+	gl_GLES_UnregisterShaderPrograms();
 	InvalidateResources();
-	gl_AndroidNativeGLES_InvalidateTextures();
-	gl_AndroidNativeGLES_InvalidateFlatBuffers();
-	gl_GLES_ShutdownContext();
+	gl_GLES_InvalidateTextures();
+	gl_GLES_InvalidateFlatBuffers();
+	gl_GLES_ShutdownContext(true);
 	CapabilitiesReady = false;
 	memset(&Capabilities, 0, sizeof(Capabilities));
-	Printf("Android GLES context lost; native resource names invalidated.\n");
+	Printf("Zandronum GLES context lost; native resource names invalidated.\n");
 }
 
-bool gl_AndroidNativeGLES_OnContextRestored(int width, int height)
+bool gl_GLES_OnContextRestored(int width, int height)
 {
-	if (!gl_AndroidNativeGLES_CollectCapabilities()) return false;
+	if (!gl_GLES_CollectCapabilities()) return false;
 	const bool restored = InitializeResources(width, height, true);
-	if (restored) gl_AndroidNativeGLES_RegisterShaderPrograms();
+	if (restored) gl_GLES_RegisterShaderPrograms();
 	return restored;
 }
 
-void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
+void gl_GLES_RenderBootstrap(int width, int height)
 {
 	if (!Resources.ready)
 	{
 		if (!BootstrapPauseLogged)
 		{
 			BootstrapPauseLogged = true;
-			Printf("Android GLES rendering paused while the surface is unavailable.\n");
+		Printf("GLES rendering paused while the host surface is unavailable.\n");
 		}
 		return;
 	}
@@ -3790,25 +3425,19 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	if (!NativeOffscreenRender &&
 		(Resources.sceneTarget.renderWidth != width || Resources.sceneTarget.renderHeight != height))
 	{
-		if (Resources.wipe.startTexture != 0) glDeleteTextures(1, &Resources.wipe.startTexture);
-		if (Resources.wipe.endTexture != 0) glDeleteTextures(1, &Resources.wipe.endTexture);
-		if (Resources.wipe.maskTexture != 0) glDeleteTextures(1, &Resources.wipe.maskTexture);
-		Resources.wipe = {};
+		gl_GLESInternalWipeDestroy();
 		if (!BuildFramebuffer(width, height))
-			I_FatalError("Android GLES render target could not follow surface size %dx%d.", width, height);
+		I_FatalError("Zandronum GLES render target could not follow surface size %dx%d.", width, height);
 	}
 	FGLESTargetDescriptor *activeTarget = NativeActiveTarget != NULL ?
 		NativeActiveTarget : &Resources.sceneTarget;
 	if (activeTarget->framebuffer == 0 || activeTarget->renderWidth != width ||
 		activeTarget->renderHeight != height)
 	{
-		I_FatalError("Android GLES active render target has invalid size %dx%d.", width, height);
+		I_FatalError("Zandronum GLES active render target has invalid size %dx%d.", width, height);
 	}
 	gl_GLES_BindRenderTarget(activeTarget);
-	// The legacy view setup leaves its view-window scissor enabled. The native
-	// scene target always owns the complete render surface.
-	glScissor(0, 0, width, height);
-	glDisable(GL_SCISSOR_TEST);
+	SetNativeFullViewport(activeTarget->renderWidth, activeTarget->renderHeight);
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_TRUE);
 	glDepthFunc(GL_LESS);
@@ -3819,6 +3448,9 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	glClearDepthf(1.0f);
 	glClearStencil(0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	UploadSceneGeometry();
+	if (!NativeOffscreenRender && Resources.nativeViewArea.valid)
+		gl_GLESInternalSetSceneViewport(Resources.nativeViewArea);
 	const bool renderSky = !gl_no_skyclear;
 	bool skyMaskReady = !renderSky;
 	bool skyMaskPresent = false;
@@ -3875,8 +3507,8 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			int lowerStripCount = 0;
 			for (int row = 0; row < 4; ++row)
 			{
-				if (Resources.skyUpperStrips[row].indexCount > 0) ++upperStripCount;
-				if (Resources.skyLowerStrips[row].indexCount > 0) ++lowerStripCount;
+				if (gl_GLESInternalPortalSkyUpperStrip(row).indexCount > 0) ++upperStripCount;
+				if (gl_GLESInternalPortalSkyLowerStrip(row).indexCount > 0) ++lowerStripCount;
 			}
 			const char *stencilRoute = skyMaskUsedGeometry ? "geometry" : "none";
 			const float clipMinX = sky.submitted > 0 ? sky.clipMin[0] : 0.0f;
@@ -3887,15 +3519,15 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			const float clipMaxZ = sky.submitted > 0 ? sky.clipMax[2] : 0.0f;
 			const float clipMinW = sky.submitted > 0 ? sky.clipMin[3] : 0.0f;
 			const float clipMaxW = sky.submitted > 0 ? sky.clipMax[3] : 0.0f;
-			DPrintf("Android GLES sky: pitch %.2f, yaw %.2f, fov %.2f, aspect %.3f, hasMask=%d, "
+			DPrintf("Zandronum GLES sky: pitch %.2f, yaw %.2f, fov %.2f, aspect %.3f, hasMask=%d, "
 				"skyMaskPresent=%d, upperCap=%d, lowerCap=%d, upperStrips=%d, "
 				"lowerStrips=%d, stencil=%s, masks submitted=%u clipped=%u rejected=%u, "
 				"clip x[%.2f,%.2f] y[%.2f,%.2f] z[%.2f,%.2f] w[%.2f,%.2f].\n",
 				Resources.cameraPitch * 180.0f / 3.14159265359f,
 				Resources.cameraYaw * 180.0f / 3.14159265359f, Resources.cameraFieldOfView,
 				Resources.cameraAspect, skyMaskHadGeometry ? 1 : 0, skyMaskPresent ? 1 : 0,
-				Resources.skyUpperCap.indexCount,
-				Resources.skyLowerCap.indexCount, upperStripCount, lowerStripCount, stencilRoute,
+				gl_GLESInternalPortalSkyUpperCap().indexCount,
+				gl_GLESInternalPortalSkyLowerCap().indexCount, upperStripCount, lowerStripCount, stencilRoute,
 				sky.submitted, sky.clipped, sky.rejected,
 				clipMinX, clipMaxX, clipMinY, clipMaxY, clipMinZ, clipMaxZ, clipMinW, clipMaxW);
 		}
@@ -3918,7 +3550,7 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glDisable(GL_CULL_FACE);
-		BindNativeProgram(Resources.sceneProgram, "android/opaque");
+			BindNativeProgram(Resources.sceneProgram, "gles/opaque");
 		if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 1);
 		static const GLfloat identity[16] =
 		{
@@ -3936,7 +3568,7 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		if (Resources.sceneLightCounts >= 0) glUniform3i(Resources.sceneLightCounts, 0, 0, 0);
 		if (Resources.sceneMaterialFlags >= 0) glUniform1i(Resources.sceneMaterialFlags, 0);
 		if (Resources.sceneTextureUniform >= 0) glUniform1i(Resources.sceneTextureUniform, 0);
-		glBindVertexArray(Resources.skyVertexArray);
+		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 		auto drawSkyLayer = [&](FMaterial *material, float xOffset, float yOffset, bool drawCaps) -> bool
 		{
 			if (material == NULL || material->tex == NULL) return false;
@@ -3948,9 +3580,10 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			}
 			const GLuint skyTexture = material->BindNative(CM_DEFAULT, 0, true);
 			if (skyTexture == 0) return false;
-			UploadSkyGeometry(material, xOffset, yOffset,
-				 caps ? Resources.skyMirrored : Resources.skyLayerMirrored);
-			glBindVertexArray(Resources.skyVertexArray);
+			gl_GLESInternalPortalUploadSkyGeometry(material, xOffset, yOffset,
+				caps ? Resources.skyMirrored : Resources.skyLayerMirrored,
+				Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+			glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 			glActiveTexture(GL_TEXTURE0);
 			glBindTexture(GL_TEXTURE_2D, skyTexture);
 			glBindSampler(0, Resources.checkerSampler);
@@ -3960,28 +3593,28 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 				if (Resources.sceneObjectColor >= 0)
 					glUniform4f(Resources.sceneObjectColor, Resources.skyUpperCapColor.r / 255.0f,
 						Resources.skyUpperCapColor.g / 255.0f, Resources.skyUpperCapColor.b / 255.0f, 1.0f);
-				glDrawElements(GL_TRIANGLES, Resources.skyUpperCap.indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyUpperCap.firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			}
 			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 			if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, Resources.skyUpperStrips[row].indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyUpperStrips[row].firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 			if (caps)
 			{
 				if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
 				if (Resources.sceneObjectColor >= 0)
 					glUniform4f(Resources.sceneObjectColor, Resources.skyLowerCapColor.r / 255.0f,
 						Resources.skyLowerCapColor.g / 255.0f, Resources.skyLowerCapColor.b / 255.0f, 1.0f);
-				glDrawElements(GL_TRIANGLES, Resources.skyLowerCap.indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyLowerCap.firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			}
 			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 			if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, Resources.skyLowerStrips[row].indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyLowerStrips[row].firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 			return true;
 		};
 		const bool firstLayerDrawn = drawSkyLayer(Resources.skyMaterial, Resources.skyXOffset, Resources.skyYOffset, true);
@@ -3992,8 +3625,9 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			drawSkyLayer(Resources.skyLayerMaterial, Resources.skyLayerXOffset, Resources.skyLayerYOffset, false);
 		if (firstLayerDrawn && !firstLayerIsSkybox && Resources.skyFogEnabled && skyfog > 0)
 		{
-			UploadSkyGeometry(NULL, 0.0f, 0.0f, false);
-			glBindVertexArray(Resources.skyVertexArray);
+			gl_GLESInternalPortalUploadSkyGeometry(NULL, 0.0f, 0.0f, false,
+				Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+			glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 			if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 1);
 			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
 			if (Resources.sceneObjectColor >= 0)
@@ -4001,17 +3635,17 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 					Resources.skyFogColor.g / 255.0f, Resources.skyFogColor.b / 255.0f, skyfog / 255.0f);
 			glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, Resources.skyUpperCap.indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyUpperCap.firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, Resources.skyUpperStrips[row].indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyUpperStrips[row].firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, Resources.skyLowerCap.indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyLowerCap.firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, Resources.skyLowerStrips[row].indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(Resources.skyLowerStrips[row].firstIndex * sizeof(GLushort)));
+				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 			if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
 		}
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
@@ -4024,7 +3658,7 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		glDisable(GL_STENCIL_TEST);
 		skyDrawn = firstLayerDrawn;
 	};
-	const bool renderScene = Resources.sceneReady && !gl_android_test_pattern;
+	const bool renderScene = Resources.sceneReady && !gl_gles_test_pattern;
 	GLuint dynamicLightTexture = 0;
 	if (!gl_dynlight_shader && gl_lights && GLRenderer != NULL && GLRenderer->gllight != NULL)
 	{
@@ -4042,23 +3676,23 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	if (renderScene)
 	{
 		glBindVertexArray(Resources.sceneVertexArray);
-		std::vector<size_t> drawOrder(Resources.sceneBatches.size());
-		for (size_t i = 0; i < drawOrder.size(); ++i) drawOrder[i] = i;
-		std::stable_sort(drawOrder.begin(), drawOrder.end(), [](size_t left, size_t right)
+		std::vector<FGLESSceneOrderRecord> orderRecords(Resources.sceneBatches.size());
+		for (size_t i = 0; i < orderRecords.size(); ++i)
 		{
-			const FSceneBatch &a = Resources.sceneBatches[left];
-			const FSceneBatch &b = Resources.sceneBatches[right];
-			if (a.hud != b.hud) return !a.hud;
-			if (a.hud) return left < right;
-			if (a.flood != b.flood) return !a.flood;
-			if (a.flat != b.flat) return !a.flat;
-			if (a.translucent != b.translucent) return !a.translucent;
-			if (a.translucent && a.sortDepth != b.sortDepth) return a.sortDepth > b.sortDepth;
-			return left < right;
-		});
-		for (size_t orderIndex = 0; orderIndex < drawOrder.size(); ++orderIndex)
+			const FSceneBatch &batch = Resources.sceneBatches[i];
+			orderRecords[i].batchIndex = i;
+			orderRecords[i].included = true;
+			orderRecords[i].hud = batch.hud;
+			orderRecords[i].flood = batch.flood;
+			orderRecords[i].flat = batch.flat;
+			orderRecords[i].translucent = batch.translucent;
+			orderRecords[i].sortDepth = batch.sortDepth;
+		}
+		const FGLESSceneDrawOrderView drawOrder = gl_GLESInternalSceneSortBatches(
+			orderRecords.data(), orderRecords.size(), GLES_SCENE_ORDER_VIEW);
+		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
 		{
-			const FSceneBatch &batch = Resources.sceneBatches[drawOrder[orderIndex]];
+			const FSceneBatch &batch = Resources.sceneBatches[drawOrder.indices[orderIndex]];
 			// Opaque world geometry establishes depth before portal targets and
 			// translucent/HUD batches are composited.
 			if (batch.skyMask || batch.portalMask || batch.portalId >= 0 || batch.translucent || batch.hud)
@@ -4090,7 +3724,7 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 				glEnable(GL_DEPTH_TEST);
 				glDepthFunc(GL_LEQUAL);
 				glDepthMask(GL_TRUE);
-				BindNativeProgram(Resources.sceneProgram, "android/flood-mask");
+				BindNativeProgram(Resources.sceneProgram, "gles/flood-mask");
 				if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 0);
 				static const GLfloat identity[16] =
 				{
@@ -4155,22 +3789,22 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 				GLenum equation = GL_FUNC_ADD;
 				switch (batch.blendMode)
 				{
-				case ANDROID_BLEND_SUBTRACT:
+				case GLES_BLEND_SUBTRACT:
 					equation = GL_FUNC_SUBTRACT;
 					break;
-				case ANDROID_BLEND_REVERSE_SUBTRACT:
+				case GLES_BLEND_REVERSE_SUBTRACT:
 					equation = GL_FUNC_REVERSE_SUBTRACT;
 					break;
 				default:
 					break;
 				}
 				glBlendEquation(equation);
-				const bool additiveBlend = batch.blendMode == ANDROID_BLEND_ADD ||
-					batch.blendMode == ANDROID_BLEND_SUBTRACT ||
-					batch.blendMode == ANDROID_BLEND_REVERSE_SUBTRACT;
-				if (batch.blendMode == ANDROID_BLEND_MULTIPLY)
+				const bool additiveBlend = batch.blendMode == GLES_BLEND_ADD ||
+					batch.blendMode == GLES_BLEND_SUBTRACT ||
+					batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT;
+				if (batch.blendMode == GLES_BLEND_MULTIPLY)
 					glBlendFunc(GL_DST_COLOR, GL_ZERO);
-				else if (batch.blendMode == ANDROID_BLEND_FUZZ)
+				else if (batch.blendMode == GLES_BLEND_FUZZ)
 					glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
 				else
 					glBlendFunc(GL_SRC_ALPHA, additiveBlend ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
@@ -4183,8 +3817,8 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			}
 			const GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
 				(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram));
-			const char *programName = batch.fog ? (batch.masked ? "android/fog-masked" : "android/fog") :
-				(batch.masked ? "android/masked" : (batch.palette ? "android/palette" : "android/opaque"));
+			const char *programName = batch.fog ? (batch.masked ? "gles/fog-masked" : "gles/fog") :
+				(batch.masked ? "gles/masked" : (batch.palette ? "gles/palette" : "gles/opaque"));
 			BindNativeProgram(program, programName);
 			SetNativeGlowUniforms(program, batch);
 			if (program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
@@ -4337,16 +3971,23 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, batch.clipPlane);
 			if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, batch.clipPlaneEnabled ? 1 : 0);
 			if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ? 0.0f : 0.5f);
-			if (lightPositionRadius >= 0)
-				glUniform4fv(lightPositionRadius, batch.lightCount, batch.lightPositionRadius);
-			if (lightColor >= 0)
-				glUniform4fv(lightColor, batch.lightCount, batch.lightColor);
+			const GLfloat *lightPositions = NULL;
+			const GLfloat *lightColors = NULL;
+			unsigned int lightNormalCount = 0;
+			unsigned int lightSubtractiveCount = 0;
+			unsigned int lightCount = 0;
+			GetNativeLightUpload(batch, 0, GLES_MAX_LIGHTS, lightPositions, lightColors, lightNormalCount,
+				lightSubtractiveCount, lightCount);
+			if (lightPositionRadius >= 0 && lightCount > 0)
+				glUniform4fv(lightPositionRadius, lightCount, lightPositions);
+			if (lightColor >= 0 && lightCount > 0)
+				glUniform4fv(lightColor, lightCount, lightColors);
 			if (lightCounts >= 0)
-				glUniform3i(lightCounts, static_cast<GLint>(batch.lightNormalCount),
-					static_cast<GLint>(batch.lightSubtractiveCount), static_cast<GLint>(batch.lightCount));
+				glUniform3i(lightCounts, static_cast<GLint>(lightNormalCount),
+					static_cast<GLint>(lightSubtractiveCount), static_cast<GLint>(lightCount));
 			if (lightPlaneNormal >= 0)
 				glUniform3fv(lightPlaneNormal, 1, batch.lightPlaneNormal);
-			const bool useProjectedLights = dynamicLightTexture != 0 && batch.lightCount > 0 &&
+			const bool useProjectedLights = dynamicLightTexture != 0 && lightCount > 0 &&
 				(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
 			if (projectedLights >= 0) glUniform1i(projectedLights, useProjectedLights ? 1 : 0);
 			if (dynamicLightSampler >= 0) glUniform1i(dynamicLightSampler, 2);
@@ -4368,6 +4009,8 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 			glActiveTexture(GL_TEXTURE0);
 			glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_INT,
 				reinterpret_cast<const void *>(batch.firstIndex * sizeof(GLuint)));
+			DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
+				lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex);
 			if (batch.flood)
 			{
 				glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -4396,12 +4039,18 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 		glStencilMask(0xff);
 		glDepthMask(GL_FALSE);
 		glBindVertexArray(Resources.sceneVertexArray);
-		for (size_t orderIndex = 0; orderIndex < drawOrder.size(); ++orderIndex)
+		bool hudViewportReady = NativeOffscreenRender;
+		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
 		{
-			const FSceneBatch &batch = Resources.sceneBatches[drawOrder[orderIndex]];
-			if (batch.skyMask || batch.portalMask || batch.portalId >= 0 ||
+			const FSceneBatch &batch = Resources.sceneBatches[drawOrder.indices[orderIndex]];
+			if (batch.wipeOverlay || batch.skyMask || batch.portalMask || batch.portalId >= 0 ||
 				(!batch.translucent && !batch.hud))
 				continue;
+			if (batch.hud && !hudViewportReady)
+			{
+				SetNativeFullViewport(activeTarget->renderWidth, activeTarget->renderHeight);
+				hudViewportReady = true;
+			}
 			DrawNativePortalBatch(batch, dynamicLightTexture, 0);
 		}
 		glBindVertexArray(0);
@@ -4412,7 +4061,7 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	}
 	else
 	{
-		BindNativeProgram(Resources.sceneProgram, "android/opaque");
+		BindNativeProgram(Resources.sceneProgram, "gles/opaque");
 		if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 0);
 		static const GLfloat identity[16] =
 		{
@@ -4435,90 +4084,50 @@ void gl_AndroidNativeGLES_RenderBootstrap(int width, int height)
 	}
 	CheckError(renderScene ? "world scene draw" : "bootstrap draw");
 	if (!gl_GLES_ResolveRenderTarget(activeTarget))
-		I_FatalError("Android GLES scene resolve failed.");
-	if (!NativeOffscreenRender && Resources.wipe.endCapturePending)
-	{
-		if (!BuildWipeTexture(Resources.wipe.endTexture,
-			Resources.sceneTarget.renderWidth, Resources.sceneTarget.renderHeight) ||
-			!CaptureWipeTexture(Resources.wipe.endTexture))
-			I_FatalError("Android GLES wipe end capture failed.");
-		Resources.wipe.endReady = true;
-		Resources.wipe.endCapturePending = false;
-	}
+		I_FatalError("Zandronum GLES scene resolve failed.");
+	if (!NativeOffscreenRender && !gl_GLESInternalWipeCaptureEndFrame(Resources.sceneTarget))
+		I_FatalError("Zandronum GLES wipe end capture failed.");
 	if (NativeOffscreenRender)
 	{
-		ResetState(width, height);
+		gl_GLESInternalResetState(width, height);
 		return;
 	}
 
-	const int surfaceWidth = std::max(1, Resources.sceneTarget.renderWidth);
-	const int surfaceHeight = std::max(1, Resources.sceneTarget.renderHeight);
-	ResetState(surfaceWidth, surfaceHeight);
-	glViewport(0, 0, surfaceWidth, surfaceHeight);
-	glScissor(0, 0, surfaceWidth, surfaceHeight);
-	glDisable(GL_SCISSOR_TEST);
-	glDisable(GL_DEPTH_TEST);
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	BindNativeProgram(Resources.presentProgram, "android/present");
-	glUniform1i(Resources.presentTexture, 0);
-	if (Resources.presentTextureTransform >= 0)
-		glUniform4f(Resources.presentTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
-	if (Resources.presentDepth >= 0) glUniform1f(Resources.presentDepth, 0.0f);
-	const bool wipeMaskReady = Resources.wipe.type == wipe_Fade || Resources.wipe.maskTexture != 0;
-	const bool wipeReady = Resources.wipe.active && Resources.wipe.startReady &&
-		Resources.wipe.endReady && wipeMaskReady;
-	if (Resources.presentWipeStart >= 0) glUniform1i(Resources.presentWipeStart, 1);
-	if (Resources.presentWipeEnd >= 0) glUniform1i(Resources.presentWipeEnd, 2);
-	if (Resources.presentWipeMask >= 0) glUniform1i(Resources.presentWipeMask, 3);
-	if (Resources.presentWipeProgress >= 0)
-		glUniform1f(Resources.presentWipeProgress, Resources.wipe.simulatedTicks / 32.0f);
-	if (Resources.presentWipeType >= 0) glUniform1i(Resources.presentWipeType, Resources.wipe.type);
-	if (Resources.presentWipeActive >= 0) glUniform1i(Resources.presentWipeActive, wipeReady ? 1 : 0);
-	if (Resources.presentGamma >= 0) glUniform1f(Resources.presentGamma, static_cast<float>(Gamma));
-	if (Resources.presentBrightness >= 0)
-		glUniform1f(Resources.presentBrightness, clamp<float>(vid_brightness, -0.8f, 0.8f));
-	if (Resources.presentContrast >= 0)
-		glUniform1f(Resources.presentContrast, clamp<float>(vid_contrast, 0.1f, 3.0f));
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, Resources.sceneTarget.colorAttachment);
-	glBindSampler(0, Resources.sceneSampler);
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_2D, wipeReady ? Resources.wipe.startTexture : Resources.sceneTarget.colorAttachment);
-	glBindSampler(1, Resources.sceneSampler);
-	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, wipeReady ? Resources.wipe.endTexture : Resources.sceneTarget.colorAttachment);
-	glBindSampler(2, Resources.sceneSampler);
-	glActiveTexture(GL_TEXTURE3);
-	glBindTexture(GL_TEXTURE_2D, wipeReady && Resources.wipe.type != wipe_Fade ?
-		Resources.wipe.maskTexture : 0);
-	glBindSampler(3, 0);
-	glActiveTexture(GL_TEXTURE0);
-	glBindVertexArray(Resources.vertexArray);
-	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(0));
-	glBindVertexArray(0);
-	glActiveTexture(GL_TEXTURE1);
-	glBindSampler(1, 0);
-	glActiveTexture(GL_TEXTURE2);
-	glBindSampler(2, 0);
-	glActiveTexture(GL_TEXTURE3);
-	glBindSampler(3, 0);
-	glActiveTexture(GL_TEXTURE0);
-	glBindSampler(0, 0);
-	glUseProgram(0);
-	ResetState(width, height);
-	const GLenum error = CheckError("present");
-	if (error != GL_NO_ERROR)
-		I_FatalError("Android GLES frame failed.");
-	PublishFrameContract();
+	FGLESPresentConfig present = {};
+	if (!gl_GLES_GetHostTarget(&present.presentationTarget))
+		I_FatalError("Zandronum GLES host did not supply a presentation target.");
+	present.target = Resources.sceneTarget;
+	present.wipe = gl_GLESInternalWipeGetBindings();
+	present.sceneSampler = Resources.sceneSampler;
+	present.stateWidth = present.presentationTarget.renderWidth;
+	present.stateHeight = present.presentationTarget.renderHeight;
+	present.gamma = static_cast<float>(Gamma);
+	present.brightness = clamp<float>(vid_brightness, -0.8f, 0.8f);
+	present.contrast = clamp<float>(vid_contrast, 0.1f, 3.0f);
+	if (!gl_GLESInternalPresent(present))
+		I_FatalError("Zandronum GLES frame failed.");
+	if (!NativeOffscreenRender && HasNativeWipeOverlay() &&
+		gl_GLESInternalWipeIsActive())
+		DrawNativeWipeOverlay(present.presentationTarget);
+	gl_GLESInternalPublishFrameContract(Resources.frame,
+		static_cast<double>(Resources.frame) / 35.0, present.presentationTarget,
+		Resources.viewContract, Resources.nativeViewArea.valid);
+	if (developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
+	{
+		const std::chrono::duration<double, std::milli> elapsed =
+			std::chrono::steady_clock::now() - NativeFrameStart;
+		DPrintf("Zandronum GLES frame CPU %.3f ms: %u batches, %u vertices.\n", elapsed.count(),
+			static_cast<unsigned int>(Resources.sceneBatches.size()),
+			static_cast<unsigned int>(Resources.sceneVertices.size()));
+	}
 	++Resources.frame;
-	if (Resources.frame == 1 || (Resources.frame % 120) == 0)
-		DPrintf("Android GLES frame %u at %dx%d.\n", Resources.frame, width, height);
+	if (developer && (Resources.frame == 1 || (Resources.frame % 120) == 0))
+		DPrintf("Zandronum GLES frame %u at %dx%d.\n", Resources.frame, width, height);
 }
 
-bool gl_AndroidNativeGLES_EndSceneToTexture(unsigned int targetTexture, int width, int height)
+bool gl_GLES_EndSceneToTexture(unsigned int targetTexture, int width, int height)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || targetTexture == 0 || width <= 0 || height <= 0)
+	if (!gl_GLES_CanUseResources() || targetTexture == 0 || width <= 0 || height <= 0)
 		return false;
 	if (Resources.cameraTarget.framebuffer == 0 ||
 		Resources.cameraTarget.renderWidth != width || Resources.cameraTarget.renderHeight != height)
@@ -4539,156 +4148,105 @@ bool gl_AndroidNativeGLES_EndSceneToTexture(unsigned int targetTexture, int widt
 	glActiveTexture(GL_TEXTURE0);
 	glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
 	glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-	gl_AndroidNativeGLES_EndScene();
+	gl_GLES_EndScene();
 	NativeActiveTarget = &Resources.cameraTarget;
 	NativeOffscreenRender = true;
-	gl_AndroidNativeGLES_RenderBootstrap(width, height);
+	gl_GLES_RenderBootstrap(width, height);
 	NativeOffscreenRender = false;
 	NativeActiveTarget = NULL;
+	static bool cameraTargetPixelLogWritten = false;
+	if (developer && !cameraTargetPixelLogWritten)
+	{
+		GLint previousRead = 0;
+		glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, Resources.cameraTarget.resolveFramebuffer);
+		GLubyte center[4] = {};
+		glReadPixels(width / 2, height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
+		const GLenum readError = glGetError();
+		DPrintf("Zandronum GLES camera target batches=%u center=%u,%u,%u,%u read=%s.\n",
+			static_cast<unsigned int>(Resources.sceneBatches.size()), center[0], center[1], center[2], center[3],
+			readError == GL_NO_ERROR ? "ok" : "failed");
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+		cameraTargetPixelLogWritten = true;
+	}
 
-	glBindFramebuffer(GL_READ_FRAMEBUFFER, Resources.cameraTarget.resolveFramebuffer);
-	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(targetTexture));
-	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
-	glGenerateMipmap(GL_TEXTURE_2D);
-	const GLenum copyError = glGetError();
+	const bool copied = gl_GLESInternalCopyTargetToTexture(Resources.cameraTarget,
+		static_cast<GLuint>(targetTexture));
 	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
 	glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
-	return copyError == GL_NO_ERROR;
+	return copied;
 }
 
-bool gl_AndroidNativeGLES_WriteSavePic(FILE *file, int width, int height)
+bool gl_GLES_WriteSavePic(FILE *file, int width, int height)
 {
-	if (file == nullptr || width <= 0 || height <= 0 || !gl_AndroidNativeGLES_CanUseResources())
-		return false;
-
-	const int sourceWidth = Resources.sceneTarget.renderWidth;
-	const int sourceHeight = Resources.sceneTarget.renderHeight;
-	if (sourceWidth <= 0 || sourceHeight <= 0)
-		return false;
-
-	std::vector<BYTE> rgba(static_cast<size_t>(sourceWidth) * sourceHeight * 4);
-	std::vector<BYTE> rgb(static_cast<size_t>(width) * height * 3);
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-	glReadPixels(0, 0, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-	const GLenum readbackError = glGetError();
-	if (readbackError != GL_NO_ERROR)
-	{
-		glPixelStorei(GL_PACK_ALIGNMENT, 4);
-		return false;
-	}
-
-	for (int y = 0; y < height; ++y)
-	{
-		const int sourceY = (y * sourceHeight) / height;
-		for (int x = 0; x < width; ++x)
-		{
-			const int sourceX = (x * sourceWidth) / width;
-			const size_t source = (static_cast<size_t>(sourceY) * sourceWidth + sourceX) * 4;
-			const size_t destination = (static_cast<size_t>(y) * width + x) * 3;
-			rgb[destination + 0] = rgba[source + 0];
-			rgb[destination + 1] = rgba[source + 1];
-			rgb[destination + 2] = rgba[source + 2];
-		}
-	}
-
-	glPixelStorei(GL_PACK_ALIGNMENT, 4);
-	return M_CreatePNG(file, rgb.data() + static_cast<size_t>(height - 1) * width * 3,
-		nullptr, SS_RGB, width, height, -width * 3);
+	return gl_GLES_CanUseResources() &&
+		gl_GLESInternalWriteSavePic(file, Resources.sceneTarget, width, height);
 }
 
-bool gl_AndroidNativeGLES_WipeStart(int type)
+bool gl_GLES_WipeStart(int type)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() ||
-		(type != wipe_Melt && type != wipe_Burn && type != wipe_Fade))
-		return false;
-	AbortWipe();
-	InitializeWipeState(type);
-	const int sceneWidth = Resources.sceneTarget.renderWidth;
-	const int sceneHeight = Resources.sceneTarget.renderHeight;
-	if (!BuildWipeTexture(Resources.wipe.startTexture, sceneWidth, sceneHeight) ||
-		!CaptureWipeTexture(Resources.wipe.startTexture))
-	{
-		AbortWipe();
-		return false;
-	}
-	if (type != wipe_Fade &&
-		(!BuildWipeTexture(Resources.wipe.maskTexture, Resources.wipe.maskWidth, Resources.wipe.maskHeight,
-			Resources.wipe.type == wipe_Burn) ||
-		 !UploadWipeMask()))
-	{
-		AbortWipe();
-		return false;
-	}
-	Resources.wipe.startReady = true;
-	Resources.wipe.active = true;
-	return true;
+	return gl_GLES_CanUseResources() &&
+		gl_GLESInternalWipeStart(type, Resources.sceneTarget);
 }
 
-void gl_AndroidNativeGLES_WipeEnd()
+void gl_GLES_WipeEnd()
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || !Resources.wipe.startReady) return;
-	if (Resources.wipe.endCapturePending || Resources.wipe.endReady) return;
-	Resources.wipe.endCapturePending = true;
-	Resources.wipe.endReady = false;
-	Resources.wipe.lastTime = I_MSTime();
-	Resources.wipe.tickRemainderMs = 0;
-	Resources.wipe.simulatedTicks = 0;
+	gl_GLESInternalWipeEnd();
 }
 
-bool gl_AndroidNativeGLES_WipeDo(int ticks)
+bool gl_GLES_WipeDo(int ticks)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || !Resources.wipe.startReady) return true;
-	FAndroidNativeWipe &wipe = Resources.wipe;
-	const unsigned int now = I_MSTime();
-	const unsigned int elapsed = std::min(now - wipe.lastTime, 250u);
-	wipe.lastTime = now;
-	wipe.tickRemainderMs += elapsed;
-	const int availableTicks = static_cast<int>(wipe.tickRemainderMs / 25u);
-	const int wholeTicks = ticks > 0 ? std::min(availableTicks, ticks) : availableTicks;
-	wipe.tickRemainderMs -= static_cast<unsigned int>(wholeTicks) * 25u;
-	const bool done = wholeTicks > 0 ? AdvanceWipeTicks(wholeTicks) : false;
-	if (wholeTicks > 0 && wipe.type != wipe_Fade && !UploadWipeMask())
-		I_FatalError("Android GLES wipe mask upload failed.");
-	return done && wipe.endReady;
+	return gl_GLESInternalWipeDo(ticks);
 }
 
-void gl_AndroidNativeGLES_WipeCleanup()
+void gl_GLES_WipeCleanup()
 {
-	AbortWipe();
+	gl_GLESInternalWipeCleanup();
 }
 
-bool gl_AndroidNativeGLES_IsWipeInProgress()
+bool gl_GLES_IsWipeInProgress()
 {
-	return NativeBackendEnabled && Resources.wipe.active;
+	return gl_GLESInternalWipeIsActive();
 }
 
-bool gl_AndroidNativeGLES_IsActive()
+void gl_GLES_BeginWipeOverlay()
+{
+	NativeWipeOverlayCollecting = gl_GLESInternalWipeIsActive();
+}
+
+void gl_GLES_EndWipeOverlay()
+{
+	NativeWipeOverlayCollecting = false;
+}
+
+bool gl_GLES_IsActive()
 {
 	return NativeBackendEnabled;
 }
 
-bool gl_AndroidNativeGLES_CanUseResources()
+bool gl_GLES_CanUseResources()
 {
 	return NativeBackendEnabled && Resources.ready;
 }
 
-const FAndroidGLESInfo &gl_AndroidNativeGLES_GetCapabilities()
+const FGLESNativeCapabilities &gl_GLES_GetCapabilities()
 {
 	return Capabilities;
 }
 
-void gl_AndroidNativeGLES_PrintStartupLog()
+void gl_GLES_PrintStartupLog()
 {
 	if (!CapabilitiesReady) return;
 	Printf("GL_VENDOR: %s\n", Capabilities.vendor);
 	Printf("GL_RENDERER: %s\n", Capabilities.renderer);
 	Printf("GL_VERSION: %s\n", Capabilities.version);
 	Printf("GL_SHADING_LANGUAGE_VERSION: %s\n", Capabilities.shadingLanguageVersion);
-	Printf("GLES capabilities: ES %d.%d, max texture %d, texture units %d, fragment uniforms %d, extensions %d.\n",
+	const FGLESContextInfo &context = gl_GLES_GetContextInfo();
+	Printf("GLES-compatible capabilities: %s %d.%d, max texture %d, texture units %d, fragment uniforms %d, extensions %d.\n",
+		context.isGLES ? "OpenGL ES" : "desktop OpenGL",
 		Capabilities.majorVersion, Capabilities.minorVersion, Capabilities.maxTextureSize,
 		Capabilities.maxTextureUnits, Capabilities.maxFragmentUniformVectors, Capabilities.extensionCount);
 	Printf("GLES core: buffers=%s, arrays=%s, uniform-buffers=%s, framebuffers=%s, depth-stencil=%s, buffer-mapping=%s.\n",
@@ -4704,55 +4262,45 @@ void gl_AndroidNativeGLES_PrintStartupLog()
 		Capabilities.hasAstcCompression ? "yes" : "no",
 		Capabilities.hasDebugLabels ? "yes" : "no",
 		Capabilities.hasMultiview ? "yes" : "no");
-	DPrintf("GLES extension list follows (%d entries):\n", Capabilities.extensionCount);
-	for (GLint index = 0; index < Capabilities.extensionCount; ++index)
-		DPrintf("  %s\n", glGetStringi(GL_EXTENSIONS, index));
+	if (developer)
+	{
+		DPrintf("GLES extension list follows (%d entries):\n", Capabilities.extensionCount);
+		for (GLint index = 0; index < Capabilities.extensionCount; ++index)
+			DPrintf("  %s\n", glGetStringi(GL_EXTENSIONS, index));
+	}
 }
 
-void gl_AndroidNativeGLES_ResetState(int width, int height)
+void gl_GLES_ResetState(int width, int height)
 {
-	ResetState(width, height);
+	gl_GLESInternalResetState(width, height);
 }
 
-bool gl_AndroidNativeGLES_ApplyRenderState(int srcBlend, int dstBlend, int alphaFunc,
+bool gl_GLES_ApplyRenderState(int srcBlend, int dstBlend, int alphaFunc,
 	float alphaThreshold, bool alphaTest, int blendEquation, bool fogEnabled,
 	bool textureEnabled, int textureMode)
 {
-	(void)alphaFunc;
-	(void)alphaThreshold;
-	(void)textureMode;
-	if (!gl_AndroidNativeGLES_CanUseResources()) return false;
-	glBlendFunc(static_cast<GLenum>(srcBlend), static_cast<GLenum>(dstBlend));
-	glBlendEquation(static_cast<GLenum>(blendEquation));
-	if (alphaTest || fogEnabled || !textureEnabled)
-	{
-		if (!Resources.stateWarningLogged)
-		{
-			Resources.stateWarningLogged = true;
-			DPrintf("Android GLES state request is consumed by the native shader variants; alpha, fog, and texture flags remain submission semantics.\n");
-		}
-	}
-	return CheckError("FRenderState::Apply") == GL_NO_ERROR;
+	return gl_GLESInternalApplyRenderState(gl_GLES_CanUseResources(), srcBlend, dstBlend,
+		alphaFunc, alphaThreshold, alphaTest, blendEquation, fogEnabled, textureEnabled, textureMode);
 }
 
-void gl_AndroidNativeGLES_GenerateMipmap()
+void gl_GLES_GenerateMipmap()
 {
 	glGenerateMipmap(GL_TEXTURE_2D);
 }
 
-bool gl_AndroidNativeGLES_CreateFlatBufferObjects(unsigned int *vbo, unsigned int *vao, unsigned int *ebo)
+bool gl_GLES_CreateFlatBufferObjects(unsigned int *vbo, unsigned int *vao, unsigned int *ebo)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || vbo == NULL || vao == NULL || ebo == NULL) return false;
+	if (!gl_GLES_CanUseResources() || vbo == NULL || vao == NULL || ebo == NULL) return false;
 	glGenBuffers(1, vbo);
 	glGenVertexArrays(1, vao);
 	glGenBuffers(1, ebo);
 	return CheckError("flat buffer object creation") == GL_NO_ERROR;
 }
 
-bool gl_AndroidNativeGLES_UploadFlatBuffer(unsigned int vbo, unsigned int vao, unsigned int ebo,
+bool gl_GLES_UploadFlatBuffer(unsigned int vbo, unsigned int vao, unsigned int ebo,
 	const void *vertices, int vertexCount, int vertexStride)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || vbo == 0 || vao == 0 || ebo == 0 || vertices == NULL ||
+	if (!gl_GLES_CanUseResources() || vbo == 0 || vao == 0 || ebo == 0 || vertices == NULL ||
 		vertexCount <= 0 || vertexCount > 65535 || vertexStride < 20)
 		return false;
 	GLushort *indices = new GLushort[vertexCount];
@@ -4771,24 +4319,24 @@ bool gl_AndroidNativeGLES_UploadFlatBuffer(unsigned int vbo, unsigned int vao, u
 	return CheckError("flat buffer upload") == GL_NO_ERROR;
 }
 
-bool gl_AndroidNativeGLES_UpdateFlatBuffer(unsigned int vbo, int offset, int size, const void *vertices)
+bool gl_GLES_UpdateFlatBuffer(unsigned int vbo, int offset, int size, const void *vertices)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources() || vbo == 0 || offset < 0 || size <= 0 || vertices == NULL) return false;
+	if (!gl_GLES_CanUseResources() || vbo == 0 || offset < 0 || size <= 0 || vertices == NULL) return false;
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	glBufferSubData(GL_ARRAY_BUFFER, offset, size, vertices);
 	return CheckError("flat buffer update") == GL_NO_ERROR;
 }
 
-void gl_AndroidNativeGLES_DestroyFlatBufferObjects(unsigned int vbo, unsigned int vao, unsigned int ebo)
+void gl_GLES_DestroyFlatBufferObjects(unsigned int vbo, unsigned int vao, unsigned int ebo)
 {
 	if (vbo != 0) glDeleteBuffers(1, &vbo);
 	if (ebo != 0) glDeleteBuffers(1, &ebo);
 	if (vao != 0) glDeleteVertexArrays(1, &vao);
 }
 
-void gl_AndroidNativeGLES_BindFlatBuffer(unsigned int vao, unsigned int vbo)
+void gl_GLES_BindFlatBuffer(unsigned int vao, unsigned int vbo)
 {
-	if (!gl_AndroidNativeGLES_CanUseResources()) return;
+	if (!gl_GLES_CanUseResources()) return;
 	glBindVertexArray(vao);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 }

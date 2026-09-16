@@ -1227,10 +1227,6 @@ int FTextureManager::CountLumpTextures (int lumpnum)
 
 void FTextureManager::PrecacheLevel (void)
 {
-#ifdef __ANDROID__ // This crashes with Zombie Torrent, couldnt not work out why so disable
-    return;
-#endif
-
 	BYTE *hitlist;
 	int cnt = NumTextures();
 

@@ -50,8 +50,8 @@
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_framebuffer.h"
 #include "gl/system/gl_cvars.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
@@ -83,19 +83,19 @@ CUSTOM_CVAR(Int, gl_fuzztype, 0, CVAR_ARCHIVE)
 	if (self < 0 || self > 7) self = 0;
 }
 
-#ifdef __ANDROID__
-static EAndroidNativeBlendMode AndroidSpriteBlend(const FRenderStyle &style, float alpha, bool solid, bool fuzz)
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+static EGLESBlendMode GLESSpriteBlend(const FRenderStyle &style, float alpha, bool solid, bool fuzz)
 {
-	if (fuzz) return ANDROID_BLEND_FUZZ;
+	if (fuzz) return GLES_BLEND_FUZZ;
 	if (style.BlendOp == STYLEOP_Add && style.DestAlpha == STYLEALPHA_One)
-		return ANDROID_BLEND_ADD;
+		return GLES_BLEND_ADD;
 	if (style.BlendOp == STYLEOP_Sub)
-		return ANDROID_BLEND_SUBTRACT;
+		return GLES_BLEND_SUBTRACT;
 	if (style.BlendOp == STYLEOP_RevSub)
-		return ANDROID_BLEND_REVERSE_SUBTRACT;
+		return GLES_BLEND_REVERSE_SUBTRACT;
 	if (solid && alpha >= 1.0f - FLT_EPSILON)
-		return ANDROID_BLEND_OPAQUE;
-	return ANDROID_BLEND_ALPHA;
+		return GLES_BLEND_OPAQUE;
+	return GLES_BLEND_ALPHA;
 }
 #endif
 
@@ -135,8 +135,8 @@ void GLSprite::Draw(int pass)
 {
 	if (pass!=GLPASS_PLAIN && pass != GLPASS_ALL && pass!=GLPASS_TRANSLUCENT) return;
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (actor != NULL)
 			gl_GetSpriteLighting(RenderStyle, actor, &Colormap, ThingColor);
@@ -227,20 +227,21 @@ void GLSprite::Draw(int pass)
 		const float nativeRight = mirrored ? nativeU2 : nativeU1;
 		const float texcoords[8] = { nativeLeft, nativeV1, nativeRight, nativeV1,
 			nativeRight, nativeV2, nativeLeft, nativeV2 };
-		gl_AndroidNativeGLES_AddSprite(positions, texcoords, color, nativeAlpha,
+		gl_GLES_AddSprite(positions, texcoords, color, nativeAlpha,
 			gltexture != NULL && gltexture->isMasked(),
 			nativeFog, texture, fogColor, fogDensity,
-			AndroidSpriteBlend(RenderStyle, nativeAlpha, hw_styleflags == STYLEHW_Solid, nativeFuzz),
-			(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
-			((RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
-			((RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
-			((RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
-			((RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0) |
-			((RenderStyle.Flags & STYLEF_ColorIsFixed) ? ANDROID_MATERIAL_COLOR_FIXED : 0), brightmap,
+			GLESSpriteBlend(RenderStyle, nativeAlpha, hw_styleflags == STYLEHW_Solid, nativeFuzz),
+			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
+			((RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
+			((RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
+			((RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
+			((RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
+			((RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0), brightmap,
 			(Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ? Colormap.colormap : 0);
 		return;
 	}
 #endif
+#if !defined(__ANDROID__)
 
 	// Hack to enable bright sprites in faded maps
 	uint32 backupfade = Colormap.FadeColor.d;
@@ -491,6 +492,7 @@ void GLSprite::Draw(int pass)
 
 	gl_RenderState.EnableTexture(true);
 	gl_RenderState.SetDynLight(0,0,0);
+#endif
 }
 
 
@@ -521,8 +523,8 @@ inline void GLSprite::PutSprite(bool translucent)
 	if ( this->actor && this->actor->FixedColormap != NOFIXEDCOLORMAP )
 		this->Colormap.colormap = CM_FIRSTSPECIALCOLORMAP + this->actor->FixedColormap;
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		Draw(GLPASS_TRANSLUCENT);
 		return;
@@ -986,8 +988,8 @@ void GLSprite::Process(AActor* thing,sector_t * sector)
 		RenderStyle.CheckFuzz();
 		if (RenderStyle.BlendOp == STYLEOP_Fuzz)
 		{
-			#ifdef __ANDROID__
-			if (gl_AndroidNativeGLES_IsActive() && gl_fuzztype != 0)
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (gl_GLES_IsActive() && gl_fuzztype != 0)
 			{
 				nativeFuzz = true;
 				RenderStyle = LegacyRenderStyles[STYLE_Translucent];

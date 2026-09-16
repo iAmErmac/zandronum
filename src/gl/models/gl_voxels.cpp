@@ -60,8 +60,8 @@
 #include "gl/utility/gl_convert.h"
 #include "gl/renderer/gl_renderstate.h"
 
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #include <vector>
 #endif
 
@@ -287,6 +287,7 @@ FVoxelVertexBuffer::~FVoxelVertexBuffer()
 
 void FVoxelVertexBuffer::BindVBO()
 {
+#if !defined(__ANDROID__)
 	glBindBuffer(GL_ARRAY_BUFFER, vbo_id);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_id);
 	glVertexPointer(3,GL_FLOAT, sizeof(FVoxelVertex), &VVO->x);
@@ -294,6 +295,7 @@ void FVoxelVertexBuffer::BindVBO()
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 	glEnableClientState(GL_INDEX_ARRAY);
+#endif
 }
 
 
@@ -517,6 +519,12 @@ int FVoxelModel::FindFrame(const char * name)
 
 void FVoxelModel::RenderFrame(FTexture * skin, int frame, int cm, int translation)
 {
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
 	FMaterial * tex = FMaterial::ValidateTexture(skin);
 	tex->Bind(cm, 0, translation);
 	gl_RenderState.Apply();
@@ -541,6 +549,7 @@ void FVoxelModel::RenderFrame(FTexture * skin, int frame, int cm, int translatio
 		glVertex3fv(&vert->x);
 	}
 	glEnd();
+#endif
 }
 
 //===========================================================================
@@ -554,7 +563,7 @@ void FVoxelModel::RenderFrameInterpolated(FTexture * skin, int frame, int frame2
 	RenderFrame(skin, frame, cm, translation);
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 bool FVoxelModel::RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 	int cm, int translation, FModelNativeCollector *collector)
 {

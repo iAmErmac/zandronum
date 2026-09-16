@@ -26,6 +26,7 @@ extern IVideo *Video;
 
 struct FRenderer;
 FRenderer *gl_CreateInterface();
+IVideo *gl_CreateGLESVideo();
 
 
 class Win32GLVideo : public IVideo
@@ -43,6 +44,8 @@ public:
 	virtual bool SetResolution (int width, int height, int bits);
 	void DumpAdapters();
 	bool InitHardware (HWND Window, bool allowsoftware, int multisample);
+	bool IsGLES() const { return m_GLES; }
+	bool IsGLESContextReady() const { return m_GLESContextReady; }
 	void Shutdown();
 	bool SetFullscreen(const char *devicename, int w, int h, int bits, int hz);
 
@@ -69,6 +72,8 @@ protected:
 	int m_IteratorBits;
 	bool m_IteratorFS;
 	bool m_IsFullscreen;
+	bool m_GLES;
+	bool m_GLESContextReady;
 	int m_trueHeight;
 	int m_DisplayWidth, m_DisplayHeight, m_DisplayBits, m_DisplayHz;
 	HMODULE hmRender;

@@ -199,6 +199,7 @@
 #define IDC_WELCOME_FULLSCREEN			4022
 #define IDC_WELCOME_COMPAT				4023
 #define IDC_WELCOME_SHIFTLABEL			4024
+#define IDC_WELCOME_GLES				4025
 #define IDC_SPIN2                       4043
 #define IDC_SPIN3                       4044
 #define G15_ICON_ORION					4045 // [RC] G15 LCD console.

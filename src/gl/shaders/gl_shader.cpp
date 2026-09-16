@@ -56,8 +56,9 @@
 #include "gl/system/gl_cvars.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_context.h"
 #endif
 
 #include "gl/data/gl_data.h"
@@ -170,13 +171,23 @@ bool FShader::Load(const char * name, const char * vert_prog_lump, const char * 
 		{
 			error << "Linking:\n" << buffer << "\n";
 		}
-#ifdef __ANDROID__
-		int linked = 1;
-        int linkStatus[1];
-        glGetProgramiv(hShader, GL_LINK_STATUS, linkStatus);
-        linked = (linkStatus[0] == GL_TRUE) ;
+		int linked = 0;
+#if defined(__ANDROID__)
+		int linkStatus[1];
+		gl_GLES_GetProcTable().GetProgramiv(hShader, GL_LINK_STATUS, linkStatus);
+		linked = (linkStatus[0] == GL_TRUE);
+#elif defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+		{
+			int linkStatus[1];
+			gl_GLES_GetProcTable().GetProgramiv(hShader, GL_LINK_STATUS, linkStatus);
+			linked = (linkStatus[0] == GL_TRUE);
+		}
+		else
+		{
+			glGetObjectParameteriv(hShader, GL_LINK_STATUS, &linked);
+		}
 #else
-		int linked;
 		glGetObjectParameteriv(hShader, GL_LINK_STATUS, &linked);
 #endif
 		if (linked == 0)
@@ -589,8 +600,8 @@ void FShaderManager::CompileShaders()
 void FShaderManager::Clean()
 {
 	SetActiveShader(NULL);
-	#ifdef __ANDROID__
-	ClearAndroidNativePrograms();
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	ClearGLESPrograms();
 	#endif
 	for(unsigned int i=0;i<mTextureEffects.Size();i++)
 	{
@@ -604,38 +615,38 @@ void FShaderManager::Clean()
 	mTextureEffects.Clear();
 }
 
-#ifdef __ANDROID__
-void FShaderManager::RegisterAndroidNativeProgram(const char *name, unsigned int handle)
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+void FShaderManager::RegisterGLESProgram(const char *name, unsigned int handle)
 {
 	if (name == NULL || handle == 0) return;
 	FName programName = name;
-	for (unsigned int i = 0; i < mAndroidNativePrograms.Size(); ++i)
+	for (unsigned int i = 0; i < mGLESPrograms.Size(); ++i)
 	{
-		if (mAndroidNativePrograms[i].Name == programName)
+		if (mGLESPrograms[i].Name == programName)
 		{
-			mAndroidNativePrograms[i].Handle = handle;
+			mGLESPrograms[i].Handle = handle;
 			return;
 		}
 	}
-	FAndroidNativeProgram program = { programName, handle };
-	mAndroidNativePrograms.Push(program);
+	FGLESProgram program = { programName, handle };
+	mGLESPrograms.Push(program);
 }
 
-void FShaderManager::ClearAndroidNativePrograms()
+void FShaderManager::ClearGLESPrograms()
 {
-	mAndroidNativePrograms.Clear();
+	mGLESPrograms.Clear();
 }
 
-unsigned int FShaderManager::BindAndroidNativeProgram(const char *name)
+unsigned int FShaderManager::BindGLESProgram(const char *name)
 {
 	if (name == NULL) return 0;
 	FName programName = name;
-	for (unsigned int i = 0; i < mAndroidNativePrograms.Size(); ++i)
+	for (unsigned int i = 0; i < mGLESPrograms.Size(); ++i)
 	{
-		if (mAndroidNativePrograms[i].Name == programName)
+		if (mGLESPrograms[i].Name == programName)
 		{
-			gl_AndroidNativeGLES_UseProgram(mAndroidNativePrograms[i].Handle);
-			return mAndroidNativePrograms[i].Handle;
+			gl_GLES_UseProgram(mGLESPrograms[i].Handle);
+			return mGLESPrograms[i].Handle;
 		}
 	}
 	return 0;

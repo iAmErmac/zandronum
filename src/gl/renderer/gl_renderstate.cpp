@@ -46,8 +46,8 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/renderer/gl_colormap.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 // [EP] New #includes.
@@ -271,16 +271,20 @@ bool FRenderState::ApplyShader()
 
 void FRenderState::Apply(bool forcenoshader)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		gl_AndroidNativeGLES_ApplyRenderState(mSrcBlend, mDstBlend, mAlphaFunc,
+		gl_GLES_ApplyRenderState(mSrcBlend, mDstBlend, mAlphaFunc,
 			mAlphaThreshold, mAlphaTest, mBlendEquation, mFogEnabled,
 			mTextureEnabled, mTextureMode);
 		return;
 	}
-	#endif
+#if defined(__ANDROID__)
+	return;
+#endif
+#endif
 
+#if !defined(__ANDROID__)
 	if (!gl_direct_state_change)
 	{
 		if (mSrcBlend != glSrcBlend || mDstBlend != glDstBlend)
@@ -369,6 +373,6 @@ void FRenderState::Apply(bool forcenoshader)
 			ffSpecialEffect = mSpecialEffect;
 		}
 	}
-
+#endif
 }
 

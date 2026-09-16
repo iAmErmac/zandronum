@@ -55,6 +55,10 @@
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
 
+#if defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#endif
+
 
 //==========================================================================
 //
@@ -238,7 +242,12 @@ bool gl_SetupLight(Plane & p, ADynamicLight * light, Vector & nearPt, Vector & u
 		g= (g*(32-desaturation)+ gray*desaturation)/32;
 		b= (b*(32-desaturation)+ gray*desaturation)/32;
 	}
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+#endif
 	glColor3f(r,g,b);
+#endif
 	return true;
 }
 

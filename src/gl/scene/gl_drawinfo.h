@@ -238,8 +238,10 @@ struct FDrawInfo
 	void AddOtherCeilingPlane(int sector, gl_subsectorrendernode * node);
 
 	void StartScene();
+#if !defined(__ANDROID__)
 	void SetupFloodStencil(wallseg * ws);
 	void ClearFloodStencil(wallseg * ws);
+#endif
 	void DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, bool ceiling);
 	void FloodUpperGap(seg_t * seg);
 	void FloodLowerGap(seg_t * seg);

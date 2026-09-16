@@ -60,8 +60,8 @@
 #include "gl/utility/gl_convert.h"
 #include "gl/renderer/gl_renderstate.h"
 
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/renderer/gl_colormap.h"
 #include "gl/renderer/gl_lightdata.h"
@@ -88,10 +88,10 @@ EXTERN_CVAR(Bool, gl_dynlight_shader)
 extern TDeletingArray<FVoxel *> Voxels;
 extern TDeletingArray<FVoxelDef *> VoxelDefs;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 float gl_RollAgainstAngleHelper(const AActor *actor);
 
-class FAndroidNativeModelCollector : public FModelNativeCollector
+class FGLESModelCollector : public FModelNativeCollector
 {
 	GLSprite *Sprite;
 	int Colormap;
@@ -99,7 +99,7 @@ class FAndroidNativeModelCollector : public FModelNativeCollector
 	Matrix3x4 Transform;
 
 public:
-	FAndroidNativeModelCollector(GLSprite *sprite, int colormap, int translation,
+	FGLESModelCollector(GLSprite *sprite, int colormap, int translation,
 		const Matrix3x4 &transform)
 		: Sprite(sprite), Colormap(colormap), Translation(translation), Transform(transform) {}
 
@@ -200,25 +200,25 @@ public:
 			fogColor[2] = fade.b / 255.0f;
 		}
 		const bool nativeFuzz = Sprite->nativeFuzz || Sprite->RenderStyle.BlendOp == STYLEOP_Fuzz;
-		EAndroidNativeBlendMode blendMode = nativeFuzz ? ANDROID_BLEND_FUZZ : ANDROID_BLEND_ALPHA;
+		EGLESBlendMode blendMode = nativeFuzz ? GLES_BLEND_FUZZ : GLES_BLEND_ALPHA;
 		if (Sprite->RenderStyle.BlendOp == STYLEOP_Add && Sprite->RenderStyle.DestAlpha == STYLEALPHA_One)
-			blendMode = ANDROID_BLEND_ADD;
+			blendMode = GLES_BLEND_ADD;
 		else if (Sprite->RenderStyle.BlendOp == STYLEOP_Sub)
-			blendMode = ANDROID_BLEND_SUBTRACT;
+			blendMode = GLES_BLEND_SUBTRACT;
 		else if (Sprite->RenderStyle.BlendOp == STYLEOP_RevSub)
-			blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+			blendMode = GLES_BLEND_REVERSE_SUBTRACT;
 		else if (Sprite->trans >= 1.0f - FLT_EPSILON && Sprite->RenderStyle.BlendOp == STYLEOP_Add &&
 			(Sprite->RenderStyle.DestAlpha == STYLEALPHA_InvSrc || Sprite->RenderStyle.DestAlpha == STYLEALPHA_Zero))
-			blendMode = ANDROID_BLEND_OPAQUE;
-		gl_AndroidNativeGLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
+			blendMode = GLES_BLEND_OPAQUE;
+		gl_GLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
 			indices, indexCount, color, nativeAlpha, material->isMasked(), fog, texture,
 			fogColor, fogDensity, blendMode,
-			(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_ColorIsFixed) ? ANDROID_MATERIAL_COLOR_FIXED : 0),
+			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
+			((Sprite->RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0),
 			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
 			(Colormap >= CM_DESAT0 && Colormap <= CM_DESAT31) ? Colormap : 0,
 			!(Sprite->RenderStyle == LegacyRenderStyles[STYLE_Normal]));
@@ -330,7 +330,7 @@ static bool RenderModelNative(GLSprite *spr, int cm)
 			}
 		}
 	}
-	FAndroidNativeModelCollector collector(spr, cm, translation, transform);
+	FGLESModelCollector collector(spr, cm, translation, transform);
 	bool submitted = false;
 	for (int modelIndex = 0; modelIndex < MAX_MODELS_PER_FRAME; ++modelIndex)
 	{
@@ -947,6 +947,7 @@ FSpriteModelFrame * gl_FindModelFrame(const PClass * ti, int sprite, int frame, 
 //
 //===========================================================================
 
+#if !defined(__ANDROID__)
 void gl_RenderFrameModels( const FSpriteModelFrame *smf,
 						   const FState *curState,
 						   const int curTics,
@@ -1017,6 +1018,7 @@ void gl_RenderFrameModels( const FSpriteModelFrame *smf,
 		}
 	}
 }
+#endif
 
 // [BB] Small helper function for MDL_ROLLAGAINSTANGLE.
 float gl_RollAgainstAngleHelper ( const AActor *actor )
@@ -1035,15 +1037,18 @@ float gl_RollAgainstAngleHelper ( const AActor *actor )
 
 void gl_RenderModel(GLSprite * spr, int cm)
 {
-	FSpriteModelFrame * smf = spr->modelframe;
-
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__)
+	RenderModelNative(spr, cm);
+	return;
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		RenderModelNative(spr, cm);
 		return;
 	}
-#endif
+	#endif
+#if !defined(__ANDROID__)
+	FSpriteModelFrame * smf = spr->modelframe;
 
 	// Setup transformation.
 	glDepthFunc(GL_LEQUAL);
@@ -1198,6 +1203,7 @@ void gl_RenderModel(GLSprite * spr, int cm)
 	glDepthFunc(GL_LESS);
 	if (!( spr->actor->RenderStyle == LegacyRenderStyles[STYLE_Normal] ))
 		glDisable(GL_CULL_FACE);
+#endif
 }
 
 
@@ -1207,6 +1213,7 @@ void gl_RenderModel(GLSprite * spr, int cm)
 //
 //===========================================================================
 
+#if !defined(__ANDROID__)
 void gl_RenderHUDModel(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm)
 {
 	AActor * playermo=players[consoleplayer].camera;
@@ -1258,6 +1265,7 @@ void gl_RenderHUDModel(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm)
 	if (!( playermo->RenderStyle == LegacyRenderStyles[STYLE_Normal] ))
 		glDisable(GL_CULL_FACE);
 }
+#endif
 
 //===========================================================================
 //
@@ -1265,6 +1273,7 @@ void gl_RenderHUDModel(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm)
 //
 //===========================================================================
 
+#if !defined(__ANDROID__)
 bool gl_IsHUDModelForPlayerAvailable (player_t * player)
 {
 	if ( (player == NULL) || (player->ReadyWeapon == NULL) || (player->psprites[0].state == NULL) )
@@ -1274,6 +1283,7 @@ bool gl_IsHUDModelForPlayerAvailable (player_t * player)
 	FSpriteModelFrame *smf = gl_FindModelFrame(player->ReadyWeapon->GetClass(), state->sprite, state->GetFrame(), false);
 	return ( smf != NULL );
 }
+#endif
 
 //===========================================================================
 //

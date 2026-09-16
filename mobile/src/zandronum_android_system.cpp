@@ -42,6 +42,7 @@ DWORD LanguageIDs[4] = {
 	MAKE_ID('e', 'n', 'u', 0), MAKE_ID('e', 'n', 'u', 0),
 	MAKE_ID('e', 'n', 'u', 0), MAKE_ID('e', 'n', 'u', 0)
 };
+EXTERN_CVAR(String, language)
 
 int (*I_GetTime)(bool saveMS);
 int (*I_WaitForTic)(int prevtic);
@@ -141,6 +142,12 @@ void I_WaitVBL(int count)
 
 void SetLanguageIDs()
 {
+	const size_t languageLength = strlen(language);
+	DWORD languageId = MAKE_ID('e', 'n', 'u', 0);
+	if (languageLength == 2 || languageLength == 3)
+		languageId = MAKE_ID(language[0], language[1], languageLength == 3 ? language[2] : 0, 0);
+	for (size_t index = 0; index < countof(LanguageIDs); ++index)
+		LanguageIDs[index] = languageId;
 }
 
 void I_Init()
@@ -202,10 +209,6 @@ void STACK_ARGS I_Error(const char *error, ...)
 	throw CRecoverableError(errorText);
 }
 
-void I_SetIWADInfo()
-{
-}
-
 void I_PrintStr(const char *text)
 {
 	while (*text)
@@ -220,8 +223,17 @@ void I_PrintStr(const char *text)
 	fflush(stdout);
 }
 
-int I_PickIWad(WadStuff *, int, bool, int defaultiwad)
+int I_PickIWad(WadStuff *, int numwads, bool queryiwad, int defaultiwad)
 {
+	if (queryiwad && numwads > 1)
+	{
+		static bool reported = false;
+		if (!reported)
+		{
+			reported = true;
+			Printf("Android IWAD selection UI is unsupported; using the configured/default IWAD.\n");
+		}
+	}
 	return defaultiwad;
 }
 
@@ -314,7 +326,15 @@ bool I_SetCursor(FTexture *cursorpic)
 	if (cursorpic == nullptr || cursorpic->UseType == FTexture::TEX_Null)
 		return Zandronum_AndroidHost_SetPointerIcon(nullptr, 0, 0, 0, 0);
 	if (cursorpic->GetWidth() > 32 || cursorpic->GetHeight() > 32)
+	{
+		static bool reported = false;
+		if (!reported)
+		{
+			reported = true;
+			Printf("Android pointer icons do not support custom cursors larger than 32x32.\n");
+		}
 		return false;
+	}
 	FBitmap bitmap;
 	if (!bitmap.Create(cursorpic->GetWidth(), cursorpic->GetHeight()))
 		return false;

@@ -1,5 +1,6 @@
 #include "gl/system/gl_gles_context.h"
 
+#include <chrono>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,21 +11,27 @@ namespace
 	FGLESProcTable Procedures = {};
 	FGLESContextInfo ContextInfo = {};
 	FGLESHostCallbacks HostCallbacks = {};
+	FGLESTargetDescriptor HostTarget = {};
 	FGLESFrameDescriptor LastFrame = {};
 	FGLESTargetDescriptor LastTarget = {};
 	FGLESViewDescriptor LastView = {};
 	bool ContextReady = false;
 	bool FrameReady = false;
+	bool HostTargetReady = false;
+	bool PresentationUnavailableReported = false;
 
 	static void ResetContextState()
 	{
 		Procedures = {};
 		ContextInfo = {};
+		HostTarget = {};
 		LastFrame = {};
 		LastTarget = {};
 		LastView = {};
 		ContextReady = false;
 		FrameReady = false;
+		HostTargetReady = false;
+		PresentationUnavailableReported = false;
 	}
 
 	static void LogMessage(const char *message)
@@ -54,7 +61,34 @@ namespace
 			Procedures.DeleteShader != nullptr && Procedures.CreateProgram != nullptr &&
 			Procedures.AttachShader != nullptr && Procedures.LinkProgram != nullptr &&
 			Procedures.GetProgramiv != nullptr && Procedures.GetProgramInfoLog != nullptr &&
-			Procedures.DeleteProgram != nullptr;
+			Procedures.DeleteProgram != nullptr && Procedures.ActiveTexture != nullptr &&
+			Procedures.BindTexture != nullptr && Procedures.GenTextures != nullptr &&
+			Procedures.DeleteTextures != nullptr && Procedures.TexParameteri != nullptr &&
+			Procedures.TexImage2D != nullptr && Procedures.UseProgram != nullptr &&
+			Procedures.GetUniformLocation != nullptr && Procedures.Uniform1i != nullptr &&
+			Procedures.Uniform1f != nullptr && Procedures.Uniform4f != nullptr &&
+			Procedures.UniformMatrix4fv != nullptr && Procedures.GenVertexArrays != nullptr &&
+			Procedures.DeleteVertexArrays != nullptr && Procedures.BindVertexArray != nullptr &&
+			Procedures.GenBuffers != nullptr && Procedures.DeleteBuffers != nullptr &&
+			Procedures.BindBuffer != nullptr && Procedures.BufferData != nullptr &&
+			Procedures.EnableVertexAttribArray != nullptr && Procedures.VertexAttribPointer != nullptr &&
+			Procedures.DrawElements != nullptr && Procedures.Viewport != nullptr &&
+			Procedures.Scissor != nullptr && Procedures.ClearColor != nullptr &&
+			Procedures.Clear != nullptr && Procedures.Enable != nullptr &&
+			Procedures.Disable != nullptr && Procedures.BlendFunc != nullptr &&
+			Procedures.DepthFunc != nullptr && Procedures.DepthMask != nullptr &&
+			Procedures.BlendEquation != nullptr && Procedures.BindSampler != nullptr &&
+			Procedures.GenSamplers != nullptr && Procedures.DeleteSamplers != nullptr &&
+			Procedures.SamplerParameteri != nullptr && Procedures.BufferSubData != nullptr &&
+			Procedures.ClearDepthf != nullptr && Procedures.ClearStencil != nullptr &&
+			Procedures.ColorMask != nullptr && Procedures.CopyTexSubImage2D != nullptr &&
+			Procedures.CullFace != nullptr && Procedures.DepthRangef != nullptr &&
+			Procedures.FrontFace != nullptr && Procedures.GenerateMipmap != nullptr &&
+			Procedures.PixelStorei != nullptr && Procedures.ReadPixels != nullptr &&
+			Procedures.StencilFunc != nullptr && Procedures.StencilMask != nullptr &&
+			Procedures.StencilOp != nullptr && Procedures.TexSubImage2D != nullptr &&
+			Procedures.Uniform3f != nullptr && Procedures.Uniform3fv != nullptr &&
+			Procedures.Uniform3i != nullptr && Procedures.Uniform4fv != nullptr;
 	}
 
 	static int ParseVersion(const char *version, bool *isGLES)
@@ -229,6 +263,35 @@ namespace
 		LOAD_GLES_PROCEDURE(BlendFunc);
 		LOAD_GLES_PROCEDURE(DepthFunc);
 		LOAD_GLES_PROCEDURE(DepthMask);
+		LOAD_GLES_PROCEDURE(BlendEquation);
+		LOAD_GLES_PROCEDURE(BindSampler);
+		LOAD_GLES_PROCEDURE(GenSamplers);
+		LOAD_GLES_PROCEDURE(DeleteSamplers);
+		LOAD_GLES_PROCEDURE(SamplerParameteri);
+		LOAD_GLES_PROCEDURE(BufferSubData);
+		LOAD_GLES_PROCEDURE(ClearDepthf);
+		if (Procedures.ClearDepthf == nullptr)
+			LoadProcedure(resolver, "glClearDepth", reinterpret_cast<void **>(&Procedures.ClearDepthf));
+		LOAD_GLES_PROCEDURE(ClearStencil);
+		LOAD_GLES_PROCEDURE(ColorMask);
+		LOAD_GLES_PROCEDURE(CopyTexSubImage2D);
+		LOAD_GLES_PROCEDURE(CullFace);
+		LOAD_GLES_PROCEDURE(DepthRangef);
+		if (Procedures.DepthRangef == nullptr)
+			LoadProcedure(resolver, "glDepthRange", reinterpret_cast<void **>(&Procedures.DepthRangef));
+		LOAD_GLES_PROCEDURE(DrawElements);
+		LOAD_GLES_PROCEDURE(FrontFace);
+		LOAD_GLES_PROCEDURE(GenerateMipmap);
+		LOAD_GLES_PROCEDURE(PixelStorei);
+		LOAD_GLES_PROCEDURE(ReadPixels);
+		LOAD_GLES_PROCEDURE(StencilFunc);
+		LOAD_GLES_PROCEDURE(StencilMask);
+		LOAD_GLES_PROCEDURE(StencilOp);
+		LOAD_GLES_PROCEDURE(TexSubImage2D);
+		LOAD_GLES_PROCEDURE(Uniform3f);
+		LOAD_GLES_PROCEDURE(Uniform3fv);
+		LOAD_GLES_PROCEDURE(Uniform3i);
+		LOAD_GLES_PROCEDURE(Uniform4fv);
 	}
 
 #undef LOAD_GLES_PROCEDURE
@@ -297,6 +360,31 @@ namespace
 		Procedures.BlendFunc = &glBlendFunc;
 		Procedures.DepthFunc = &glDepthFunc;
 		Procedures.DepthMask = &glDepthMask;
+		Procedures.BlendEquation = &glBlendEquation;
+		Procedures.BindSampler = &glBindSampler;
+		Procedures.GenSamplers = &glGenSamplers;
+		Procedures.DeleteSamplers = &glDeleteSamplers;
+		Procedures.SamplerParameteri = &glSamplerParameteri;
+		Procedures.BufferSubData = &glBufferSubData;
+		Procedures.ClearDepthf = &glClearDepthf;
+		Procedures.ClearStencil = &glClearStencil;
+		Procedures.ColorMask = &glColorMask;
+		Procedures.CopyTexSubImage2D = &glCopyTexSubImage2D;
+		Procedures.CullFace = &glCullFace;
+		Procedures.DepthRangef = &glDepthRangef;
+		Procedures.DrawElements = &glDrawElements;
+		Procedures.FrontFace = &glFrontFace;
+		Procedures.GenerateMipmap = &glGenerateMipmap;
+		Procedures.PixelStorei = &glPixelStorei;
+		Procedures.ReadPixels = &glReadPixels;
+		Procedures.StencilFunc = &glStencilFunc;
+		Procedures.StencilMask = &glStencilMask;
+		Procedures.StencilOp = &glStencilOp;
+		Procedures.TexSubImage2D = &glTexSubImage2D;
+		Procedures.Uniform3f = &glUniform3f;
+		Procedures.Uniform3fv = &glUniform3fv;
+		Procedures.Uniform3i = &glUniform3i;
+		Procedures.Uniform4fv = &glUniform4fv;
 	}
 #endif
 }
@@ -346,10 +434,11 @@ bool gl_GLES_InstallDirectContext(int minimumMajor, int minimumMinor, FGLESConte
 #endif
 }
 
-void gl_GLES_ShutdownContext()
+void gl_GLES_ShutdownContext(bool preserveHostCallbacks)
 {
 	ResetContextState();
-	HostCallbacks = {};
+	if (!preserveHostCallbacks)
+		HostCallbacks = {};
 }
 
 bool gl_GLES_HasContext()
@@ -380,6 +469,53 @@ bool gl_GLES_HasExtension(const char *name)
 void gl_GLES_RegisterHostCallbacks(const FGLESHostCallbacks *callbacks)
 {
 	HostCallbacks = callbacks != nullptr ? *callbacks : FGLESHostCallbacks{};
+}
+
+void gl_GLES_PrepareHostFrame()
+{
+	if (HostCallbacks.prepareFrame != nullptr)
+		HostCallbacks.prepareFrame(HostCallbacks.userData);
+}
+
+bool gl_GLES_SetHostTarget(const FGLESTargetDescriptor &target)
+{
+	if (target.renderWidth <= 0 || target.renderHeight <= 0 || !target.hostOwnsPresentation)
+	{
+		HostTarget = {};
+		HostTargetReady = false;
+		gl_GLES_Report("target", "host supplied an invalid presentation target");
+		return false;
+	}
+	const bool changed = !HostTargetReady || HostTarget.framebuffer != target.framebuffer ||
+		HostTarget.colorAttachment != target.colorAttachment ||
+		HostTarget.renderWidth != target.renderWidth || HostTarget.renderHeight != target.renderHeight ||
+		HostTarget.sampleCount != target.sampleCount ||
+		HostTarget.hostOwnsPresentation != target.hostOwnsPresentation;
+	HostTarget = target;
+	HostTargetReady = true;
+	if (changed)
+	{
+		char message[160];
+		snprintf(message, sizeof(message), "host target %dx%d, %d samples, framebuffer %u",
+			target.renderWidth, target.renderHeight, target.sampleCount,
+			static_cast<unsigned int>(target.framebuffer));
+		gl_GLES_Report("target", message);
+	}
+	return true;
+}
+
+void gl_GLES_InvalidateHostTarget()
+{
+	HostTarget = {};
+	HostTargetReady = false;
+}
+
+bool gl_GLES_GetHostTarget(FGLESTargetDescriptor *target)
+{
+	if (!HostTargetReady || target == nullptr)
+		return false;
+	*target = HostTarget;
+	return true;
 }
 
 void gl_GLES_Report(const char *stage, const char *message)
@@ -419,12 +555,31 @@ void gl_GLES_SetFrameContract(const FGLESFrameDescriptor &frame,
 
 bool gl_GLES_PresentFrame()
 {
-	if (!FrameReady || !LastTarget.hostOwnsPresentation || HostCallbacks.present == nullptr)
+	if (!FrameReady || LastFrame.target != &LastTarget || LastFrame.view != &LastView ||
+		LastFrame.targetWidth != LastTarget.renderWidth || LastFrame.targetHeight != LastTarget.renderHeight ||
+		!LastTarget.hostOwnsPresentation || HostCallbacks.present == nullptr)
 	{
-		gl_GLES_Report("present", "host presentation callback or frame contract is unavailable");
+		if (!PresentationUnavailableReported)
+		{
+			gl_GLES_Report("present", "host presentation callback or frame contract is unavailable");
+			PresentationUnavailableReported = true;
+		}
 		return false;
 	}
-	return HostCallbacks.present(HostCallbacks.userData);
+	PresentationUnavailableReported = false;
+	const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+	const bool presented = HostCallbacks.present(HostCallbacks.userData);
+	if (HostCallbacks.log != nullptr &&
+		(LastFrame.frameNumber == 0 || (LastFrame.frameNumber % 120) == 0))
+	{
+		const std::chrono::duration<double, std::milli> elapsed =
+			std::chrono::steady_clock::now() - start;
+		char message[128];
+		snprintf(message, sizeof(message), "GLES present CPU %.3f ms (%s)", elapsed.count(),
+			presented ? "ok" : "failed");
+		LogMessage(message);
+	}
+	return presented;
 }
 
 const FGLESFrameDescriptor &gl_GLES_GetFrameContract()

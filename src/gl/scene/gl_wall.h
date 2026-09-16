@@ -272,7 +272,9 @@ public:
 
 	bool SetupSubsectorLights(bool lightsapplied, subsector_t * sub);
 	void DrawSubsector(subsector_t * sub);
+#if !defined(__ANDROID__)
 	void DrawSubsectorLights(subsector_t * sub, int pass);
+#endif
 	void DrawSubsectors(int pass, bool istrans);
 
 	void PutFlat(bool fog = false);

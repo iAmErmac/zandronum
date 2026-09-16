@@ -38,7 +38,7 @@
 #include "gl/system/gl_system.h"
 #include "w_wad.h"
 #include "m_png.h"
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include <algorithm>
 #endif
 #include "sbar.h"
@@ -62,8 +62,8 @@
 #include "gl/textures/gl_bitmap.h"
 #include "gl/textures/gl_material.h"
 #include "gl/shaders/gl_shader.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 EXTERN_CVAR(Bool, gl_render_precise)
@@ -631,8 +631,8 @@ FMaterial::FMaterial(FTexture * tx, bool forceexpand)
 		expanded = false;
 	}
 	else if (gl.shadermodel > 2
-#ifdef __ANDROID__
-		|| gl_AndroidNativeGLES_GetCapabilities().majorVersion >= 3
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		|| gl_GLES_GetCapabilities().majorVersion >= 3
 #endif
 	)
 	{
@@ -945,7 +945,7 @@ void FMaterial::Precache()
 	}
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool allowhires) const
 {
 	if (translation <= 0) translation = -translation;
@@ -957,7 +957,7 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 	const bool expand = tex->UseType == FTexture::TEX_Sprite ||
 		tex->UseType == FTexture::TEX_SkinSprite || tex->UseType == FTexture::TEX_Decal;
 	if (tex->bHasCanvas)
-		return gl_AndroidNativeGLES_EnsureMaterialTexture(this, TextureWidth(GLUSE_TEXTURE),
+		return gl_GLES_EnsureMaterialTexture(this, TextureWidth(GLUSE_TEXTURE),
 			TextureHeight(GLUSE_TEXTURE), repeat, cm, translation, allowhires);
 	const int nativeWarp = tex->bWarped && (mShaderIndex == 1 || mShaderIndex == 2) ? mShaderIndex : 0;
 	unsigned char *pixels = CreateTexBuffer(cm, translation, width, height, expand, allowhires, nativeWarp);
@@ -966,7 +966,7 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 		delete[] pixels;
 		return 0;
 	}
-	const unsigned int texture = gl_AndroidNativeGLES_BindMaterial(this, pixels, width, height,
+	const unsigned int texture = gl_GLES_BindMaterial(this, pixels, width, height,
 		repeat, cm, translation, allowhires);
 	delete[] pixels;
 	return texture;
@@ -1150,8 +1150,8 @@ FMaterial * FMaterial::ValidateTexture(FTextureID no, bool translate)
 
 void FMaterial::FlushAll()
 {
-#ifdef __ANDROID__
-	gl_AndroidNativeGLES_ClearMaterialCache();
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	gl_GLES_ClearMaterialCache();
 #endif
 	for(int i=mMaterials.Size()-1;i>=0;i--)
 	{

@@ -41,6 +41,8 @@
 #include "p_lnspec.h"
 #include "p_local.h"
 #include "a_sharedglobal.h"
+#include "c_console.h"
+#include "doomstat.h"
 #include "r_sky.h"
 #include "p_effect.h"
 #include "po_man.h"
@@ -52,13 +54,49 @@
 #include "gl/scene/gl_portal.h"
 #include "gl/scene/gl_wall.h"
 #include "gl/utility/gl_clock.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 EXTERN_CVAR(Bool, gl_render_segs)
 
 Clipper clipper;
+
+#if (defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)) && !defined(NDEBUG)
+struct FBSPVisibilityCounters
+{
+	unsigned int candidateNodes;
+	unsigned int candidateSubsectors;
+	unsigned int mapSectionRejects;
+	unsigned int frustumRejects;
+};
+
+static FBSPVisibilityCounters BSPVisibilityCounters = {};
+static unsigned int BSPTraversalDepth = 0;
+static unsigned int BSPTraversalCount = 0;
+
+class FBSPVisibilityScope
+{
+public:
+	FBSPVisibilityScope() : IsRoot(BSPTraversalDepth++ == 0)
+	{
+		if (IsRoot) BSPVisibilityCounters = {};
+	}
+
+	~FBSPVisibilityScope()
+	{
+		--BSPTraversalDepth;
+		if (!IsRoot || !gl_GLES_IsActive() || !developer) return;
+		if (++BSPTraversalCount % 600 != 0) return;
+		DPrintf("GLES BSP visibility: %u candidate nodes, %u candidate subsectors, %u map-section rejects, %u frustum rejects.\n",
+			BSPVisibilityCounters.candidateNodes, BSPVisibilityCounters.candidateSubsectors,
+			BSPVisibilityCounters.mapSectionRejects, BSPVisibilityCounters.frustumRejects);
+	}
+
+private:
+	bool IsRoot;
+};
+#endif
 
 
 // [BB] Don't allow this in release builds.
@@ -138,7 +176,7 @@ static void AddLine (seg_t *seg)
 		return;
 	}
 
-	if (!clipper.SafeCheckRange(startAngle, endAngle)) 
+	if (!clipper.SafeCheckRange(startAngle, endAngle))
 	{
 		return;
 	}
@@ -190,20 +228,11 @@ static void AddLine (seg_t *seg)
 		{
 			SetupWall.Clock();
 
-			//if (!gl_multithreading)
 			{
 				GLWall wall;
 				wall.sub = currentsubsector;
 				wall.Process(seg, currentsector, backsector);
 			}
-			/*
-			else
-			{
-				FJob *job = new FGLJobProcessWall(currentsubsector, seg, 
-					currentsector->sectornum, backsector != NULL? backsector->sectornum : -1);
-				GLRenderer->mThreadManager->AddJob(job);
-			}
-			*/
 			rendered_lines++;
 
 			SetupWall.Unclock();
@@ -345,7 +374,6 @@ static inline void RenderThings(subsector_t * sub, sector_t * sector)
 	sector_t * sec=sub->sector;
 	if (sec->thinglist != NULL)
 	{
-		//if (!gl_multithreading)
 		{
 			// Handle all things in sector.
 			for (AActor * thing = sec->thinglist; thing; thing = thing->snext)
@@ -353,13 +381,6 @@ static inline void RenderThings(subsector_t * sub, sector_t * sector)
 				GLRenderer->ProcessSprite(thing, sector);
 			}
 		}
-		/*
-		else if (sec->thinglist != NULL)
-		{
-			FJob *job = new FGLJobProcessSprites(sector);
-			GLRenderer->mThreadManager->AddJob(job);
-		}
-		*/
 	}
 	SetupSprite.Unclock();
 }
@@ -376,6 +397,9 @@ static inline void RenderThings(subsector_t * sub, sector_t * sector)
 
 static void DoSubsector(subsector_t * sub)
 {
+#if (defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)) && !defined(NDEBUG)
+	++BSPVisibilityCounters.candidateSubsectors;
+#endif
 	unsigned int i;
 	sector_t * sector;
 	sector_t * fakesector;
@@ -397,7 +421,13 @@ static void DoSubsector(subsector_t * sub)
 	if (!sector) return;
 
 	// If the mapsections differ this subsector can't possibly be visible from the current view point
-	if (!(currentmapsection[sub->mapsection>>3] & (1 << (sub->mapsection & 7)))) return;
+	if (!(currentmapsection[sub->mapsection>>3] & (1 << (sub->mapsection & 7))))
+	{
+#if (defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)) && !defined(NDEBUG)
+		++BSPVisibilityCounters.mapSectionRejects;
+#endif
+		return;
+	}
 
 	if (gl_drawinfo->ss_renderflags[sub-subsectors] & SSRF_SEEN)
 	{
@@ -420,9 +450,8 @@ static void DoSubsector(subsector_t * sub)
 	{
 		SetupSprite.Clock();
 
-		//if (!gl_multithreading)
 		{
-			#ifdef __ANDROID__
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 			if (Particles != NULL && ParticlesInSubsec.Size() >= (size_t)numsubsectors)
 			{
 			#endif
@@ -430,17 +459,10 @@ static void DoSubsector(subsector_t * sub)
 			{
 				GLRenderer->ProcessParticle(&Particles[i], fakesector);
 			}
-			#ifdef __ANDROID__
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 			}
 			#endif
 		}
-		/*
-		else if (ParticlesInSubsec[DWORD(sub-subsectors)] != NO_PARTICLE)
-		{
-			FJob job = new FGLJobProcessParticles(sub);
-			GLRenderer->mThreadManager->AddJob(job);
-		}
-		*/
 		SetupSprite.Unclock();
 	}
 
@@ -487,17 +509,9 @@ static void DoSubsector(subsector_t * sub)
 					srf |= SSRF_PROCESSED;
 
 					SetupFlat.Clock();
-					//if (!gl_multithreading)
 					{
 						GLRenderer->ProcessSector(fakesector);
 					}
-					/*
-					else
-					{
-						FJob *job = new FGLJobProcessFlats(sub);
-						GLRenderer->mThreadManager->AddJob(job);
-					}
-					*/
 					SetupFlat.Unclock();
 				}
 				// mark subsector as processed - but mark for rendering only if it has an actual area.
@@ -539,6 +553,9 @@ static void DoSubsector(subsector_t * sub)
 
 void gl_RenderBSPNode (void *node)
 {
+#if (defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)) && !defined(NDEBUG)
+	FBSPVisibilityScope visibilityScope;
+#endif
 	if (numnodes == 0)
 	{
 		DoSubsector (subsectors);
@@ -546,6 +563,9 @@ void gl_RenderBSPNode (void *node)
 	}
 	while (!((size_t)node & 1))  // Keep going until found a subsector
 	{
+#if (defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)) && !defined(NDEBUG)
+		++BSPVisibilityCounters.candidateNodes;
+#endif
 		node_t *bsp = (node_t *)node;
 
 		// Decide which side the view point is on.
@@ -561,7 +581,12 @@ void gl_RenderBSPNode (void *node)
 		if (!clipper.CheckBox(bsp->bbox[side]))
 		{
 			if (!(gl_drawinfo->no_renderflags[bsp-nodes] & SSRF_SEEN))
+			{
+#if (defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)) && !defined(NDEBUG)
+				++BSPVisibilityCounters.frustumRejects;
+#endif
 				return;
+			}
 		}
 
 		node = bsp->children[side];

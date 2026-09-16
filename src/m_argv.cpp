@@ -32,9 +32,12 @@
 **
 */
 
+#include <fstream>
+#include <string>
 #include <string.h>
 #include "m_argv.h"
 #include "cmdlib.h"
+#include "c_dispatch.h"
 #include "i_system.h"
 
 IMPLEMENT_CLASS (DArgs)
@@ -110,6 +113,31 @@ void DArgs::SetArgs(int argc, char **argv)
 	{
 		Argv[i] = argv[i];
 	}
+}
+
+void M_AppendCommandLineFile(const char *filename)
+{
+	if (Args == NULL || filename == NULL)
+		return;
+
+	std::ifstream file(filename);
+	if (!file.is_open())
+		return;
+
+	std::string commandLine;
+	std::string line;
+	while (std::getline(file, line))
+	{
+		if (!commandLine.empty())
+			commandLine.push_back(' ');
+		commandLine += line;
+	}
+	if (commandLine.empty())
+		return;
+
+	FCommandLine command(commandLine.c_str());
+	for (int i = 1; i < command.argc(); ++i)
+		Args->AppendArg(command[i]);
 }
 
 //===========================================================================

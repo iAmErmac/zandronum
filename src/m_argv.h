@@ -75,4 +75,7 @@ private:
 
 extern DArgs *Args;
 
+// Appends arguments from a text command line file to the process arguments.
+void M_AppendCommandLineFile(const char *filename);
+
 #endif //__M_ARGV_H__

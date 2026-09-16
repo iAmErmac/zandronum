@@ -52,8 +52,10 @@
 #include "farchive.h"
 
 #include "gl/system/gl_interface.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_targets.h"
 #endif
 #include "gl/system/gl_framebuffer.h"
 #include "gl/renderer/gl_renderer.h"
@@ -96,12 +98,11 @@ OpenGLFrameBuffer::OpenGLFrameBuffer(void *hMonitor, int width, int height, int 
 	LastCamera = NULL;
 
 	InitializeState();
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		gl_SetupMenu();
 		gl_GenerateGlobalBrightmapFromColormap();
-		DoSetGamma();
 		needsetgamma = true;
 		swapped = false;
 		Accel2D = false;
@@ -136,19 +137,38 @@ void OpenGLFrameBuffer::InitializeState()
 
 	gl_LoadExtensions();
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_InitializeBootstrap(GetWidth(), GetHeight()))
+#if defined(__ANDROID__)
+	if (gl_GLES_IsActive() || gl_GLES_InitializeBootstrap(GetWidth(), GetHeight()))
 	{
 		if (first)
 		{
 			first = false;
-			gl_AndroidNativeGLES_PrintStartupLog();
+			gl_GLES_PrintStartupLog();
+		}
+		GLRenderer->Initialize();
+		return;
+	}
+	I_FatalError("Zandronum GLES bootstrap failed; refusing to enter the legacy renderer.");
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_HasContext())
+	{
+		if (!gl_GLES_InitializeBootstrap(GetWidth(), GetHeight()))
+		{
+			I_FatalError("Zandronum GLES resource bootstrap failed.");
+			return;
+		}
+		if (first)
+		{
+			first = false;
+			gl_GLES_PrintStartupLog();
 		}
 		GLRenderer->Initialize();
 		return;
 	}
 #endif
 
+#if !defined(__ANDROID__)
 	Super::InitializeState();
 	if (first)
 	{
@@ -213,6 +233,7 @@ void OpenGLFrameBuffer::InitializeState()
 
 	Begin2D(false);
 	GLRenderer->Initialize();
+#endif
 }
 
 //==========================================================================
@@ -226,16 +247,20 @@ CVAR(Bool, gl_draw_sync, true, 0) //false, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 
 void OpenGLFrameBuffer::Update()
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
+		static bool nativeUpdateInProgress = false;
+		if (nativeUpdateInProgress) return;
+		nativeUpdateInProgress = true;
 		// Status-bar and message drawing appends to the native batch after the view.
 		DrawRateStuff();
-		gl_AndroidNativeGLES_EndScene();
+		gl_GLES_EndScene();
 		Swap();
 		swapped = false;
 		Unlock();
 		CheckBench();
+		nativeUpdateInProgress = false;
 		return;
 	}
 	#endif
@@ -274,17 +299,22 @@ void OpenGLFrameBuffer::Update()
 //
 //==========================================================================
 #include "gl/renderer/gl_renderstate.h"
-#ifdef __ANDROID__
-#include "../../../mobile/src/zandronum_android_host.h"
-#endif
 void OpenGLFrameBuffer::Swap()
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		Zandronum_AndroidHost_ProcessSurfaceState();
-		gl_AndroidNativeGLES_RenderBootstrap(GetWidth(), GetHeight());
+		gl_GLES_PrepareHostFrame();
+		FGLESTargetDescriptor presentationTarget = {};
+		if (!gl_GLES_GetHostTarget(&presentationTarget))
+		{
+			gl_GLES_ClearScene();
+			swapped = false;
+			return;
+		}
+		gl_GLES_RenderBootstrap(presentationTarget.renderWidth, presentationTarget.renderHeight);
 		SwapBuffers();
+		gl_GLES_ClearScene();
 		swapped = true;
 		return;
 	}
@@ -464,11 +494,12 @@ FNativePalette *OpenGLFrameBuffer::CreatePalette(FRemapTable *remap)
 //==========================================================================
 bool OpenGLFrameBuffer::Begin2D(bool)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
-		return false;
-	#endif
-
+#if defined(__ANDROID__)
+	return false;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return false;
+#endif
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	glMatrixMode(GL_PROJECTION);
@@ -496,6 +527,7 @@ bool OpenGLFrameBuffer::Begin2D(bool)
 	if (GLRenderer != NULL)
 			GLRenderer->Begin2D();
 	return true;
+#endif
 }
 
 //==========================================================================
@@ -543,8 +575,8 @@ void OpenGLFrameBuffer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 //==========================================================================
 void OpenGLFrameBuffer::Dim(PalEntry color)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		DCanvas::Dim(color);
 		return;
@@ -618,11 +650,11 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 	ReleaseScreenshotBuffer();
 	ScreenshotBuffer = new BYTE[w * h * 3];
 
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		BYTE *rgba = new BYTE[w * h * 4];
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		gl_GLES_GetProcTable().BindFramebuffer(GL_FRAMEBUFFER, 0);
 		glPixelStorei(GL_PACK_ALIGNMENT, 1);
 		glReadPixels(0, (GetTrueHeight() - GetHeight()) / 2, w, h,
 			GL_RGBA, GL_UNSIGNED_BYTE, rgba);
@@ -634,7 +666,7 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 		}
 		delete [] rgba;
 		glPixelStorei(GL_PACK_ALIGNMENT, 4);
-		gl_AndroidNativeGLES_ResetState(GetWidth(), GetHeight());
+		gl_GLES_ResetState(GetWidth(), GetHeight());
 		pitch = -w*3;
 		color_type = SS_RGB;
 		buffer = ScreenshotBuffer + w * 3 * (h - 1);

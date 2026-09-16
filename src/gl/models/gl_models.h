@@ -22,7 +22,7 @@ FTexture * LoadSkin(const char * path, const char * fn);
 // [JM] Necessary forward declaration
 typedef struct FSpriteModelFrame FSpriteModelFrame;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 class FModelNativeCollector
 {
 public:
@@ -44,7 +44,7 @@ public:
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0) = 0;
 	// [BB] Added RenderFrameInterpolated
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0) = 0;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 		int cm, int translation, FModelNativeCollector *collector) = 0;
 #endif
@@ -162,7 +162,7 @@ public:
 	virtual int FindFrame(const char * name);
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0);
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 		int cm, int translation, FModelNativeCollector *collector);
 #endif
@@ -256,7 +256,7 @@ public:
 	virtual int FindFrame(const char * name);
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0);
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 		int cm, int translation, FModelNativeCollector *collector);
 #endif
@@ -323,7 +323,7 @@ public:
 	virtual int FindFrame(const char * name);
 	virtual void RenderFrame(FTexture * skin, int frame, int cm, int translation=0);
 	virtual void RenderFrameInterpolated(FTexture * skin, int frame, int frame2, double inter, int cm, int translation=0);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	virtual bool RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 		int cm, int translation, FModelNativeCollector *collector);
 #endif
@@ -383,8 +383,10 @@ FSpriteModelFrame * gl_FindModelFrame(const PClass * ti, int sprite, int frame, 
 
 void gl_RenderModel(GLSprite * spr, int cm);
 // [BB] HUD weapon model rendering functions.
+#if !defined(__ANDROID__)
 void gl_RenderHUDModel(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm);
 bool gl_IsHUDModelForPlayerAvailable (player_t * player);
+#endif
 void gl_CleanModelData();
 
 #endif

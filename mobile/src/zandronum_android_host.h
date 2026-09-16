@@ -22,7 +22,9 @@ void Zandronum_AndroidHost_SetClipboard(const char *text);
 std::string Zandronum_AndroidHost_GetClipboard(bool primary);
 bool Zandronum_AndroidHost_SetPointerIcon(const int *pixels, int width, int height,
 	int hotX, int hotY);
-void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int width, int height);
+void Zandronum_AndroidHost_SetPointerCapture(bool captured);
+void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int width, int height,
+	bool forceRebind);
 void Zandronum_AndroidHost_SurfaceChanged(int width, int height);
 void Zandronum_AndroidHost_SurfaceDestroyed();
 

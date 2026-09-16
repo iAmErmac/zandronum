@@ -48,6 +48,7 @@
 #include "m_argv.h"
 #include "version.h"
 #include "r_swrenderer.h"
+#include "r_renderer.h"
 
 EXTERN_CVAR (Bool, ticker)
 EXTERN_CVAR (Bool, fullscreen)
@@ -64,6 +65,7 @@ IVideo *Video;
 
 // do not include GL headers here, only declare the necessary functions.
 IVideo *gl_CreateVideo();
+IVideo *gl_CreateGLESVideo();
 FRenderer *gl_CreateInterface();
 
 void I_RestartRenderer();
@@ -75,6 +77,7 @@ CUSTOM_CVAR (Int, vid_renderer, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINI
 {
 	// 0: Software renderer
 	// 1: OpenGL renderer
+	// 2: OpenGL ES renderer
 
 	if (self != currentrenderer)
 	{
@@ -86,6 +89,15 @@ CUSTOM_CVAR (Int, vid_renderer, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINI
 		case 1:
 			Printf("Switching to OpenGL renderer...\n");
 			break;
+		case 2:
+		#if defined(ZANDRONUM_GLES_BACKEND)
+			Printf("Switching to OpenGL ES renderer...\n");
+			break;
+		#else
+			Printf("OpenGL ES renderer is unavailable in this build.\n");
+			self = RENDERER_SOFTWARE;
+			break;
+		#endif
 		default:
 			Printf("Unknown renderer (%d).  Falling back to software renderer...\n", *vid_renderer);
 			self = 0; // make sure to actually switch to the software renderer
@@ -140,9 +152,13 @@ void I_InitGraphics ()
 	val.Bool = !!Args->CheckParm ("-devparm");
 	ticker.SetGenericRepDefault (val, CVAR_Bool);
 
-	//currentrenderer = vid_renderer;
+	currentrenderer = vid_renderer;
 #ifndef NO_GL
-	if (currentrenderer==1) Video = gl_CreateVideo();
+	#if defined(ZANDRONUM_GLES_BACKEND)
+	if (currentrenderer==RENDERER_GLES) Video = gl_CreateGLESVideo();
+	else
+	#endif
+	if (currentrenderer==RENDERER_OPENGL) Video = gl_CreateVideo();
 	else Video = new Win32Video (0);
 #else
 	Video = new Win32Video (0);
@@ -166,7 +182,12 @@ void I_CreateRenderer()
 	currentrenderer = vid_renderer;
 	if (Renderer == NULL)
 	{
-		if (currentrenderer==1) Renderer = gl_CreateInterface();
+		if (currentrenderer==RENDERER_OPENGL
+		#if defined(ZANDRONUM_GLES_BACKEND)
+			|| currentrenderer==RENDERER_GLES
+		#endif
+		)
+			Renderer = gl_CreateInterface();
 		else Renderer = new FSoftwareRenderer;
 		atterm(I_DeleteRenderer);
 	}
@@ -199,6 +220,15 @@ DFrameBuffer *I_SetMode (int &width, int &height, DFrameBuffer *old)
 		break;
 	}
 	DFrameBuffer *res = Video->CreateFrameBuffer (width, height, fs, old);
+	if (res == NULL && currentrenderer == RENDERER_GLES)
+	{
+		Printf("OpenGL ES renderer could not create a WGL context; using software renderer.\n");
+		I_ShutdownGraphics();
+		vid_renderer = RENDERER_SOFTWARE;
+		currentrenderer = RENDERER_SOFTWARE;
+		I_InitGraphics();
+		return I_SetMode(width, height, NULL);
+	}
 
 	//* Right now, CreateFrameBuffer cannot return NULL
 	if (res == NULL)

@@ -12,6 +12,7 @@
 #include "m_argv.h"
 #include "r_renderer.h"
 #include "r_swrenderer.h"
+#include "version.h"
 #include "zandronum_android_host.h"
 #include "zandronum_android_video.h"
 
@@ -24,7 +25,7 @@ EXTERN_CVAR(Bool, cl_capfps)
 extern int NewWidth, NewHeight, NewBits;
 
 IVideo *Video;
-int currentrenderer = 1;
+int currentrenderer = RENDERER_GLES;
 static std::atomic<int> AndroidFPSLimit(0);
 static std::atomic<int64_t> AndroidNextFrameDeadline(0);
 static const int AndroidMaximumFPS = 240;
@@ -38,13 +39,16 @@ static int64_t AndroidMonotonicNanoseconds()
 
 CUSTOM_CVAR(Int, gl_vid_multisample, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
 {
+	Printf("This won't take effect until " GAMENAME " is restarted.\n");
 }
 
-CUSTOM_CVAR(Int, vid_renderer, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
+CUSTOM_CVAR(Int, vid_renderer, RENDERER_GLES, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
 {
-	if (self != 1)
-		self = 1;
-	currentrenderer = 1;
+	if (self == RENDERER_OPENGL)
+		self = RENDERER_GLES;
+	if (self != RENDERER_GLES)
+		self = RENDERER_GLES;
+	currentrenderer = RENDERER_GLES;
 }
 
 void I_ShutdownGraphics()
@@ -68,7 +72,8 @@ void I_InitGraphics()
 	UCVarValue value;
 	value.Bool = !!Args->CheckParm("-devparm");
 	ticker.SetGenericRepDefault(value, CVAR_Bool);
-	currentrenderer = 1;
+	vid_renderer = RENDERER_GLES;
+	currentrenderer = RENDERER_GLES;
 	Video = new AndroidGLVideo(0);
 	if (Video == nullptr)
 		I_FatalError("Failed to initialize display");
@@ -87,7 +92,7 @@ extern FRenderer *gl_CreateInterface();
 
 void I_CreateRenderer()
 {
-	currentrenderer = 1;
+	currentrenderer = RENDERER_GLES;
 	if (Renderer == nullptr)
 	{
 		Renderer = gl_CreateInterface();
@@ -180,6 +185,7 @@ CUSTOM_CVAR(Float, vid_winscale, 1.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 CCMD(vid_listmodes)
 {
+	Printf("Android GLES uses the active host surface; multiple-monitor selection is unsupported.\n");
 	if (Video == nullptr)
 		return;
 	int width, height;

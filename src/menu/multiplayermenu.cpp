@@ -88,6 +88,88 @@ static void M_JoinMenu();
 static void M_JoinFromMenu();
 static void M_DoJoinFromMenu();
 
+struct FTextScaleMode
+{
+	int width;
+	int height;
+};
+
+static const FTextScaleMode TextScaleFallbackModes[] =
+{
+	{ 320, 200 },
+	{ 320, 240 },
+	{ 400, 225 },
+	{ 400, 300 },
+	{ 480, 270 },
+	{ 480, 360 },
+	{ 512, 288 },
+	{ 512, 384 },
+	{ 640, 360 },
+	{ 640, 400 },
+	{ 640, 480 },
+	{ 720, 480 },
+	{ 720, 540 },
+	{ 800, 450 },
+	{ 800, 500 },
+	{ 800, 600 },
+	{ 848, 480 },
+	{ 960, 600 },
+	{ 960, 720 },
+	{ 1024, 576 },
+	{ 1024, 600 },
+	{ 1024, 640 },
+	{ 1024, 768 },
+	{ 1088, 612 },
+	{ 1152, 648 },
+	{ 1152, 720 },
+	{ 1152, 864 },
+	{ 1280, 720 },
+	{ 1280, 800 },
+	{ 1280, 960 },
+	{ 1344, 756 },
+	{ 1360, 768 },
+	{ 1400, 787 },
+	{ 1400, 875 },
+	{ 1440, 900 },
+	{ 1400, 1050 },
+	{ 1600, 900 },
+	{ 1600, 1000 },
+	{ 1600, 1200 },
+	{ 1680, 1050 },
+	{ 1920, 1080 },
+	{ 1920, 1200 },
+	{ 2054, 1536 },
+	{ 2560, 1440 },
+	{ 2880, 1800 }
+};
+
+static void M_GetTextScaleModes(TArray<FTextScaleMode> &modes)
+{
+	if (Video != NULL)
+	{
+		int width;
+		int height;
+		bool letterBox;
+		Video->StartModeIterator(8, true);
+		while (Video->NextMode(&width, &height, &letterBox))
+		{
+			if (width > 0 && height > 0)
+			{
+				FTextScaleMode mode = { width, height };
+				modes.Push(mode);
+			}
+		}
+	}
+
+	if (modes.Size() > 1)
+		return;
+
+	// Some desktop drivers and the Android host expose only the current mode.
+	modes.Clear();
+	for (unsigned int i = 0; i < countof(TextScaleFallbackModes); ++i)
+		modes.Push(TextScaleFallbackModes[i]);
+}
+
 CVAR ( Int, menu_botspawn0, -1, CVAR_ARCHIVE )
 CVAR ( Int, menu_botspawn1, -1, CVAR_ARCHIVE )
 CVAR ( Int, menu_botspawn2, -1, CVAR_ARCHIVE )
@@ -420,26 +502,13 @@ static void M_ClearBotSlots()
 
 static void M_TextSizeScalarChanged()
 {
-	int mode = 0;
-	int width;
-	int height;
-	bool letterBox;
+	TArray<FTextScaleMode> modes;
+	M_GetTextScaleModes(modes);
 
-	// [BB] check true
-	if ( Video != NULL )
+	if (menu_textsizescalar >= 0 && menu_textsizescalar < static_cast<int>(modes.Size()))
 	{
-		Video->StartModeIterator( 8, true );
-		while ( Video->NextMode( &width, &height, &letterBox ))
-		{
-			if ( mode == menu_textsizescalar )
-			{
-				con_virtualwidth = width;
-				con_virtualheight = height;
-				break;
-			}
-
-			mode++;
-		}
+		con_virtualwidth = modes[menu_textsizescalar].width;
+		con_virtualheight = modes[menu_textsizescalar].height;
 	}
 }
 
@@ -462,26 +531,21 @@ public:
 	{
 		Super::Init( parent, desc );
 
-		int width;
-		int height;
-		bool letterBox;
-		int numModes = 0;
+		TArray<FTextScaleMode> modes;
 		int textsizescalar = 0;
 		bool bFoundExactMatch = false;
 
-		Video->StartModeIterator( 8, true );
-		while ( Video->NextMode( &width, &height, &letterBox ))
+		M_GetTextScaleModes(modes);
+		for (unsigned int mode = 0; mode < modes.Size(); ++mode)
 		{
 			// [AK] Don't change the slider if we already found a mode that matches the virtual screen's size.
-			if (( bFoundExactMatch == false ) && ( width <= con_virtualwidth ) && ( height <= con_virtualheight ))
+			if (( bFoundExactMatch == false ) && ( modes[mode].width <= con_virtualwidth ) && ( modes[mode].height <= con_virtualheight ))
 			{
-				if (( width == con_virtualwidth ) && ( height == con_virtualheight ))
+				if (( modes[mode].width == con_virtualwidth ) && ( modes[mode].height == con_virtualheight ))
 					bFoundExactMatch = true;
 
-				textsizescalar = numModes;
+				textsizescalar = mode;
 			}
-
-			numModes++;
 		}
 		// [BB] We may not invoke the callback of menu_textsizescalar above since it changes con_virtualwidth.
 		menu_textsizescalar = textsizescalar;
@@ -489,7 +553,7 @@ public:
 		// [TP] Update the maximum of the menu_textsizescalar slider.
 		FOptionMenuItem* it = desc->GetItem( "menu_textsizescalar" );
 		if ( it )
-			it->SetValue( FOptionMenuSliderBase::SLIDER_MAXIMUM, numModes - 1);
+			it->SetValue( FOptionMenuSliderBase::SLIDER_MAXIMUM, modes.Size() - 1);
 	}
 
 	void Drawer()

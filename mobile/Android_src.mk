@@ -7,7 +7,7 @@ LOCAL_MODULE    := main
 
 
 LOCAL_CFLAGS   :=  -D__MOBILE__ -DNO_SERVER_GUI -DFMOD_STUDIO=1 -DZANDRONUM_30 -D__STDINT_LIMITS -DENGINE_NAME=\"zandronum_3.0\"
-LOCAL_CPPFLAGS := -DNOASM -DDISABLE_SSE -DHAVE_FLUIDSYNTH -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DUSE_GLES -Wno-format-security -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
+LOCAL_CPPFLAGS := -DNOASM -DDISABLE_SSE -DHAVE_FLUIDSYNTH -DHAVE_MPG123 -DHAVE_SNDFILE -DONLY_GPL -DUSE_GLES -DZANDRONUM_NATIVE_GLES=1 -Wno-format-security -fexceptions -fpermissive -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -D__forceinline=inline -DNO_GTK -DNO_SSE -fsigned-char
 #-std=gnu++1y -DHAVE_FLUIDSYNTH
 
 LOCAL_C_INCLUDES := \
@@ -51,11 +51,16 @@ LOCAL_C_INCLUDES := \
 
 ANDROID_SRC_FILES = \
     ../mobile/src/sqlite/sqlite3.c \
-    ../mobile/src/extrafiles/gl_load.c \
     ../src/gl/system/gl_gles_targets.cpp \
     ../src/gl/system/gl_gles_context.cpp \
     ../src/gl/system/gl_gles_shader.cpp \
-    ../src/gl/system/gl_android.cpp \
+    ../src/gl/system/gl_gles_wipe.cpp \
+    ../src/gl/system/gl_gles_state.cpp \
+    ../src/gl/system/gl_gles_materials.cpp \
+    ../src/gl/system/gl_gles_portal.cpp \
+    ../src/gl/system/gl_gles_present.cpp \
+    ../src/gl/system/gl_gles_scene.cpp \
+    ../src/gl/system/gl_gles_renderer.cpp \
     ../mobile/src/zandronum_android_input.cpp \
     ../mobile/src/zandronum_android_host.cpp \
     ../mobile/src/zandronum_android_main.cpp \

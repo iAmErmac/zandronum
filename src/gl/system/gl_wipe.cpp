@@ -50,8 +50,8 @@
 #include "vectors.h"
 
 #include "gl/system/gl_interface.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_renderstate.h"
@@ -81,6 +81,7 @@ struct RECT {
 
 // TYPES -------------------------------------------------------------------
 
+#if !defined(__ANDROID__)
 class OpenGLFrameBuffer::Wiper_Crossfade : public OpenGLFrameBuffer::Wiper
 {
 public:
@@ -116,6 +117,7 @@ private:
 	int Density;
 	int BurnTime;
 };
+#endif
 
 //==========================================================================
 //
@@ -129,11 +131,13 @@ private:
 
 bool OpenGLFrameBuffer::WipeStartScreen(int type)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
-		return gl_AndroidNativeGLES_WipeStart(type);
+	#if defined(__ANDROID__)
+	return gl_GLES_WipeStart(type);
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return gl_GLES_WipeStart(type);
 	#endif
 
+#if !defined(__ANDROID__)
 	switch (type)
 	{
 	case wipe_Burn:
@@ -163,6 +167,7 @@ bool OpenGLFrameBuffer::WipeStartScreen(int type)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	return true;
+#endif
 }
 
 //==========================================================================
@@ -175,14 +180,18 @@ bool OpenGLFrameBuffer::WipeStartScreen(int type)
 
 void OpenGLFrameBuffer::WipeEndScreen()
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__)
+	gl_GLES_WipeEnd();
+	return;
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		gl_AndroidNativeGLES_WipeEnd();
+		gl_GLES_WipeEnd();
 		return;
 	}
 	#endif
 
+#if !defined(__ANDROID__)
 	wipeendscreen = new FHardwareTexture(Width, Height, false, false, false, true);
 	wipeendscreen->CreateTexture(NULL, Width, Height, false, 0, CM_DEFAULT);
 	glFlush();
@@ -193,6 +202,7 @@ void OpenGLFrameBuffer::WipeEndScreen()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	Unlock();
+#endif
 }
 
 //==========================================================================
@@ -209,11 +219,13 @@ void OpenGLFrameBuffer::WipeEndScreen()
 
 bool OpenGLFrameBuffer::WipeDo(int ticks)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
-		return gl_AndroidNativeGLES_WipeDo(ticks);
+	#if defined(__ANDROID__)
+	return gl_GLES_WipeDo(ticks);
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return gl_GLES_WipeDo(ticks);
 	#endif
 
+#if !defined(__ANDROID__)
 	// Sanity checks.
 	if (wipestartscreen == NULL || wipeendscreen == NULL)
 	{
@@ -231,6 +243,7 @@ bool OpenGLFrameBuffer::WipeDo(int ticks)
 	glDepthMask(true);
 	//DrawLetterbox();
 	return done;
+#endif
 }
 
 //==========================================================================
@@ -243,14 +256,18 @@ bool OpenGLFrameBuffer::WipeDo(int ticks)
 
 void OpenGLFrameBuffer::WipeCleanup()
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__)
+	gl_GLES_WipeCleanup();
+	return;
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		gl_AndroidNativeGLES_WipeCleanup();
+		gl_GLES_WipeCleanup();
 		return;
 	}
 	#endif
 
+#if !defined(__ANDROID__)
 	if (ScreenWipe != NULL)
 	{
 		delete ScreenWipe;
@@ -266,6 +283,7 @@ void OpenGLFrameBuffer::WipeCleanup()
 		delete wipeendscreen;
 		wipeendscreen = NULL;
 	}
+#endif
 }
 
 //==========================================================================
@@ -279,6 +297,8 @@ OpenGLFrameBuffer::Wiper::~Wiper()
 }
 
 // WIPE: CROSSFADE ---------------------------------------------------------
+
+#if !defined(__ANDROID__)
 
 //==========================================================================
 //
@@ -599,3 +619,5 @@ bool OpenGLFrameBuffer::Wiper_Burn::Run(int ticks, OpenGLFrameBuffer *fb)
 	// after an arbitrary maximum time.
 	return done || (BurnTime > 40);
 }
+
+#endif

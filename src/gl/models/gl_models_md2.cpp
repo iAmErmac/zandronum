@@ -267,6 +267,7 @@ int FDMDModel::FindFrame(const char * name)
 //===========================================================================
 void FDMDModel::RenderGLCommands(void *glCommands, unsigned int numVertices,FModelVertex * vertices)
 {
+#if !defined(__ANDROID__)
 	char   *pos;
 	FGLCommandVertex * v;
 	int     count;
@@ -292,6 +293,11 @@ void FDMDModel::RenderGLCommands(void *glCommands, unsigned int numVertices,FMod
 
 		glEnd();
 	}
+#else
+	(void)glCommands;
+	(void)numVertices;
+	(void)vertices;
+#endif
 }
 
 
@@ -373,7 +379,7 @@ void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 	delete[] verticesInterpolated;
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 bool FDMDModel::RenderFrameNative(FTexture *skin, int frameno, int frameno2, double inter,
 	int cm, int translation, FModelNativeCollector *collector)
 {

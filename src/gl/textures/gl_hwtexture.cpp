@@ -50,8 +50,8 @@
 #include "gl/system/gl_cvars.h"
 #include "gl/renderer/gl_renderer.h"
 #include "gl/textures/gl_material.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 
@@ -66,8 +66,8 @@ EXTERN_CVAR(Bool, gl_clamp_per_texture)
 //
 //===========================================================================
 unsigned int FHardwareTexture::lastbound[FHardwareTexture::MAX_TEXTURES];
-#ifdef __ANDROID__
-TArray<FHardwareTexture *> FHardwareTexture::android_textures;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+TArray<FHardwareTexture *> FHardwareTexture::gles_textures;
 #endif
 
 //===========================================================================
@@ -78,9 +78,9 @@ TArray<FHardwareTexture *> FHardwareTexture::android_textures;
 int FHardwareTexture::GetTexDimension(int value)
 {
 	if (value > gl.max_texturesize) return gl.max_texturesize;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	// Native GLES 3.2 supports non-power-of-two 2D textures directly.
-	if (gl_AndroidNativeGLES_IsActive()) return value;
+	if (gl_GLES_IsActive()) return value;
 #endif
 	if (gl.flags&RFL_NPOT_TEXTURE) return value;
 
@@ -90,7 +90,7 @@ int FHardwareTexture::GetTexDimension(int value)
 }
 
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 struct BoxPrecalc
 {
 	int boxStart;
@@ -240,13 +240,23 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 	bool deletebuffer=false;
 	bool use_mipmapping = TexFilter[gl_texture_filter].mipmapping;
 
-	#ifdef __ANDROID__
+#if defined(__ANDROID__)
 	// Native GLES uses one sized RGBA format until compressed asset uploads are audited.
 	texformat = GL_RGBA8;
-	#else
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		texformat = GL_RGBA8;
+	}
+	else
+	{
+		if (alphatexture) texformat=GL_ALPHA8;
+		else if (forcenocompression) texformat = GL_RGBA8;
+	}
+#else
 	if (alphatexture) texformat=GL_ALPHA8;
 	else if (forcenocompression) texformat = GL_RGBA8;
-	#endif
+#endif
 	if (glTexID==0) glGenTextures(1,&glTexID);
 	glBindTexture(GL_TEXTURE_2D, glTexID);
 	lastbound[texunit]=glTexID;
@@ -260,7 +270,7 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 
 		// The texture must at least be initialized if no data is present.
 		mipmap=false;
-		#ifndef __ANDROID__
+#if !defined(__ANDROID__)
 		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, false);
 		#endif
 		buffer=(unsigned char *)calloc(4,rw * (rh+1));
@@ -272,7 +282,7 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 		rw = GetTexDimension (w);
 		rh = GetTexDimension (h);
 
-		#ifndef __ANDROID__
+#if !defined(__ANDROID__)
 		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, (mipmap && use_mipmapping && !forcenofiltering));
 		#endif
 
@@ -310,17 +320,25 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
             buffer=(unsigned char *)scaledbuffer;
 		}
 	}
-#ifdef __ANDROID__
+#if defined(__ANDROID__)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+	else
+		glTexImage2D(GL_TEXTURE_2D, 0, texformat, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 #elif defined(__MOBILE__)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, texformat, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 #endif
-	#ifdef __ANDROID__
+#if defined(__ANDROID__)
 	if (mipmap && use_mipmapping && !forcenofiltering)
-		gl_AndroidNativeGLES_GenerateMipmap();
-	#endif
+		gl_GLES_GenerateMipmap();
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive() && mipmap && use_mipmapping && !forcenofiltering)
+		gl_GLES_GenerateMipmap();
+#endif
 
 
 	if (deletebuffer) free(buffer);
@@ -379,18 +397,18 @@ FHardwareTexture::FHardwareTexture(int _width, int _height, bool _mipmap, bool w
 	clampmode=0;
 	glDepthID = 0;
 	forcenofiltering = nofilter;
-#ifdef __ANDROID__
-	android_textures.Push(this);
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	gles_textures.Push(this);
 #endif
 }
 
-#ifdef __ANDROID__
-void FHardwareTexture::RememberAndroidSource(const unsigned char *buffer, int w, int h, bool wrap, int cm, int translation)
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+void FHardwareTexture::RememberGLESSource(const unsigned char *buffer, int w, int h, bool wrap, int cm, int translation)
 {
 	if (buffer == NULL || w <= 0 || h <= 0) return;
-	for (unsigned int i = 0; i < android_sources.Size(); ++i)
+	for (unsigned int i = 0; i < gles_sources.Size(); ++i)
 	{
-		AndroidTextureSource &source = android_sources[i];
+		FGLESTextureSource &source = gles_sources[i];
 		if (source.cm == cm && source.translation == translation)
 		{
 			free(source.pixels);
@@ -402,8 +420,8 @@ void FHardwareTexture::RememberAndroidSource(const unsigned char *buffer, int w,
 			return;
 		}
 	}
-	const int index = android_sources.Reserve(1);
-	AndroidTextureSource &source = android_sources[index];
+	const int index = gles_sources.Reserve(1);
+	FGLESTextureSource &source = gles_sources[index];
 	source.cm = cm;
 	source.translation = translation;
 	source.width = w;
@@ -413,11 +431,11 @@ void FHardwareTexture::RememberAndroidSource(const unsigned char *buffer, int w,
 	if (source.pixels != NULL) memcpy(source.pixels, buffer, w * h * 4);
 }
 
-bool FHardwareTexture::RestoreAndroidSource(int cm, int translation, unsigned int &texture, int texunit)
+bool FHardwareTexture::RestoreGLESSource(int cm, int translation, unsigned int &texture, int texunit)
 {
-	for (unsigned int i = 0; i < android_sources.Size(); ++i)
+	for (unsigned int i = 0; i < gles_sources.Size(); ++i)
 	{
-		AndroidTextureSource &source = android_sources[i];
+		FGLESTextureSource &source = gles_sources[i];
 		if (source.cm == cm && source.translation == translation && source.pixels != NULL)
 		{
 			LoadImage(source.pixels, source.width, source.height, texture,
@@ -428,14 +446,14 @@ bool FHardwareTexture::RestoreAndroidSource(int cm, int translation, unsigned in
 	return false;
 }
 
-void FHardwareTexture::ClearAndroidSources()
+void FHardwareTexture::ClearGLESSources()
 {
-	for (unsigned int i = 0; i < android_sources.Size(); ++i)
-		free(android_sources[i].pixels);
-	android_sources.Clear();
+	for (unsigned int i = 0; i < gles_sources.Size(); ++i)
+		free(gles_sources[i].pixels);
+	gles_sources.Clear();
 }
 
-void FHardwareTexture::AndroidContextLost()
+void FHardwareTexture::GLESContextLost()
 {
 	const int cm_arraysize = CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size();
 	for (int i = 0; i < cm_arraysize; ++i) glTexID[i] = 0;
@@ -444,16 +462,16 @@ void FHardwareTexture::AndroidContextLost()
 	glDepthID = 0;
 }
 
-void FHardwareTexture::AndroidContextLostAll()
+void FHardwareTexture::GLESContextLostAll()
 {
-	for (unsigned int i = 0; i < android_textures.Size(); ++i)
-		android_textures[i]->AndroidContextLost();
+	for (unsigned int i = 0; i < gles_textures.Size(); ++i)
+		gles_textures[i]->GLESContextLost();
 	memset(lastbound, 0, sizeof(lastbound));
 }
 
-void gl_AndroidNativeGLES_InvalidateTextures()
+void gl_GLES_InvalidateTextures()
 {
-	FHardwareTexture::AndroidContextLostAll();
+	FHardwareTexture::GLESContextLostAll();
 }
 #endif
 
@@ -521,16 +539,16 @@ void FHardwareTexture::Clean(bool all)
 FHardwareTexture::~FHardwareTexture() 
 { 
 	Clean(true); 
-#ifdef __ANDROID__
-	for (unsigned int i = 0; i < android_textures.Size(); ++i)
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	for (unsigned int i = 0; i < gles_textures.Size(); ++i)
 	{
-		if (android_textures[i] == this)
+		if (gles_textures[i] == this)
 		{
-			android_textures.Delete(i);
+			gles_textures.Delete(i);
 			break;
 		}
 	}
-	ClearAndroidSources();
+	ClearGLESSources();
 #endif
 	delete [] glTexID;
 }
@@ -577,9 +595,9 @@ unsigned * FHardwareTexture::GetTexID(int cm, int translation)
 unsigned int FHardwareTexture::Bind(int texunit, int cm,int translation)
 {
 	unsigned int * pTexID=GetTexID(cm, translation);
-	#ifdef __ANDROID__
-	if (*pTexID == 0 && gl_AndroidNativeGLES_CanUseResources())
-		RestoreAndroidSource(cm, translation, *pTexID, texunit);
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (*pTexID == 0 && gl_GLES_CanUseResources())
+		RestoreGLESSource(cm, translation, *pTexID, texunit);
 	#endif
 
 	if (*pTexID!=0)
@@ -665,8 +683,8 @@ unsigned int FHardwareTexture::CreateTexture(unsigned char * buffer, int w, int 
 	if (cm < 0 || cm >= CM_MAXCOLORMAP) cm=CM_DEFAULT;
 
 	unsigned int * pTexID=GetTexID(cm, translation);
-	#ifdef __ANDROID__
-	RememberAndroidSource(buffer, w, h, wrap, cm, translation);
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	RememberGLESSource(buffer, w, h, wrap, cm, translation);
 	#endif
 
 	if (texunit != 0) glActiveTexture(GL_TEXTURE0+texunit);

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 
 #include "c_console.h"
 #include "c_dispatch.h"
@@ -122,6 +123,7 @@ void Zandronum_AndroidInput_Key(int keycode, bool pressed)
 		case 58: translated = DIK_RMENU; break;
 		case 59: translated = DIK_LSHIFT; break;
 		case 60: translated = DIK_RSHIFT; break;
+		case 120: translated = DIK_SYSRQ; break;
 		case 122: translated = DIK_HOME; break;
 		case 123: translated = DIK_END; break;
 		case 124: translated = DIK_INSERT; break;
@@ -152,8 +154,8 @@ void Zandronum_AndroidInput_Pointer(int, int action, float x, float y)
 		return;
 	event_t event = {};
 	event.type = EV_GUI_Event;
-	event.x = static_cast<int>(x);
-	event.y = static_cast<int>(y);
+	event.data1 = static_cast<SWORD>(x);
+	event.data2 = static_cast<SWORD>(y);
 	switch (action)
 	{
 	case 0:
@@ -163,6 +165,92 @@ void Zandronum_AndroidInput_Pointer(int, int action, float x, float y)
 	default: event.subtype = EV_GUI_MouseMove; break;
 	}
 	D_PostEvent(&event);
+}
+
+void Zandronum_AndroidInput_MouseMotion(int x, int y, int deltaX, int deltaY)
+{
+	if (menuactive != MENU_Off || ConsoleState != c_up)
+	{
+		event_t event = {};
+		event.type = EV_GUI_Event;
+		event.subtype = EV_GUI_MouseMove;
+		event.data1 = static_cast<SWORD>(x);
+		event.data2 = static_cast<SWORD>(y);
+		D_PostEvent(&event);
+		return;
+	}
+	Zandronum_AndroidInput_Look(deltaX, deltaY);
+}
+
+void Zandronum_AndroidInput_MouseButton(int button, bool pressed, int x, int y)
+{
+	if (menuactive != MENU_Off || ConsoleState != c_up)
+	{
+		if (button < 1 || button > 3)
+			return;
+		static const int guiButtons[3] = { EV_GUI_LButtonDown, EV_GUI_MButtonDown, EV_GUI_RButtonDown };
+		event_t event = {};
+		event.type = EV_GUI_Event;
+		event.subtype = static_cast<BYTE>(guiButtons[button - 1] + (pressed ? 0 : 1));
+		event.data1 = static_cast<SWORD>(x);
+		event.data2 = static_cast<SWORD>(y);
+		D_PostEvent(&event);
+		return;
+	}
+	int key = 0;
+	switch (button)
+	{
+	case 1: key = KEY_MOUSE1; break;
+	case 2: key = KEY_MOUSE3; break;
+	case 3: key = KEY_MOUSE2; break;
+	case 4: key = KEY_MOUSE4; break;
+	case 5: key = KEY_MOUSE5; break;
+	case 6: key = KEY_MOUSE6; break;
+	case 7: key = KEY_MOUSE7; break;
+	case 8: key = KEY_MOUSE8; break;
+	default: break;
+	}
+	if (key != 0)
+		PostKey(key, pressed);
+}
+
+void Zandronum_AndroidInput_MouseWheel(float horizontal, float vertical)
+{
+	const bool gui = menuactive != MENU_Off || ConsoleState != c_up;
+	const float amounts[2] = { vertical, horizontal };
+	const int guiKeys[2][2] = {
+		{ EV_GUI_WheelUp, EV_GUI_WheelDown },
+		{ EV_GUI_WheelRight, EV_GUI_WheelLeft }
+	};
+	const int gameKeys[2][2] = {
+		{ KEY_MWHEELUP, KEY_MWHEELDOWN },
+		{ KEY_MWHEELRIGHT, KEY_MWHEELLEFT }
+	};
+	for (int axis = 0; axis < 2; ++axis)
+	{
+		const float amount = amounts[axis];
+		if (amount == 0.0f)
+			continue;
+		int steps = static_cast<int>(std::floor(std::fabs(amount) + 0.5f));
+		if (steps == 0) steps = 1;
+		steps = std::min(steps, 16);
+		const int direction = amount > 0.0f ? 0 : 1;
+		for (int step = 0; step < steps; ++step)
+		{
+			if (gui)
+			{
+				event_t event = {};
+				event.type = EV_GUI_Event;
+				event.subtype = static_cast<BYTE>(guiKeys[axis][direction]);
+				D_PostEvent(&event);
+			}
+			else
+			{
+				PostKey(gameKeys[axis][direction], true);
+				PostKey(gameKeys[axis][direction], false);
+			}
+		}
+	}
 }
 
 void Zandronum_AndroidInput_Axis(int axis, float value)

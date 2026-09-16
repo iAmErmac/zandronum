@@ -31,7 +31,6 @@ public:
 	~AndroidGLFB() override = default;
 
 	bool Lock(bool buffered) override;
-	bool Lock();
 	void Unlock() override;
 	bool IsLocked() override;
 	bool IsValid() override;
@@ -41,12 +40,9 @@ public:
 
 protected:
 	AndroidGLFB()
-		: DFrameBuffer(), LockDepth(0), m_supportsGamma(false) {}
+		: DFrameBuffer(), m_supportsGamma(false) {}
 	bool CanUpdate();
 	void SetGammaTable(WORD *table);
-	void InitializeState();
-
-	int LockDepth;
 	bool m_supportsGamma;
 };
 

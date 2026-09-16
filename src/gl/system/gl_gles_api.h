@@ -6,7 +6,12 @@
 #if defined(__ANDROID__)
 #include <GLES3/gl32.h>
 #else
-#include <windows.h>
+#ifndef APIENTRY
+#define APIENTRY
+#endif
+#ifndef WINGDIAPI
+#define WINGDIAPI
+#endif
 #include <GL/gl.h>
 #ifdef max
 #undef max
@@ -30,6 +35,12 @@ typedef ptrdiff_t GLsizeiptr;
 #endif
 #ifndef GL_DRAW_FRAMEBUFFER_BINDING
 #define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
+#endif
+#ifndef GL_SAMPLE_BUFFERS
+#define GL_SAMPLE_BUFFERS 0x80A8
+#endif
+#ifndef GL_SAMPLES
+#define GL_SAMPLES 0x80A9
 #endif
 #ifndef GL_READ_FRAMEBUFFER_BINDING
 #define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
@@ -60,6 +71,9 @@ typedef ptrdiff_t GLsizeiptr;
 #endif
 #ifndef GL_TEXTURE_BINDING_2D
 #define GL_TEXTURE_BINDING_2D 0x8069
+#endif
+#ifndef GL_SAMPLER_BINDING
+#define GL_SAMPLER_BINDING 0x8919
 #endif
 #ifndef GL_TEXTURE_MIN_FILTER
 #define GL_TEXTURE_MIN_FILTER 0x2801
@@ -93,6 +107,12 @@ typedef ptrdiff_t GLsizeiptr;
 #endif
 #ifndef GL_RENDERBUFFER_BINDING
 #define GL_RENDERBUFFER_BINDING 0x8CA7
+#endif
+#ifndef GL_CURRENT_PROGRAM
+#define GL_CURRENT_PROGRAM 0x8B8D
+#endif
+#ifndef GL_VERTEX_ARRAY_BINDING
+#define GL_VERTEX_ARRAY_BINDING 0x85B5
 #endif
 #ifndef GL_MAX_SAMPLES
 #define GL_MAX_SAMPLES 0x8D57
@@ -150,6 +170,30 @@ typedef ptrdiff_t GLsizeiptr;
 #endif
 #ifndef GL_TRIANGLES
 #define GL_TRIANGLES 0x0004
+#endif
+#ifndef GL_FUNC_ADD
+#define GL_FUNC_ADD 0x8006
+#endif
+#ifndef GL_FUNC_SUBTRACT
+#define GL_FUNC_SUBTRACT 0x800A
+#endif
+#ifndef GL_FUNC_REVERSE_SUBTRACT
+#define GL_FUNC_REVERSE_SUBTRACT 0x800B
+#endif
+#ifndef GL_TEXTURE1
+#define GL_TEXTURE1 0x84C1
+#endif
+#ifndef GL_TEXTURE2
+#define GL_TEXTURE2 0x84C2
+#endif
+#ifndef GL_TEXTURE3
+#define GL_TEXTURE3 0x84C3
+#endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#endif
+#ifndef GL_DYNAMIC_DRAW
+#define GL_DYNAMIC_DRAW 0x88E8
 #endif
 
 using FGLESGetError = GLenum (APIENTRY *)(void);
@@ -213,6 +257,31 @@ using FGLESDisable = void (APIENTRY *)(GLenum);
 using FGLESBlendFunc = void (APIENTRY *)(GLenum, GLenum);
 using FGLESDepthFunc = void (APIENTRY *)(GLenum);
 using FGLESDepthMask = void (APIENTRY *)(GLboolean);
+using FGLESBlendEquation = void (APIENTRY *)(GLenum);
+using FGLESBindSampler = void (APIENTRY *)(GLuint, GLuint);
+using FGLESGenSamplers = void (APIENTRY *)(GLsizei, GLuint *);
+using FGLESDeleteSamplers = void (APIENTRY *)(GLsizei, const GLuint *);
+using FGLESSamplerParameteri = void (APIENTRY *)(GLuint, GLenum, GLint);
+using FGLESBufferSubData = void (APIENTRY *)(GLenum, ptrdiff_t, ptrdiff_t, const void *);
+using FGLESClearDepthf = void (APIENTRY *)(GLfloat);
+using FGLESClearStencil = void (APIENTRY *)(GLint);
+using FGLESColorMask = void (APIENTRY *)(GLboolean, GLboolean, GLboolean, GLboolean);
+using FGLESCopyTexSubImage2D = void (APIENTRY *)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei);
+using FGLESCullFace = void (APIENTRY *)(GLenum);
+using FGLESDepthRangef = void (APIENTRY *)(GLfloat, GLfloat);
+using FGLESDrawElements = void (APIENTRY *)(GLenum, GLsizei, GLenum, const void *);
+using FGLESFrontFace = void (APIENTRY *)(GLenum);
+using FGLESGenerateMipmap = void (APIENTRY *)(GLenum);
+using FGLESPixelStorei = void (APIENTRY *)(GLenum, GLint);
+using FGLESReadPixels = void (APIENTRY *)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *);
+using FGLESStencilFunc = void (APIENTRY *)(GLenum, GLint, GLuint);
+using FGLESStencilMask = void (APIENTRY *)(GLuint);
+using FGLESStencilOp = void (APIENTRY *)(GLenum, GLenum, GLenum);
+using FGLESTexSubImage2D = void (APIENTRY *)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
+using FGLESUniform3f = void (APIENTRY *)(GLint, GLfloat, GLfloat, GLfloat);
+using FGLESUniform3fv = void (APIENTRY *)(GLint, GLsizei, const GLfloat *);
+using FGLESUniform3i = void (APIENTRY *)(GLint, GLint, GLint, GLint);
+using FGLESUniform4fv = void (APIENTRY *)(GLint, GLsizei, const GLfloat *);
 
 struct FGLESProcTable
 {
@@ -277,6 +346,31 @@ struct FGLESProcTable
 	FGLESBlendFunc BlendFunc;
 	FGLESDepthFunc DepthFunc;
 	FGLESDepthMask DepthMask;
+	FGLESBlendEquation BlendEquation;
+	FGLESBindSampler BindSampler;
+	FGLESGenSamplers GenSamplers;
+	FGLESDeleteSamplers DeleteSamplers;
+	FGLESSamplerParameteri SamplerParameteri;
+	FGLESBufferSubData BufferSubData;
+	FGLESClearDepthf ClearDepthf;
+	FGLESClearStencil ClearStencil;
+	FGLESColorMask ColorMask;
+	FGLESCopyTexSubImage2D CopyTexSubImage2D;
+	FGLESCullFace CullFace;
+	FGLESDepthRangef DepthRangef;
+	FGLESDrawElements DrawElements;
+	FGLESFrontFace FrontFace;
+	FGLESGenerateMipmap GenerateMipmap;
+	FGLESPixelStorei PixelStorei;
+	FGLESReadPixels ReadPixels;
+	FGLESStencilFunc StencilFunc;
+	FGLESStencilMask StencilMask;
+	FGLESStencilOp StencilOp;
+	FGLESTexSubImage2D TexSubImage2D;
+	FGLESUniform3f Uniform3f;
+	FGLESUniform3fv Uniform3fv;
+	FGLESUniform3i Uniform3i;
+	FGLESUniform4fv Uniform4fv;
 };
 
 #endif

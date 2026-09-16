@@ -1192,6 +1192,10 @@ UNSAFE_CCMD (load)
 	}
 	FString fname = argv[1];
 	DefaultExtension (fname, ".zds");
+#ifdef __ANDROID__
+	if (fname[0] != '/')
+		fname = G_BuildSaveName (fname.GetChars(), -1);
+#endif
     G_LoadGame (fname);
 }
 
@@ -1246,6 +1250,10 @@ UNSAFE_CCMD (save)
 
     FString fname = argv[1];
 	DefaultExtension (fname, ".zds");
+#ifdef __ANDROID__
+	if (fname[0] != '/')
+		fname = G_BuildSaveName (fname.GetChars(), -1);
+#endif
 	G_SaveGame (fname, argv.argc() > 2 ? argv[2] : argv[1]);
 }
 

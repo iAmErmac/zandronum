@@ -17,8 +17,9 @@
 
 #include "LogWritter.h"
 #include "fmod_android.h"
-#include "gl/system/gl_android.h"
+#include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_targets.h"
 #include "zandronum_android_input.h"
 
 extern int main_android(int argc, char **argv);
@@ -116,6 +117,32 @@ namespace
 		return Zandronum_AndroidHost_SwapBuffers();
 	}
 
+	void PrepareGLESFrame(void *)
+	{
+		Zandronum_AndroidHost_ProcessSurfaceState();
+		FGLESTargetDescriptor target = {};
+		target.renderWidth = Zandronum_AndroidHost_GetWidth();
+		target.renderHeight = Zandronum_AndroidHost_GetHeight();
+		target.sampleCount = 1;
+		target.hostOwnsPresentation = true;
+		const FGLESProcTable &procedures = gl_GLES_GetProcTable();
+		if (procedures.GetIntegerv != nullptr && procedures.BindFramebuffer != nullptr)
+		{
+			GLint previousDrawFramebuffer = 0;
+			GLint sampleBuffers = 0;
+			GLint samples = 0;
+			procedures.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+			procedures.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+			procedures.GetIntegerv(GL_SAMPLE_BUFFERS, &sampleBuffers);
+			procedures.GetIntegerv(GL_SAMPLES, &samples);
+			procedures.BindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
+			if (sampleBuffers > 0 && samples > 0)
+				target.sampleCount = samples;
+		}
+		if (!gl_GLES_SetHostTarget(target))
+			HostLog("Zandronum GLES Android host target is invalid");
+	}
+
 	void LogGLESMessage(void *, const char *message)
 	{
 		HostLog(message);
@@ -124,6 +151,7 @@ namespace
 	void RegisterGLESHostCallbacks()
 	{
 		FGLESHostCallbacks callbacks = {};
+		callbacks.prepareFrame = &PrepareGLESFrame;
 		callbacks.present = &PresentGLESFrame;
 		callbacks.log = &LogGLESMessage;
 		gl_GLES_RegisterHostCallbacks(&callbacks);
@@ -387,7 +415,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 	}
 	if (lost)
 	{
-		gl_AndroidNativeGLES_OnContextLost();
+		gl_GLES_OnContextLost();
 		DestroyWindowSurface();
 		if (oldWindow != nullptr)
 			ANativeWindow_release(oldWindow);
@@ -397,8 +425,11 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 	{
 		if (CreateWindowSurface())
 		{
-			RegisterGLESHostCallbacks();
-			gl_AndroidNativeGLES_OnContextRestored(SurfaceWidth, SurfaceHeight);
+		RegisterGLESHostCallbacks();
+			if (gl_GLES_OnContextRestored(SurfaceWidth, SurfaceHeight))
+				HostLog("Zandronum GLES Android surface restored");
+			else
+				HostLog("Zandronum GLES Android context restore failed");
 		}
 	}
 }
@@ -478,7 +509,8 @@ void Zandronum_AndroidHost_Stop()
 	}
 }
 
-void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int width, int height)
+void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int width, int height,
+	bool forceRebind)
 {
 	ANativeWindow *window = ANativeWindow_fromSurface(env, surface);
 	if (window == nullptr)
@@ -486,6 +518,11 @@ void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int widt
 	std::lock_guard<std::mutex> lock(HostMutex);
 	SurfaceWidth = width;
 	SurfaceHeight = height;
+	if (!forceRebind && SurfaceReady && SurfaceWindow == window && !SurfaceLostPending)
+	{
+		ANativeWindow_release(window);
+		return;
+	}
 	if (ContextReady || SurfaceLostPending || SurfaceWindow != nullptr)
 	{
 		if (NextSurfaceWindow != nullptr)
@@ -562,7 +599,13 @@ extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActiv
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceCreated(
 	JNIEnv *env, jclass, jobject surface, jint width, jint height)
 {
-	Zandronum_AndroidHost_SurfaceCreated(env, surface, width, height);
+	Zandronum_AndroidHost_SurfaceCreated(env, surface, width, height, false);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceRecreated(
+	JNIEnv *env, jclass, jobject surface, jint width, jint height)
+{
+	Zandronum_AndroidHost_SurfaceCreated(env, surface, width, height, true);
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceChanged(
@@ -610,6 +653,26 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputPointer(JNIEnv *, jclass, jint pointerId, jint action, jfloat x, jfloat y)
 {
 	Zandronum_AndroidInput_Pointer(static_cast<int>(pointerId), static_cast<int>(action), x, y);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMouseMotion(
+	JNIEnv *, jclass, jint x, jint y, jint deltaX, jint deltaY)
+{
+	Zandronum_AndroidInput_MouseMotion(static_cast<int>(x), static_cast<int>(y),
+		static_cast<int>(deltaX), static_cast<int>(deltaY));
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMouseButton(
+	JNIEnv *, jclass, jint button, jboolean pressed, jint x, jint y)
+{
+	Zandronum_AndroidInput_MouseButton(static_cast<int>(button), pressed != 0,
+		static_cast<int>(x), static_cast<int>(y));
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMouseWheel(
+	JNIEnv *, jclass, jfloat horizontal, jfloat vertical)
+{
+	Zandronum_AndroidInput_MouseWheel(horizontal, vertical);
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputAxis(JNIEnv *, jclass, jint axis, jfloat value)
@@ -768,6 +831,26 @@ bool Zandronum_AndroidHost_SetPointerIcon(const int *pixels, int width, int heig
 	if (activityClass != nullptr)
 		env->DeleteLocalRef(activityClass);
 	return success;
+}
+
+void Zandronum_AndroidHost_SetPointerCapture(bool captured)
+{
+	JavaVM *vm;
+	jobject activity;
+	if (!GetActivityBridge(vm, activity))
+		return;
+	JavaThreadAttachment attachment(vm);
+	JNIEnv *env = attachment.GetEnv();
+	if (env == nullptr)
+		return;
+	jclass activityClass = env->GetObjectClass(activity);
+	jmethodID method = activityClass == nullptr ? nullptr : env->GetMethodID(activityClass,
+		"setPointerCapture", "(Z)Z");
+	if (method != nullptr)
+		env->CallBooleanMethod(activity, method, captured ? JNI_TRUE : JNI_FALSE);
+	ClearJavaException(env);
+	if (activityClass != nullptr)
+		env->DeleteLocalRef(activityClass);
 }
 
 #endif

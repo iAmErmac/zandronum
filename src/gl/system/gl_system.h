@@ -4,6 +4,9 @@
 //#define __RPCNDR_H__		// this header causes problems!
 //#define __wtypes_h__
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #define _WIN32_WINDOWS 0x410
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0501			// Support the mouse wheel and session notification.
@@ -72,6 +75,12 @@
 #include <OpenGL/OpenGL.h>
 #elif defined(__unix__)
 #ifdef __ANDROID__
+#if defined(ZANDRONUM_NATIVE_GLES)
+#include <GLES3/gl32.h>
+#ifndef GL_CLAMP
+#define GL_CLAMP 0x2900
+#endif
+#else
 //#define GL_GLEXT_PROTOTYPES
 //#include "GL/gl.h"
 //#define GL_GLEXT_PROTOTYPES
@@ -97,6 +106,7 @@
 #define GL_DEPTH_STENCIL_ATTACHMENT       0x821A
 //#include "gl/api/glext.h"
 //#include "gl/api/gl_api.h"
+#endif
 
 #else
 #include <GL/glew.h>
@@ -123,6 +133,10 @@ template <typename T>
 inline T max( T a, T b) { return (((a)>(b)) ? (a) : (b)); }
 #define __cdecl
 #define _access(a,b)	access(a,b)
+#endif
+
+#if defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/api/gl_api.h"
 #endif
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #include <SDL.h>

@@ -121,8 +121,8 @@ public:
 //==========================================================================
 class FShaderManager
 {
-	#ifdef __ANDROID__
-	struct FAndroidNativeProgram
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	struct FGLESProgram
 	{
 		FName Name;
 		unsigned int Handle;
@@ -137,8 +137,8 @@ class FShaderManager
 	TArray<FShaderContainer*> mTextureEffects;
 	FShader *mActiveShader;
 	FShader *mEffectShaders[NUM_EFFECTS];
-	#ifdef __ANDROID__
-	TArray<FAndroidNativeProgram> mAndroidNativePrograms;
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	TArray<FGLESProgram> mGLESPrograms;
 	#endif
 
 	void Clean();
@@ -163,10 +163,10 @@ public:
 
 	void Recompile();
 
-	#ifdef __ANDROID__
-	void RegisterAndroidNativeProgram(const char *name, unsigned int handle);
-	void ClearAndroidNativePrograms();
-	unsigned int BindAndroidNativeProgram(const char *name);
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	void RegisterGLESProgram(const char *name, unsigned int handle);
+	void ClearGLESPrograms();
+	unsigned int BindGLESProgram(const char *name);
 	#endif
 };
 

@@ -230,6 +230,12 @@ void gl_GLES_DestroyRenderTarget(FGLESTargetDescriptor *target)
 	*target = {};
 }
 
+void gl_GLES_InvalidateRenderTarget(FGLESTargetDescriptor *target)
+{
+	if (target != nullptr)
+		*target = {};
+}
+
 bool gl_GLES_ResolveRenderTarget(const FGLESTargetDescriptor *target)
 {
 	if (target == nullptr || target->framebuffer == 0 || target->resolveFramebuffer == 0 ||

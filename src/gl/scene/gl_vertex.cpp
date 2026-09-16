@@ -55,6 +55,7 @@
 EXTERN_CVAR(Bool, gl_seamless)
 extern int vertexcount;
 
+#if !defined(__ANDROID__)
 //==========================================================================
 //
 // Split upper edge of wall
@@ -192,4 +193,5 @@ void GLWall::SplitRightEdge(texcoord * tcs, bool glow)
 		vertexcount+=i;
 	}
 }
+#endif
 

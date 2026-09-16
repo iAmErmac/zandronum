@@ -926,6 +926,10 @@ void DoMain (HINSTANCE hInstance)
 		progdir.Truncate((long)strlen(program));
 		progdir.UnlockBuffer();
 
+		FString commandLineFile(progdir);
+		commandLineFile += "commandline.txt";
+		M_AppendCommandLineFile(commandLineFile.GetChars());
+
 		// [BC] When hosting, spawn a console dialog box instead of creating a window.
 		if ( Args->CheckParm( "-host" ))
 		{

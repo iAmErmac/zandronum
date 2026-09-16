@@ -72,8 +72,10 @@
 #include "c_console.h"
 #include "c_dispatch.h"
 #include "i_system.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#endif
 #ifdef __ANDROID__
-#include "gl/system/gl_android.h"
 #include "zandronum_android_host.h"
 #endif
 #include "i_sound.h"
@@ -865,9 +867,9 @@ CVAR (Flag, compat_noobituaries, zacompatflags, ZACOMPATF_NO_OBITUARIES);
 void D_Display ()
 {
 #ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	if (gl_GLES_IsActive())
 	{
-		bool nativeWipeInProgress = gl_AndroidNativeGLES_IsWipeInProgress();
+		bool nativeWipeInProgress = gl_GLES_IsWipeInProgress();
 		bool nativeWipeDone = false;
 		if (NETWORK_GetState() == NETSTATE_SERVER || nodrawers || screen == NULL)
 			return;
@@ -919,10 +921,18 @@ void D_Display ()
 			ST_SetNeedRefresh();
 			V_SetBorderNeedRefresh();
 		}
+		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+		{
+			// The native batch is rebuilt every frame, so retained border state is not enough.
+			ST_SetNeedRefresh();
+			V_SetBorderNeedRefresh();
+		}
+		#endif
 		const DWORD nowtime = I_FPSTime();
 		TexMan.UpdateAnimations(nowtime);
 		R_UpdateSky(nowtime);
-		gl_AndroidNativeGLES_ClearScene();
+		gl_GLES_ClearScene();
 		if (levelDisplay && players[consoleplayer].camera == NULL)
 			players[consoleplayer].camera = players[consoleplayer].mo;
 		if (nativeLevelReady && Renderer != NULL && viewactive &&
@@ -1010,8 +1020,10 @@ void D_Display ()
 		{
 			screen->WipeEndScreen();
 			nativeWipeDone = screen->WipeDo(1);
+			gl_GLES_BeginWipeOverlay();
 			C_DrawConsole(false);
 			M_Drawer();
+			gl_GLES_EndWipeOverlay();
 		}
 		else if (gamestate == GS_FULLCONSOLE)
 		{
@@ -1046,7 +1058,7 @@ void D_Display ()
 			FStat::PrintStat();
 		NetUpdate();
 		screen->Update();
-		if (nativeWipeDone || (nativeWipeInProgress && !gl_AndroidNativeGLES_IsWipeInProgress()))
+		if (nativeWipeDone || (nativeWipeInProgress && !gl_GLES_IsWipeInProgress()))
 		{
 			screen->WipeCleanup();
 			nativeWipeInProgress = false;
@@ -1238,6 +1250,14 @@ drawfullconsole:
 				AM_Drawer ();
 				ST_Y = saved_ST_Y;
 			}
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (gl_GLES_IsActive())
+			{
+				// The native batch is rebuilt every frame, so retained border state is not enough.
+				ST_SetNeedRefresh();
+				V_SetBorderNeedRefresh();
+			}
+			#endif
 			if (!automapactive || viewactive)
 			{
 				V_RefreshViewBorder ();
@@ -1388,8 +1408,14 @@ drawfullconsole:
 			} while (diff < 1);
 			wipestart = nowtime;
 			done = screen->WipeDo (1);
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (gl_GLES_IsActive()) gl_GLES_BeginWipeOverlay();
+			#endif
 			C_DrawConsole (hw2d);	// console and
 			M_Drawer ();			// menu are drawn even on top of wipes
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (gl_GLES_IsActive()) gl_GLES_EndWipeOverlay();
+			#endif
 			screen->Update ();		// page flip or blit buffer
 			NetUpdate ();			// [RH] not sure this is needed anymore
 		} while (!done);
@@ -1421,10 +1447,10 @@ void D_ErrorCleanup ()
 	savegamerestore = false;
 	screen->Unlock ();
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		if (gl_AndroidNativeGLES_IsWipeInProgress())
+		if (gl_GLES_IsWipeInProgress())
 			screen->WipeCleanup();
 		GSnd->SetSfxPaused(false, 1);
 	}
@@ -1490,8 +1516,12 @@ void D_DoomLoop ()
 		if (Zandronum_AndroidHost_IsStopping())
 			return;
 #endif
-		const bool nativeWipeInProgress = gl_AndroidNativeGLES_IsActive() &&
-			gl_AndroidNativeGLES_IsWipeInProgress();
+		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		const bool nativeWipeInProgress = gl_GLES_IsActive() &&
+			gl_GLES_IsWipeInProgress();
+		#else
+		const bool nativeWipeInProgress = false;
+		#endif
 		try
 		{
 			switch ( NETWORK_GetState( ))

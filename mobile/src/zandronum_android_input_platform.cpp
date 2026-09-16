@@ -12,6 +12,7 @@
 #include "gameconfigfile.h"
 #include "templates.h"
 #include "zandronum_android_input.h"
+#include "zandronum_android_host.h"
 #include "zstring.h"
 
 namespace
@@ -205,25 +206,20 @@ namespace
 
 void I_SetMouseCapture()
 {
+	Zandronum_AndroidHost_SetPointerCapture(true);
 }
 
 void I_ReleaseMouseCapture()
 {
+	Zandronum_AndroidHost_SetPointerCapture(false);
 }
 
-void I_GetEvent()
-{
-}
-
+// Android delivers input and controller changes through JNI, so neither hook polls a platform queue.
 void I_StartTic()
 {
 }
 
 void I_StartFrame()
-{
-}
-
-void I_StartupJoysticks()
 {
 }
 

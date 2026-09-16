@@ -3733,14 +3733,6 @@
 					>
 				</File>
 				<File
-					RelativePath=".\src\gl\system\gl_threads.cpp"
-					>
-				</File>
-				<File
-					RelativePath=".\src\gl\system\gl_threads.h"
-					>
-				</File>
-				<File
 					RelativePath=".\src\gl\system\gl_wipe.cpp"
 					>
 				</File>

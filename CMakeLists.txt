@@ -3,21 +3,8 @@ cmake_minimum_required( VERSION 3.5 )
 project(Zandronum)
 
 if( WIN32 )
-	option( GLES_WGL_SMOKE_ONLY "Configure only the opt-in Windows GLES/WGL mono smoke executable." OFF )
+	option( ZANDRONUM_GLES_WIN32 "Build the native Windows OpenGL ES-compatible renderer backend." ON )
 endif( WIN32 )
-
-if( WIN32 AND GLES_WGL_SMOKE_ONLY )
-	add_executable( zandronum_gles_wgl_smoke
-		src/gl/system/gl_gles_context.cpp
-		src/gl/system/gl_gles_targets.cpp
-		src/gl/system/gl_gles_shader.cpp
-		src/gl/system/gl_gles_wgl_smoke.cpp )
-	target_include_directories( zandronum_gles_wgl_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src )
-	target_link_libraries( zandronum_gles_wgl_smoke opengl32 user32 gdi32 )
-	set_target_properties( zandronum_gles_wgl_smoke PROPERTIES
-		RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR} )
-	return()
-endif( WIN32 AND GLES_WGL_SMOKE_ONLY )
 
 if( COMMAND cmake_policy )
 	cmake_policy( SET CMP0011 NEW )
@@ -55,10 +42,16 @@ function( add_pk3 PK3_NAME PK3_DIR )
 		set( PK3_TARGET "pk3" )
 	endif( ${PK3_TARGET} STREQUAL "zandronum_pk3" )
 
+	if( WIN32 AND ZANDRONUM_GLES_WIN32 )
+		set( PK3_RUNTIME_COPY_DIR "${ZDOOM_OUTPUT_DIR}/${CMAKE_CFG_INTDIR}" )
+	else( WIN32 AND ZANDRONUM_GLES_WIN32 )
+		set( PK3_RUNTIME_COPY_DIR "$<TARGET_FILE_DIR:zdoom>" )
+	endif( WIN32 AND ZANDRONUM_GLES_WIN32 )
+
 	if( NOT NO_GENERATOR_EXPRESSIONS AND NOT ZDOOM_OUTPUT_OLDSTYLE )
 		add_custom_command( OUTPUT ${ZDOOM_OUTPUT_DIR}/${PK3_NAME}
 			COMMAND zipdir -udf ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_DIR}
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} $<TARGET_FILE_DIR:zdoom>/${PK3_NAME}
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ZDOOM_OUTPUT_DIR}/${PK3_NAME} ${PK3_RUNTIME_COPY_DIR}/${PK3_NAME}
 			DEPENDS zipdir )
 	else( NOT NO_GENERATOR_EXPRESSIONS AND NOT ZDOOM_OUTPUT_OLDSTYLE )
 		add_custom_command( OUTPUT ${ZDOOM_OUTPUT_DIR}/${PK3_NAME}
@@ -272,6 +265,14 @@ add_subdirectory( wadsrc_bm )
 # [BB] Compatibility wad to support Skulltag mods.
 add_subdirectory( wadsrc_st )
 add_subdirectory( src )
+
+if( TARGET zdoom AND WIN32 AND ZANDRONUM_GLES_WIN32 )
+	foreach( PK3_TARGET pk3 brightmaps_pk3 skulltag_actors_pk3 )
+		if( TARGET ${PK3_TARGET} )
+			add_dependencies( zdoom ${PK3_TARGET} )
+		endif()
+	endforeach()
+endif( TARGET zdoom AND WIN32 AND ZANDRONUM_GLES_WIN32 )
 
 # [AK] Library for noise suppression for VoIP.
 if ( NOT NO_SOUND )

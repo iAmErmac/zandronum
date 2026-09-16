@@ -54,8 +54,14 @@
 #include "gl/textures/gl_texture.h"
 #include "gl/textures/gl_skyboxtexture.h"
 #include "gl/textures/gl_material.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#endif
 
+CVAR (Int, gl_sky_detail, 16, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+CVAR(Float, skyoffset, 0, 0)
 
+#if !defined(__ANDROID__)
 //-----------------------------------------------------------------------------
 //
 // Shamelessly lifted from Doomsday (written by Jaakko Keränen)
@@ -63,7 +69,6 @@
 //
 //-----------------------------------------------------------------------------
 
-CVAR (Int, gl_sky_detail, 16, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 EXTERN_CVAR (Bool, r_stretchsky)
 
 extern int skyfog;
@@ -244,7 +249,6 @@ static void RenderSkyHemisphere(int hemi, bool mirror)
 //
 //
 //-----------------------------------------------------------------------------
-CVAR(Float, skyoffset, 0, 0)	// for testing
 
 static void RenderDome(FTextureID texno, FMaterial * tex, float x_offset, float y_offset, bool mirror, int CM_Index)
 {
@@ -545,8 +549,34 @@ static void RenderBox(FTextureID texno, FMaterial * gltex, float x_offset, int C
 //
 //
 //-----------------------------------------------------------------------------
+#endif
 void GLSkyPortal::DrawContents()
 {
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	{
+	if (!gl_GLES_IsActive() || origin == NULL || origin->texture[0] == NULL)
+		return;
+
+	for (unsigned int index = 0; index < lines.Size(); ++index)
+	{
+		const GLWall &line = lines[index];
+		const float positions[12] =
+		{
+			line.glseg.x1, line.zbottom[0], line.glseg.y1,
+			line.glseg.x1, line.ztop[0], line.glseg.y1,
+			line.glseg.x2, line.ztop[1], line.glseg.y2,
+			line.glseg.x2, line.zbottom[1], line.glseg.y2
+		};
+		gl_GLES_AddSkyMask(positions);
+	}
+	gl_GLES_SetSky(origin->texture[0], origin->x_offset[0], origin->y_offset,
+		origin->mirrored, origin->sky2, origin->fadecolor);
+	if (origin->doublesky && origin->texture[1] != NULL)
+		gl_GLES_SetSkyLayer(origin->texture[1], origin->x_offset[1], origin->y_offset, false);
+	return;
+	}
+#endif
+#if !defined(__ANDROID__)
 	bool drawBoth = false;
 	int CM_Index;
 	PalEntry FadeColor(0,0,0,0);
@@ -623,5 +653,6 @@ void GLSkyPortal::DrawContents()
 	}
 	glPopMatrix();
 	glset.lightmode = oldlightmode;
+#endif
 }
 

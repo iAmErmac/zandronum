@@ -57,8 +57,8 @@
 #include "gl/utility/gl_convert.h"
 #include "gl/utility/gl_templates.h"
 #include "gl/shaders/gl_shader.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #include <algorithm>
 #include <math.h>
 #endif
@@ -982,6 +982,7 @@ void FDrawInfo::EndDrawInfo()
 //
 //==========================================================================
 
+#if !defined(__ANDROID__)
 void FDrawInfo::SetupFloodStencil(wallseg * ws)
 {
 	int recursion = GLPortal::GetRecursion();
@@ -1037,6 +1038,7 @@ void FDrawInfo::ClearFloodStencil(wallseg * ws)
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(true);
 }
+#endif
 
 //==========================================================================
 //
@@ -1071,8 +1073,8 @@ void FDrawInfo::DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, boo
 		else lightlevel=abs(ceiling? sec->GetCeilingLight() : sec->GetFloorLight());
 	}
 
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		const int rel = getExtraLight();
 		float color[3];
@@ -1156,11 +1158,12 @@ void FDrawInfo::DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, boo
 			ws->x2, ws->z1, ws->y2
 		};
 		const unsigned int texture = gltexture->BindNative(Colormap.colormap, 0, true);
-		gl_AndroidNativeGLES_AddFloodPlane(wallPositions, positions, texcoords, color, texture,
+		gl_GLES_AddFloodPlane(wallPositions, positions, texcoords, color, texture,
 			fogDensity > 0.0f, fogColor, fogDensity);
 		return;
 	}
-	#endif
+#endif
+#if !defined(__ANDROID__)
 
 	int rel = getExtraLight();
 	gl_SetColor(lightlevel, rel, &Colormap, 1.0f);
@@ -1203,13 +1206,14 @@ void FDrawInfo::DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, boo
 	glTexCoord2f(px4 / 64, -py4 / 64);
 	glVertex3f(px4, planez, py4);
 
-	glEnd();
+		glEnd();
 
 	if (pushed)
 	{
 		glPopMatrix();
 		glMatrixMode(GL_MODELVIEW);
 	}
+#endif
 }
 
 //==========================================================================
@@ -1233,10 +1237,10 @@ void FDrawInfo::FloodUpperGap(seg_t * seg)
 	fixed_t frontz = fakefsector->ceilingplane.ZatPoint(seg->v1);
 
 	if (fakebsector->GetTexture(sector_t::ceiling)==skyflatnum) return;
-	#ifdef __ANDROID__
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	// Native flood projection has no legacy portal depth handoff. Do not project
 	// the adjacent ceiling across an opening owned by an F_SKY1 ceiling.
-	if (gl_AndroidNativeGLES_IsActive() && fakefsector->GetTexture(sector_t::ceiling)==skyflatnum) return;
+	if (gl_GLES_IsActive() && fakefsector->GetTexture(sector_t::ceiling)==skyflatnum) return;
 	#endif
 	if (backz < viewz) return;
 
@@ -1259,14 +1263,15 @@ void FDrawInfo::FloodUpperGap(seg_t * seg)
 	ws.z1= FIXED2FLOAT(frontz);
 	ws.z2= FIXED2FLOAT(backz);
 
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		DrawFloodedPlane(&ws, ws.z2, fakebsector, true);
 		return;
 	}
 	#endif
 
+	#if !defined(__ANDROID__)
 	// Step1: Draw a stencil into the gap
 	SetupFloodStencil(&ws);
 
@@ -1275,6 +1280,7 @@ void FDrawInfo::FloodUpperGap(seg_t * seg)
 
 	// Step3: Delete the stencil
 	ClearFloodStencil(&ws);
+	#endif
 }
 
 //==========================================================================
@@ -1299,8 +1305,8 @@ void FDrawInfo::FloodLowerGap(seg_t * seg)
 
 
 	if (fakebsector->GetTexture(sector_t::floor) == skyflatnum) return;
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive() && fakefsector->GetTexture(sector_t::floor)==skyflatnum) return;
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive() && fakefsector->GetTexture(sector_t::floor)==skyflatnum) return;
 	#endif
 	if (fakebsector->GetPlaneTexZ(sector_t::floor) > viewz) return;
 
@@ -1323,14 +1329,15 @@ void FDrawInfo::FloodLowerGap(seg_t * seg)
 	ws.z2= FIXED2FLOAT(frontz);
 	ws.z1= FIXED2FLOAT(backz);
 
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		DrawFloodedPlane(&ws, ws.z1, fakebsector, false);
 		return;
 	}
 	#endif
 
+	#if !defined(__ANDROID__)
 	// Step1: Draw a stencil into the gap
 	SetupFloodStencil(&ws);
 
@@ -1339,4 +1346,5 @@ void FDrawInfo::FloodLowerGap(seg_t * seg)
 
 	// Step3: Delete the stencil
 	ClearFloodStencil(&ws);
+	#endif
 }

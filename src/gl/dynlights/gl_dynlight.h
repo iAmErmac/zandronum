@@ -163,7 +163,7 @@ struct FDynLightData
 		arrays[2].Clear();
 	}
 
-	void Combine(int *siz, int max)
+	void Combine(int *siz, int max, int *nativeSiz = nullptr)
 	{
 		siz[0] = arrays[0].Size();
 		siz[1] = siz[0] + arrays[1].Size();
@@ -174,6 +174,12 @@ struct FDynLightData
 		siz[0]>>=2;
 		siz[1]>>=2;
 		siz[2]>>=2;
+		if (nativeSiz != nullptr)
+		{
+			nativeSiz[0] = siz[0];
+			nativeSiz[1] = siz[1];
+			nativeSiz[2] = siz[2];
+		}
 		if (siz[0] > max) siz[0] = max;
 		if (siz[1] > max) siz[1] = max;
 		if (siz[2] > max) siz[2] = max;

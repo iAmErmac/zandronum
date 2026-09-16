@@ -61,8 +61,9 @@
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_templates.h"
 #include "gl/utility/gl_geometric.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_context.h"
 #endif
 // [AK] New #includes.
 #include "c_console.h"
@@ -98,12 +99,12 @@ UniqueList<secplane_t> UniquePlaneMirrors;
 
 
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 static void SetNativePortalView(bool mirrored, bool planeMirrored)
 {
 	GLRenderer->SetCameraPos(viewx, viewy, viewz, viewangle);
 	const float yaw = float((viewangle >> ANGLETOFINESHIFT) * 360.0 / FINEANGLES);
-	gl_AndroidNativeGLES_SetPortalView(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), FIXED2FLOAT(viewz),
+	gl_GLES_SetPortalView(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), FIXED2FLOAT(viewz),
 		yaw, GLRenderer->mAngles.Pitch, GLRenderer->mAngles.Roll, mirrored, planeMirrored);
 }
 #endif
@@ -127,9 +128,19 @@ void GLPortal::BeginScene()
 //==========================================================================
 void GLPortal::ClearScreen()
 {
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) return;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		if (!gl_GLES_ClearPortalCapture())
+			gl_GLES_Report("portal", "recursion termination has no active native capture");
+		return;
+	}
 #endif
+#if defined(__ANDROID__)
+	return;
+#endif
+#if !defined(__ANDROID__)
+
 	bool multi = !!glIsEnabled(GL_MULTISAMPLE);
 	glMatrixMode(GL_MODELVIEW);
 	glPushMatrix();
@@ -144,6 +155,8 @@ void GLPortal::ClearScreen()
 	glPopMatrix();
 	if (multi) glEnable(GL_MULTISAMPLE);
 	gl_RenderState.Set2DMode(false);
+
+#endif
 }
 
 
@@ -154,6 +167,13 @@ void GLPortal::ClearScreen()
 //-----------------------------------------------------------------------------
 void GLPortal::DrawPortalStencil()
 {
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
+
 	for(unsigned int i=0;i<lines.Size();i++)
 	{
 		lines[i].RenderWall(0, NULL);
@@ -177,6 +197,8 @@ void GLPortal::DrawPortalStencil()
 		glVertex3f( 32767.0f,-32767.0f,-32767.0f);
 		glEnd();
 	}
+
+#endif
 }
 
 
@@ -189,6 +211,13 @@ void GLPortal::DrawPortalStencil()
 
 bool GLPortal::Start(bool usestencil, bool doquery)
 {
+#if defined(__ANDROID__)
+	return false;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return false;
+#endif
+#if !defined(__ANDROID__)
+
 	rendered_portals++;
 	PortalAll.Clock();
 	if (usestencil)
@@ -312,6 +341,8 @@ bool GLPortal::Start(bool usestencil, bool doquery)
 	GLRenderer->mCurrentPortal = NULL;	// Portals which need this have to set it themselves
 	PortalAll.Unclock();
 	return true;
+
+#endif
 }
 
 
@@ -354,6 +385,13 @@ inline void GLPortal::ClearClipper()
 //-----------------------------------------------------------------------------
 void GLPortal::End(bool usestencil)
 {
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
+
 	bool needdepth = NeedDepthBuffer();
 
 	PortalAll.Clock();
@@ -370,8 +408,8 @@ void GLPortal::End(bool usestencil)
 		viewangle=savedviewangle;
 		GLRenderer->mViewActor=savedviewactor;
 		in_area=savedviewarea;
-		#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	else
 	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
@@ -430,8 +468,8 @@ void GLPortal::End(bool usestencil)
 		viewangle=savedviewangle;
 		GLRenderer->mViewActor=savedviewactor;
 		in_area=savedviewarea;
-		#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	else
 	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
@@ -450,6 +488,8 @@ void GLPortal::End(bool usestencil)
 		glDepthFunc(GL_LESS);
 	}
 	PortalAll.Unclock();
+
+#endif
 }
 
 
@@ -495,8 +535,8 @@ FString indent;
 void GLPortal::EndFrame()
 {
 	GLPortal * p;
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		// Process only this frame's queue; the sentinel preserves an outer target.
 		unsigned int captured = 0;
@@ -507,8 +547,12 @@ void GLPortal::EndFrame()
 			delete p;
 		}
 		if (renderdepth > 0) --renderdepth;
-		if (developer && captured > 0)
-			DPrintf("Android GLES captured %u portal target(s).\n", captured);
+		static bool capturedLogWritten = false;
+		if (developer && captured > 0 && !capturedLogWritten)
+		{
+			DPrintf("GLES captured %u portal target(s).\n", captured);
+			capturedLogWritten = true;
+		}
 		return;
 	}
 #endif
@@ -549,10 +593,10 @@ void GLPortal::EndFrame()
 
 //-----------------------------------------------------------------------------
 //
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 bool GLPortal::RenderNative()
 {
-	if (!gl_AndroidNativeGLES_IsActive() || !SupportsNativeCapture() || lines.Size() == 0)
+	if (!gl_GLES_IsActive() || !SupportsNativeCapture() || lines.Size() == 0)
 		return false;
 	const fixed_t savedViewX = viewx;
 	const fixed_t savedViewY = viewy;
@@ -561,7 +605,7 @@ bool GLPortal::RenderNative()
 	const area_t savedViewArea = in_area;
 	AActor *const savedViewActor = GLRenderer->mViewActor;
 	GLPortal *const savedCurrentPortal = GLRenderer->mCurrentPortal;
-	const unsigned int portalId = gl_AndroidNativeGLES_BeginPortalCapture();
+	const unsigned int portalId = gl_GLES_BeginPortalCapture();
 	if (portalId == ~0u) return false;
 	for (unsigned int index = 0; index < lines.Size(); ++index)
 	{
@@ -573,7 +617,7 @@ bool GLPortal::RenderNative()
 			line.glseg.x2, line.ztop[1], line.glseg.y2,
 			line.glseg.x2, line.zbottom[1], line.glseg.y2
 		};
-		gl_AndroidNativeGLES_AddPortalMask(portalId, positions);
+		gl_GLES_AddPortalMask(portalId, positions);
 	}
 	// Keep recursive visibility data separate from the enclosing scene.
 	// The active owner is needed by BSP and actor clipping while the target is collected.
@@ -588,7 +632,7 @@ bool GLPortal::RenderNative()
 	in_area = savedViewArea;
 	GLRenderer->mViewActor = savedViewActor;
 	GLRenderer->mCurrentPortal = savedCurrentPortal;
-	gl_AndroidNativeGLES_EndPortalCapture(portalId);
+	gl_GLES_EndPortalCapture(portalId);
 	return true;
 }
 #endif
@@ -699,8 +743,15 @@ void GLSkyboxPortal::DrawContents()
 
 	PlaneMirrorMode=0;
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+	{
+#endif
 	glDisable(GL_DEPTH_CLAMP_NV);
+#if defined(ZANDRONUM_GLES_BACKEND)
+	}
+#endif
 #endif
 
 	// [AK] Don't interpolate the skybox if the game is supposed to be paused
@@ -722,8 +773,8 @@ void GLSkyboxPortal::DrawContents()
 
 	validcount++;
 	inskybox=true;
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	else
 	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
@@ -738,8 +789,15 @@ void GLSkyboxPortal::DrawContents()
 	GLRenderer->DrawScene();
 	origin->flags&=~MF_JUSTHIT;
 	inskybox=false;
-#ifndef __ANDROID__
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+	{
+#endif
 	glEnable(GL_DEPTH_CLAMP_NV);
+#if defined(ZANDRONUM_GLES_BACKEND)
+	}
+#endif
 #endif
 	skyboxrecursion--;
 
@@ -828,8 +886,8 @@ void GLSectorStackPortal::DrawContents()
 	// avoid recursions!
 	if (origin->plane != -1) instack[origin->plane]++;
 
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	else
 	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
@@ -876,11 +934,11 @@ void GLPlaneMirrorPortal::DrawContents()
 	validcount++;
 
 	PlaneMirrorFlag++;
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
-		gl_AndroidNativeGLES_SetPortalClipPlane(0.0f, static_cast<float>(PlaneMirrorMode), 0.0f,
+		gl_GLES_SetPortalClipPlane(0.0f, static_cast<float>(PlaneMirrorMode), 0.0f,
 			FIXED2FLOAT(origin->d));
 	}
 	else
@@ -888,17 +946,31 @@ void GLPlaneMirrorPortal::DrawContents()
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	ClearClipper();
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+	{
+#endif
 	glEnable(GL_CLIP_PLANE0+renderdepth);
 	// This only works properly for non-sloped planes so don't bother with the math.
 	//double d[4]={origin->a/65536., origin->c/65536., origin->b/65536., FIXED2FLOAT(origin->d)};
 	double d[4]={0, static_cast<double>(PlaneMirrorMode), 0, FIXED2FLOAT(origin->d)};
 	glClipPlane(GL_CLIP_PLANE0+renderdepth, d);
+#if defined(ZANDRONUM_GLES_BACKEND)
+	}
+#endif
 #endif
 
 	GLRenderer->DrawScene();
-#ifndef __ANDROID__
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+	{
+#endif
 	glDisable(GL_CLIP_PLANE0+renderdepth);
+#if defined(ZANDRONUM_GLES_BACKEND)
+	}
+#endif
 #endif
 	PlaneMirrorFlag--;
 	PlaneMirrorMode=old_pm;
@@ -996,8 +1068,8 @@ void GLMirrorPortal::DrawContents()
 	validcount++;
 
 	MirrorFlag++;
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 	else
 	#endif
 	GLRenderer->SetupView(viewx, viewy, viewz, viewangle, !!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
@@ -1051,7 +1123,7 @@ int GLMirrorPortal::ClipPoint(fixed_t x, fixed_t y)
 // are 2 problems with it:
 //
 // 1. Setting this up completely negates any performance gains.
-// 2. It doesn't work with a 360° field of view (as when you are looking up.)
+// 2. It doesn't work with a 360Â° field of view (as when you are looking up.)
 //
 //
 // So the brute force mechanism is just as good.
@@ -1066,6 +1138,127 @@ int GLMirrorPortal::ClipPoint(fixed_t x, fixed_t y)
 //-----------------------------------------------------------------------------
 void GLHorizonPortal::DrawContents()
 {
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		PortalAll.Clock();
+		GLSectorPlane *sp = &origin->plane;
+		FMaterial *gltexture = FMaterial::ValidateTexture(sp->texture, true);
+		if (gltexture == NULL)
+		{
+			PortalAll.Unclock();
+			return;
+		}
+
+		SetNativePortalView(false, false);
+		float color[3];
+		if (gltexture->tex->isFullbright())
+		{
+			color[0] = color[1] = color[2] = 1.0f;
+		}
+		else
+		{
+			gl_GetLightColor(origin->lightlevel, getExtraLight(), &origin->colormap,
+				color + 0, color + 1, color + 2);
+		}
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		if (!gl_fixedcolormap && (gl_CheckFog(&origin->colormap, origin->lightlevel) ||
+			(::level.flags & LEVEL_HASFADETABLE)))
+		{
+			PalEntry fog = origin->colormap.FadeColor;
+			if (::level.flags & LEVEL_HASFADETABLE)
+			{
+				fog = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(origin->lightlevel, fog);
+				gl_ModifyColor(fog.r, fog.g, fog.b, origin->colormap.colormap);
+			}
+			fogColor[0] = fog.r / 255.0f;
+			fogColor[1] = fog.g / 255.0f;
+			fogColor[2] = fog.b / 255.0f;
+		}
+
+		const float vx = FIXED2FLOAT(viewx);
+		const float vy = FIXED2FLOAT(viewy);
+		const float vz = FIXED2FLOAT(viewz);
+		const float z = FIXED2FLOAT(sp->texheight);
+		const float extent = 32767.0f;
+		const float textureWidth = gltexture->TextureWidth(GLUSE_TEXTURE) > 0 ?
+			static_cast<float>(gltexture->TextureWidth(GLUSE_TEXTURE)) : 1.0f;
+		const float textureHeight = gltexture->TextureHeight(GLUSE_TEXTURE) > 0 ?
+			static_cast<float>(gltexture->TextureHeight(GLUSE_TEXTURE)) : 1.0f;
+		const float uOffset = FIXED2FLOAT(sp->xoffs) / textureWidth;
+		const float vOffset = FIXED2FLOAT(sp->yoffs) / textureHeight;
+		const float uScale = FIXED2FLOAT(sp->xscale);
+		const float vScale = gltexture->tex->bHasCanvas ? -FIXED2FLOAT(sp->yscale) :
+			FIXED2FLOAT(sp->yscale);
+		const float angle = -static_cast<float>(sp->angle) * 6.28318530718f / 4294967296.0f;
+		const float cosine = cosf(angle);
+		const float sine = sinf(angle);
+		const float planePositions[12] =
+		{
+			vx - extent, z, vy - extent,
+			vx - extent, z, vy + extent,
+			vx + extent, z, vy + extent,
+			vx + extent, z, vy - extent
+		};
+		float planeTexcoords[8];
+		for (int vertex = 0; vertex < 4; ++vertex)
+		{
+			const float x = planePositions[vertex * 3 + 0];
+			const float y = planePositions[vertex * 3 + 2];
+			const float rawU = x / 64.0f;
+			const float rawV = -y / 64.0f;
+			const float rotatedU = cosine * rawU - sine * rawV;
+			const float rotatedV = sine * rawU + cosine * rawV;
+			planeTexcoords[vertex * 2 + 0] = uScale *
+				(uOffset + (64.0f / textureWidth) * rotatedU);
+			planeTexcoords[vertex * 2 + 1] = vScale *
+				(vOffset + (64.0f / textureHeight) * rotatedV);
+		}
+		const unsigned int texture = gltexture->BindNative(origin->colormap.colormap, 0, true);
+		gl_GLES_AddFlat(planePositions, planeTexcoords, 4, color, 1.0f, texture,
+			gltexture->isMasked(), fogDensity > 0.0f, true, fogColor, fogDensity,
+			GLES_BLEND_OPAQUE);
+
+		// Close the same finite-plane gap that the desktop horizon pass fills at
+		// the edge of its far boundary.
+		const float distance = z - vz;
+		if (fabsf(distance) > 0.0001f)
+		{
+			const float wallTexcoords[8] = { 0.0f, 0.0f, 0.0f, distance,
+				1.0f, distance, 1.0f, 0.0f };
+			const float edges[4][12] =
+			{
+				{ vx - extent, z, vy - extent, vx - extent, vz, vy - extent,
+				  vx + extent, vz, vy - extent, vx + extent, z, vy - extent },
+				{ vx + extent, z, vy - extent, vx + extent, vz, vy - extent,
+				  vx + extent, vz, vy + extent, vx + extent, z, vy + extent },
+				{ vx + extent, z, vy + extent, vx + extent, vz, vy + extent,
+				  vx - extent, vz, vy + extent, vx - extent, z, vy + extent },
+				{ vx - extent, z, vy + extent, vx - extent, vz, vy + extent,
+				  vx - extent, vz, vy - extent, vx - extent, z, vy - extent }
+			};
+			for (int edge = 0; edge < 4; ++edge)
+				gl_GLES_AddWall(edges[edge], wallTexcoords, color, 1.0f, texture,
+					gltexture->isMasked(), fogDensity > 0.0f, true, fogColor, fogDensity,
+					GLES_BLEND_OPAQUE);
+		}
+		PortalAll.Unclock();
+		return;
+	}
+#endif
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
+
 	PortalAll.Clock();
 
 	GLSectorPlane * sp=&origin->plane;
@@ -1180,6 +1373,8 @@ void GLHorizonPortal::DrawContents()
 
 	PortalAll.Unclock();
 
+
+#endif
 }
 
 const char *GLSkyPortal::GetName() { return "Sky"; }

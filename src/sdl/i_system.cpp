@@ -446,10 +446,6 @@ void STACK_ARGS I_Error (const char *error, ...)
 	throw CRecoverableError (errortext);
 }
 
-void I_SetIWADInfo ()
-{
-}
-
 void I_PrintStr (const char *cp)
 {
 	// Strip out any color escape sequences before writing to the log file

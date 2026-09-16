@@ -56,8 +56,8 @@
 #include "gl/models/gl_models.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 EXTERN_CVAR (Bool, r_drawplayersprites)
@@ -84,12 +84,14 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 	fixed_t			texturemid;// 4:3		16:9		16:10			17:10			5:4
 	static fixed_t xratio[] = {FRACUNIT, FRACUNIT*3/4, FRACUNIT*5/6, FRACUNIT*40/51, FRACUNIT};
 	
-	// [BB] In the HUD model step we just render the model and break out. 
+	// [BB] In the HUD model step we just render the model and break out.
+#if !defined(__ANDROID__)
 	if ( hudModelStep )
 	{
 		gl_RenderHUDModel( psp, sx, sy, cm_index );
 		return;
 	}
+#endif
 
 	// decide which patch to use
 	bool mirror;
@@ -99,8 +101,8 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 	FMaterial * tex = FMaterial::ValidateTexture(lump, false);
 	if (!tex) return;
 
-#ifdef __ANDROID__
-	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool nativeGLES = gl_GLES_IsActive();
 	if (!nativeGLES)
 #endif
 	tex->BindPatch(cm_index, 0, OverrideShader);
@@ -156,7 +158,7 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		fV2=tex->GetVB();
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (nativeGLES)
 	{
 		const float width = screen != NULL && screen->GetWidth() > 0 ?
@@ -181,13 +183,14 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		const float texcoords[8] = { nativeLeft, 0.0f, nativeLeft, 1.0f,
 			nativeRight, 1.0f, nativeRight, 0.0f };
 		const unsigned int texture = tex->BindNative(cm_index, 0, false);
-		const EAndroidNativeBlendMode blendMode = nativeAlpha < 0.999f ?
-			ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE;
-		gl_AndroidNativeGLES_AddHUDQuad(positions, texcoords, NULL, nativeAlpha,
+		const EGLESBlendMode blendMode = nativeAlpha < 0.999f ?
+			GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
+		gl_GLES_AddHUDQuad(positions, texcoords, NULL, nativeAlpha,
 			tex->isMasked(), texture, blendMode, nativeMaterialFlags);
 		return;
 	}
 #endif
+#if !defined(__ANDROID__)
 
 	if (tex->GetTransparent() || OverrideShader != 0)
 	{
@@ -204,6 +207,7 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 	{
 		gl_RenderState.EnableAlphaTest(true);
 	}
+#endif
 }
 
 //==========================================================================
@@ -216,8 +220,8 @@ EXTERN_CVAR(Bool, gl_brightfog)
 
 void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 {
-	#ifdef __ANDROID__
-	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool nativeGLES = gl_GLES_IsActive();
 	#endif
 	bool statebright[2] = {false, false};
 	unsigned int i;
@@ -360,8 +364,8 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 		vis.RenderStyle.CheckFuzz();
 		if (vis.RenderStyle.BlendOp == STYLEOP_Fuzz)
 		{
-			#ifdef __ANDROID__
-			if (gl_AndroidNativeGLES_IsActive() && gl_fuzztype != 0)
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (gl_GLES_IsActive() && gl_fuzztype != 0)
 			{
 				nativeFuzz = true;
 				vis.RenderStyle = LegacyRenderStyles[STYLE_Translucent];
@@ -384,7 +388,7 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 		statebright[0] = statebright[1] = false;
 	}
 
-	#ifdef __ANDROID__
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (!nativeGLES)
 	#endif
 		gl_SetRenderStyle(vis.RenderStyle, false, false);
@@ -438,19 +442,19 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 				}
 			}
 			// set the lighting parameters (only calls glColor and glAlphaFunc)
-			#ifdef __ANDROID__
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 			if (!nativeGLES)
 			#endif
 				gl_SetSpriteLighting(vis.RenderStyle, playermo, statebright[i]? 255 : lightlevel,
 					0, &cmc, 0xffffff, trans, statebright[i], true);
 			unsigned int nativeMaterialFlags = 0;
-			#ifdef __ANDROID__
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 			nativeMaterialFlags =
-				(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
-				((vis.RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
-				((vis.RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
-				((vis.RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
-				((vis.RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0);
+				(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
+				((vis.RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
+				((vis.RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
+				((vis.RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
+				((vis.RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0);
 			#endif
 			DrawPSprite (player,psp,psp->sx+ofsx, psp->sy+ofsy, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags);
 		}
@@ -467,8 +471,8 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 
 void FGLRenderer::DrawTargeterSprites()
 {
-	#ifdef __ANDROID__
-	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool nativeGLES = gl_GLES_IsActive();
 	#endif
 	int i;
 	pspdef_t *psp;
@@ -478,9 +482,10 @@ void FGLRenderer::DrawTargeterSprites()
 	if(!player || playermo->renderflags&RF_INVISIBLE || !r_drawplayersprites ||
 		mViewActor!=playermo) return;
 
-	#ifdef __ANDROID__
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
 	if (!nativeGLES)
-	#endif
+#endif
 	{
 		gl_RenderState.EnableBrightmap(false);
 		gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -489,6 +494,7 @@ void FGLRenderer::DrawTargeterSprites()
 		glColor3f(1.0f,1.0f,1.0f);
 		gl_RenderState.SetTextureMode(TM_MODULATE);
 	}
+#endif
 
 	// The Targeter's sprites are always drawn normally.
 	for (i=ps_targetcenter, psp = &player->psprites[ps_targetcenter]; i<NUMPSPRITES; i++,psp++)

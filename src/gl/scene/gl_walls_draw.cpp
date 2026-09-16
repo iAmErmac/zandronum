@@ -46,8 +46,8 @@
 
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
@@ -212,11 +212,12 @@ void GLWall::SetupLights(bool collect)
 		}
 	}
 	int numlights[3];
+	int allNativeLights[3];
 
-	lightdata.Combine(numlights, gl.MaxLights());
-	nativeLightCounts[0] = static_cast<unsigned int>(numlights[0]);
-	nativeLightCounts[1] = static_cast<unsigned int>(numlights[1]);
-	nativeLightCounts[2] = static_cast<unsigned int>(numlights[2]);
+	lightdata.Combine(numlights, gl.MaxLights(), allNativeLights);
+	nativeLightCounts[0] = static_cast<unsigned int>(allNativeLights[0]);
+	nativeLightCounts[1] = static_cast<unsigned int>(allNativeLights[1]);
+	nativeLightCounts[2] = static_cast<unsigned int>(allNativeLights[2]);
 	if (numlights[2] > 0)
 	{
 		draw_dlight+=numlights[2]/2;
@@ -252,8 +253,8 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 		glowing = false;
 	}
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (light != NULL) return;
 		float color[3];
@@ -294,10 +295,10 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
 		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			gltexture->BindNativeBrightmap(true) : 0;
-		EAndroidNativeBlendMode blendMode =
-			(color2 == NULL && alpha < 0.999f) ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE;
-		if (RenderStyle == STYLE_Add) blendMode = ANDROID_BLEND_ADD;
-		else if (RenderStyle == STYLE_Subtract) blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+		EGLESBlendMode blendMode =
+			(color2 == NULL && alpha < 0.999f) ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
+		if (RenderStyle == STYLE_Add) blendMode = GLES_BLEND_ADD;
+		else if (RenderStyle == STYLE_Subtract) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
 		const float glowDistances[8] =
 		{
 			zceil[0] - zbottom[0], zbottom[0] - zfloor[0],
@@ -305,7 +306,7 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			zceil[1] - ztop[1], ztop[1] - zfloor[1],
 			zceil[1] - zbottom[1], zbottom[1] - zfloor[1]
 		};
-		gl_AndroidNativeGLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
+		gl_GLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
 			texture, gltexture != NULL && gltexture->isMasked(), nativeFog, true, fogColor, fogDensity,
 			blendMode, 0, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
@@ -315,6 +316,7 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 		return;
 	}
 #endif
+#if !defined(__ANDROID__)
 
 	if (glowing) gl_RenderState.SetGlowParams(topglowcolor, bottomglowcolor);
 
@@ -359,6 +361,7 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 
 	vertexcount+=4;
 
+#endif
 }
 
 //==========================================================================
@@ -369,6 +372,12 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 
 void GLWall::RenderFogBoundary()
 {
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
 	// [BB/EP] Take care of gl_fogmode and ZADF_FORCE_VIDEO_DEFAULTS.
 	OVERRIDE_FOGMODE_IF_NECESSARY
 
@@ -421,6 +430,7 @@ void GLWall::RenderFogBoundary()
 			gl_RenderState.EnableTexture(true);
 		}
 	}
+#endif
 }
 
 
@@ -431,6 +441,12 @@ void GLWall::RenderFogBoundary()
 //==========================================================================
 void GLWall::RenderMirrorSurface()
 {
+#if defined(__ANDROID__)
+	return;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
+#if !defined(__ANDROID__)
 	if (GLRenderer->mirrortexture == NULL) return;
 
 	// For the sphere map effect we need a normal of the mirror surface,
@@ -475,6 +491,7 @@ void GLWall::RenderMirrorSurface()
 		gl_RenderState.SetTextureMode(TM_MODULATE);
 		gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	}
+#endif
 }
 
 
@@ -545,8 +562,8 @@ void GLWall::Draw(int pass)
 	}
 #endif
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive() && pass != GLPASS_ALL)
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive() && pass != GLPASS_ALL)
 		nativeLightCounts[0] = nativeLightCounts[1] = nativeLightCounts[2] = 0;
 #endif
 

@@ -52,8 +52,8 @@ private:
 	TArray<TranslatedTexture> glTexID_Translated;
 	unsigned int glDepthID;	// only used by camera textures
 
-#ifdef __ANDROID__
-	struct AndroidTextureSource
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	struct FGLESTextureSource
 	{
 		int cm;
 		int translation;
@@ -62,14 +62,14 @@ private:
 		bool wrap;
 		unsigned char *pixels;
 	};
-	TArray<AndroidTextureSource> android_sources;
-	static TArray<FHardwareTexture *> android_textures;
-	void RememberAndroidSource(const unsigned char *buffer, int w, int h, bool wrap, int cm, int translation);
-	bool RestoreAndroidSource(int cm, int translation, unsigned int &texture, int texunit);
-	void ClearAndroidSources();
-	void AndroidContextLost();
+	TArray<FGLESTextureSource> gles_sources;
+	static TArray<FHardwareTexture *> gles_textures;
+	void RememberGLESSource(const unsigned char *buffer, int w, int h, bool wrap, int cm, int translation);
+	bool RestoreGLESSource(int cm, int translation, unsigned int &texture, int texunit);
+	void ClearGLESSources();
+	void GLESContextLost();
 public:
-	static void AndroidContextLostAll();
+	static void GLESContextLostAll();
 #endif
 
 	void LoadImage(unsigned char * buffer,int w, int h, unsigned int & glTexID,int wrapparam, bool alphatexture, int texunit);

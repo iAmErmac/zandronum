@@ -12,6 +12,13 @@ class player_t;
 struct sector_t;
 class FCanvasTexture;
 
+enum ERendererBackend
+{
+	RENDERER_SOFTWARE = 0,
+	RENDERER_OPENGL = 1,
+	RENDERER_GLES = 2
+};
+
 struct FRenderer
 {
 	FRenderer()

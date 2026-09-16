@@ -75,8 +75,8 @@
 #include "gl/utility/gl_clock.h"
 #include "gl/utility/gl_convert.h"
 #include "gl/utility/gl_templates.h"
-#ifdef __ANDROID__
-	#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	#include "gl/system/gl_gles_renderer.h"
 #endif
 
 //==========================================================================
@@ -231,7 +231,9 @@ void FGLRenderer::SetViewport(GL_IRECT *bounds)
 		glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 	#endif
 
+#if !defined(__ANDROID__)
 	glEnable(GL_MULTISAMPLE);
+#endif
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_STENCIL_TEST);
 	glStencilFunc(GL_ALWAYS,0,~0);	// default stencil
@@ -262,7 +264,7 @@ void FGLRenderer::SetCameraPos(fixed_t viewx, fixed_t viewy, fixed_t viewz, angl
 // sets projection matrix
 //
 //-----------------------------------------------------------------------------
-#ifdef __ANDROID__
+#if !defined(__ANDROID__)
 
 static void setPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar)
 {
@@ -290,17 +292,34 @@ static void setPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdou
 #endif
 void FGLRenderer::SetProjection(float fov, float ratio, float fovratio, float eyeShift) // [BB] Added eyeShift from GZ3Doom.
 {
+#if defined(__ANDROID__)
+	(void)fov;
+	(void)ratio;
+	(void)fovratio;
+	(void)eyeShift;
+	return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		(void)fov;
+		(void)ratio;
+		(void)fovratio;
+		(void)eyeShift;
+		return;
+	}
+#endif
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
 
 	float fovy = 2 * RAD2DEG(atan(tan(DEG2RAD(fov) / 2) / fovratio));
 	// [BB] Added eyeShift from GZ3Doom.
 	if ( eyeShift == 0 )
-#ifdef __ANDROID__
-		setPerspective(fovy, ratio, 5.f, 65536.f);
-#else
-		gluPerspective(fovy, ratio, 5.f, 65536.f);
+#if defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive()) setPerspective(fovy, ratio, 5.f, 65536.f);
+		else
 #endif
+		gluPerspective(fovy, ratio, 5.f, 65536.f);
 	else
 	{
 		const float zNear = 5.0f;
@@ -319,6 +338,7 @@ void FGLRenderer::SetProjection(float fov, float ratio, float fovratio, float ey
 	}
 
 	gl_RenderState.Set2DMode(false);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -329,6 +349,19 @@ void FGLRenderer::SetProjection(float fov, float ratio, float fovratio, float ey
 
 void FGLRenderer::SetViewMatrix(bool mirror, bool planemirror)
 {
+#if defined(__ANDROID__)
+	(void)mirror;
+	(void)planemirror;
+	return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		(void)mirror;
+		(void)planemirror;
+		return;
+	}
+#endif
 	if (gl.shadermodel >= 4)
 	{
 		glActiveTexture(GL_TEXTURE7);
@@ -350,6 +383,7 @@ void FGLRenderer::SetViewMatrix(bool mirror, bool planemirror)
 	glRotatef(GLRenderer->mAngles.Yaw,   0.0f, mult, 0.0f);
 	glTranslatef( GLRenderer->mCameraPos.X * mult, -GLRenderer->mCameraPos.Z*planemult, -GLRenderer->mCameraPos.Y);
 	glScalef(-mult, planemult, 1);
+#endif
 }
 
 
@@ -362,7 +396,12 @@ void FGLRenderer::SetViewMatrix(bool mirror, bool planemirror)
 void FGLRenderer::SetupView(fixed_t viewx, fixed_t viewy, fixed_t viewz, angle_t viewangle, bool mirror, bool planemirror)
 {
 	SetCameraPos(viewx, viewy, viewz, viewangle);
+#if !defined(__ANDROID__)
 	SetViewMatrix(mirror, planemirror);
+#else
+	(void)mirror;
+	(void)planemirror;
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -384,26 +423,26 @@ void FGLRenderer::CreateScene()
 	// clip the scene and fill the drawlists
 	for(unsigned i=0;i<portals.Size(); i++) portals[i]->glportal = NULL;
 	gl_spriteindex=0;
-	#ifdef __ANDROID__
-	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool nativeGLES = gl_GLES_IsActive();
 	if (nativeGLES)
 	{
-		gl_AndroidNativeGLES_ClearFlatTasks();
-		gl_AndroidNativeGLES_SetFlatCollectionDeferred(true);
+		gl_GLES_ClearFlatTasks();
+		gl_GLES_SetFlatCollectionDeferred(true);
 	}
 	#endif
 	Bsp.Clock();
 	gl_RenderBSPNode (nodes + numnodes - 1);
 	Bsp.Unclock();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (nativeGLES)
 	{
 		// Finish the source visibility passes before publishing native flat batches.
 		gl_drawinfo->HandleMissingTextures();
 		gl_drawinfo->HandleHackedSubsectors();
 		gl_drawinfo->ProcessSectorStacks();
-		gl_AndroidNativeGLES_SetFlatCollectionDeferred(false);
-		gl_AndroidNativeGLES_EmitFlatTasks();
+		gl_GLES_SetFlatCollectionDeferred(false);
+		gl_GLES_EmitFlatTasks();
 		gl_drawinfo->DrawUnhandledMissingTextures();
 		ProcessAll.Unclock();
 		return;
@@ -431,6 +470,17 @@ void FGLRenderer::CreateScene()
 
 void FGLRenderer::RenderScene(int recursion)
 {
+#if defined(__ANDROID__)
+	(void)recursion;
+	return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		(void)recursion;
+		return;
+	}
+#endif
 	RenderAll.Clock();
 
 	glDepthMask(true);
@@ -602,7 +652,7 @@ void FGLRenderer::RenderScene(int recursion)
 	// This will always be drawn like GLDL_PLAIN or GLDL_FOG, depending on the fog settings
 
 	// [BB] We may only do this when drawing the final eye.
-#ifndef __ANDROID__
+#if !defined(__ANDROID__)
 	GLint drawBuffer;
 	glGetIntegerv ( GL_DRAW_BUFFER, &drawBuffer );
 	if ( drawBuffer != GL_BACK_LEFT )
@@ -621,6 +671,7 @@ void FGLRenderer::RenderScene(int recursion)
 	glDisable(GL_POLYGON_OFFSET_FILL);
 
 	RenderAll.Unclock();
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -667,8 +718,8 @@ EXTERN_CVAR(Bool, gl_draw_sync)
 
 void FGLRenderer::DrawScene(bool toscreen)
 {
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		const bool nestedPortal = mCurrentPortal != NULL;
 		CreateScene();
@@ -789,14 +840,21 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 		// black multiplicative blends are ignored
 		if (extra_red || extra_green || extra_blue)
 		{
-		#ifdef __ANDROID__
-			if (gl_AndroidNativeGLES_IsActive())
+		#if defined(__ANDROID__)
+			if (gl_GLES_IsActive())
 			{
 				const float color[3] = { extra_red, extra_green, extra_blue };
-				gl_AndroidNativeGLES_AddScreenQuad(color, 1.0f, ANDROID_BLEND_MULTIPLY);
+				gl_GLES_AddScreenQuad(color, 1.0f, GLES_BLEND_MULTIPLY);
+			}
+		#elif defined(ZANDRONUM_GLES_BACKEND)
+			if (gl_GLES_IsActive())
+			{
+				const float color[3] = { extra_red, extra_green, extra_blue };
+				gl_GLES_AddScreenQuad(color, 1.0f, GLES_BLEND_MULTIPLY);
 			}
 			else
 		#endif
+#if !defined(__ANDROID__)
 			{
 			gl_RenderState.EnableAlphaTest(false);
 			gl_RenderState.EnableTexture(false);
@@ -810,6 +868,7 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 			glVertex2f( (float)SCREENWIDTH, (float)SCREENHEIGHT);
 			glEnd();
 			}
+#endif
 		}
 	}
 	else if (blendv.a)
@@ -836,14 +895,21 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 
 	if (blend[3]>0.0f)
 	{
-	#ifdef __ANDROID__
-		if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__)
+		if (gl_GLES_IsActive())
 		{
 			const float color[3] = { blend[0], blend[1], blend[2] };
-			gl_AndroidNativeGLES_AddScreenQuad(color, blend[3], ANDROID_BLEND_ALPHA);
+			gl_GLES_AddScreenQuad(color, blend[3], GLES_BLEND_ALPHA);
+		}
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+		{
+			const float color[3] = { blend[0], blend[1], blend[2] };
+			gl_GLES_AddScreenQuad(color, blend[3], GLES_BLEND_ALPHA);
 		}
 		else
 	#endif
+#if !defined(__ANDROID__)
 		{
 		gl_RenderState.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		gl_RenderState.EnableAlphaTest(false);
@@ -857,6 +923,7 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 		glVertex2f( (float)SCREENWIDTH, (float)SCREENHEIGHT);
 		glEnd();
 		}
+#endif
 	}
 }
 
@@ -870,6 +937,17 @@ void FGLRenderer::DrawBlend(sector_t * viewsector)
 
 void FGLRenderer::EndDrawScene(sector_t * viewsector)
 {
+#if defined(__ANDROID__)
+	(void)viewsector;
+	return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		(void)viewsector;
+		return;
+	}
+#endif
 	// [BB] HUD models need to be rendered here. Make sure that
 	// DrawPlayerSprites is only called once. Either to draw
 	// HUD models or to draw the weapon sprites.
@@ -903,6 +981,7 @@ void FGLRenderer::EndDrawScene(sector_t * viewsector)
 	gl_RenderState.EnableTexture(true);
 	gl_RenderState.EnableAlphaTest(true);
 	glDisable(GL_SCISSOR_TEST);
+#endif
 }
 
 
@@ -982,7 +1061,7 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 	// [BB] Check if stereo rendering is supported.
 	GLboolean supportsStereo = false;
 	GLboolean supportsBuffered = false;
-#ifndef __ANDROID__
+#if !defined(__ANDROID__)
 	glGetBooleanv(GL_STEREO, &supportsStereo);
 	glGetBooleanv(GL_DOUBLEBUFFER, &supportsBuffered);
 #endif
@@ -1015,8 +1094,8 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 
 	retval = viewsector;
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if ((mainview && toscreen) || (!mainview && !toscreen))
 		{
@@ -1028,7 +1107,7 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 			clipper.SafeAddClipRangeRealAngles(viewangle + frustumAngle, viewangle - frustumAngle);
 			const float yaw = float((viewangle >> ANGLETOFINESHIFT) * 360.0 / FINEANGLES);
 			const float pitch = float(viewpitch) / float(ANGLE_1);
-			gl_AndroidNativeGLES_BeginScene(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), FIXED2FLOAT(viewz),
+			gl_GLES_BeginScene(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), FIXED2FLOAT(viewz),
 				yaw, pitch, mAngles.Roll, fov, ratio, fovratio);
 			ProcessScene(toscreen);
 		}
@@ -1038,6 +1117,7 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 	}
 #endif
 
+#if !defined(__ANDROID__)
 	SetViewport(bounds);
 	mCurrentFoV = fov;
 	// [BB] Added stereo rendering based on one of the initial GZ3Doom revisions.
@@ -1084,6 +1164,9 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 	gl_frameCount++;	// This counter must be increased right before the interpolations are restored.
 	interpolator.RestoreInterpolations ();
 	return retval;
+#else
+	return retval;
+#endif
 }
 
 
@@ -1093,15 +1176,15 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 //
 //-----------------------------------------------------------------------------
 
-#ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
+#if defined(_WIN32) && !defined(__ANDROID__) // [BB] Detect some kinds of glBegin hooking.
 extern char myGlBeginCharArray[4];
 int crashoutTic = 0;
 #endif
 
 void FGLRenderer::RenderView (player_t* player)
 {
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		if (player == NULL || player->camera == NULL) return;
 		OpenGLFrameBuffer* GLTarget = static_cast<OpenGLFrameBuffer*>(screen);
@@ -1132,11 +1215,11 @@ void FGLRenderer::RenderView (player_t* player)
 		DrawPlayerSprites(viewsector, false);
 		DrawTargeterSprites();
 		DrawBlend(viewsector);
-		gl_AndroidNativeGLES_EndScene();
+		gl_GLES_EndScene();
 		return;
 	}
 #endif
-#ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
+#if defined(_WIN32) && !defined(__ANDROID__) // [BB] Detect some kinds of glBegin hooking.
 	// [BB] Continuously make this check, otherwise a hack could bypass the check by activating
 	// and deactivating itself at the right time interval.
 	{
@@ -1237,10 +1320,10 @@ void FGLRenderer::RenderView (player_t* player)
 //===========================================================================
 void FGLRenderer::WriteSavePic (player_t *player, FILE *file, int width, int height)
 {
-	#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		if (!gl_AndroidNativeGLES_WriteSavePic(file, width, height))
+		if (!gl_GLES_WriteSavePic(file, width, height))
 			M_CreateDummyPNG(file);
 		return;
 	}
@@ -1434,7 +1517,7 @@ void FGLInterface::Init()
 // Camera texture rendering
 //
 //===========================================================================
-#ifdef __ANDROID__ // This is faster for gles2 in KDIZ
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND) // Native GLES uses framebuffer targets for camera textures.
 CVAR(Bool, gl_usefb, true , CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 #else
 CVAR(Bool, gl_usefb, false , CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
@@ -1450,16 +1533,25 @@ void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, in
 	int width = gltex->TextureWidth(GLUSE_TEXTURE);
 	int height = gltex->TextureHeight(GLUSE_TEXTURE);
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		const unsigned int nativeTexture = gltex->BindNative(CM_DEFAULT, 0, false);
+		bool copied = false;
 		if (nativeTexture != 0 && width > 0 && height > 0)
 		{
 			GLRenderer->RenderViewpoint(Viewpoint, NULL, FOV, (float)width / height,
 				(float)width / height, false, false);
-			if (gl_AndroidNativeGLES_EndSceneToTexture(nativeTexture, width, height))
-				gl_AndroidNativeGLES_MarkMaterialFramebufferContent(gltex, CM_DEFAULT, 0, false, true);
+			copied = gl_GLES_EndSceneToTexture(nativeTexture, width, height);
+			if (copied)
+				gl_GLES_MarkMaterialFramebufferContent(gltex, CM_DEFAULT, 0, false, true);
+		}
+		static bool cameraTargetLogWritten = false;
+		if (developer && !cameraTargetLogWritten)
+		{
+			DPrintf("Zandronum GLES camera texture target=%u size=%dx%d copied=%d.\n",
+				nativeTexture, width, height, copied ? 1 : 0);
+			cameraTargetLogWritten = true;
 		}
 		tex->SetUpdated();
 		return;

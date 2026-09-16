@@ -76,6 +76,7 @@ CUSTOM_CVAR (Int, vid_renderer, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINI
 {
 	// 0: Software renderer
 	// 1: OpenGL renderer
+	// 2: OpenGL ES renderer (host support is supplied by the mobile backend)
 
 	if (self != currentrenderer)
 	{
@@ -87,6 +88,15 @@ CUSTOM_CVAR (Int, vid_renderer, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINI
 		case 1:
 			Printf("Switching to OpenGL renderer...\n");
 			break;
+		case 2:
+		#if defined(__ANDROID__)
+			Printf("Switching to OpenGL ES renderer...\n");
+			break;
+		#else
+			Printf("OpenGL ES renderer is unavailable on this host.\n");
+			self = RENDERER_SOFTWARE;
+			break;
+		#endif
 		default:
 			Printf("Unknown renderer (%d).  Falling back to software renderer...\n", (int) vid_renderer);
 			self = 0; // make sure to actually switch to the software renderer
@@ -126,7 +136,7 @@ void I_InitGraphics ()
 
 #ifndef NO_GL
 	//currentrenderer = vid_renderer;
-	if (currentrenderer==1) Video = new SDLGLVideo(0);
+	if (currentrenderer==RENDERER_OPENGL) Video = new SDLGLVideo(0);
 	else Video = new SDLVideo (0);
 #else
 	Video = new SDLVideo (0);
@@ -150,7 +160,8 @@ void I_CreateRenderer()
 	if (Renderer == NULL)
 	{
 #ifndef NO_GL
-		if (currentrenderer==1) Renderer = gl_CreateInterface();
+		if (currentrenderer==RENDERER_OPENGL || currentrenderer==RENDERER_GLES)
+			Renderer = gl_CreateInterface();
 		else Renderer = new FSoftwareRenderer;
 #else
 		Renderer = new FSoftwareRenderer;

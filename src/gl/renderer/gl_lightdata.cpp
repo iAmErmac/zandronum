@@ -42,8 +42,8 @@
 #include "gl/system/gl_system.h"
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 #include "gl/data/gl_data.h"
 #include "gl/renderer/gl_colormap.h"
@@ -86,16 +86,16 @@ CVAR(Bool, gl_brightfog, false, CVAR_ARCHIVE);
 
 bool gl_BrightmapsActive()
 {
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) return gl_brightmap_shader;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return gl_brightmap_shader;
 #endif
 	return gl.shadermodel == 4 || (gl.shadermodel == 3 && gl_brightmap_shader);
 }
 
 bool gl_GlowActive()
 {
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive()) return gl_glow_shader;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return gl_glow_shader;
 #endif
 	return gl.shadermodel == 4 || (gl.shadermodel == 3 && gl_glow_shader);
 }
@@ -365,6 +365,18 @@ void gl_SetColor(int light, int rellight, const FColormap * cm, float alpha, Pal
 
 	gl_GetLightColor(light, rellight, cm, &r, &g, &b, weapon);
 
+#if defined(__ANDROID__)
+	(void)alpha;
+	(void)ThingColor;
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		(void)alpha;
+		(void)ThingColor;
+		return;
+	}
+#endif
+#if !defined(__ANDROID__)
 	if (glset.lightmode != 8)
 	{
 		glColor4f(r * ThingColor.r/255.0f, g * ThingColor.g/255.0f, b * ThingColor.b/255.0f, alpha);
@@ -383,6 +395,7 @@ void gl_SetColor(int light, int rellight, const FColormap * cm, float alpha, Pal
 			glVertexAttrib1f(VATTR_LIGHTLEVEL, lightlevel); 
 		}
 	}
+#endif
 }
 
 //==========================================================================

@@ -49,8 +49,8 @@
 #include "r_sky.h"
 
 #include "gl/system/gl_cvars.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/data/gl_data.h"
@@ -141,8 +141,8 @@ void GLWall::PutWall(bool translucent)
 
 	CheckGlowing();
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
 		// Special portal surfaces need their own target; ordinary walls can be
@@ -158,11 +158,11 @@ void GLWall::PutWall(bool translucent)
 					glseg.x2, ztop[1], glseg.y2,
 					glseg.x2, zbottom[1], glseg.y2
 				};
-				gl_AndroidNativeGLES_AddSkyMask(positions);
-				gl_AndroidNativeGLES_SetSky(sky->texture[0], sky->x_offset[0], sky->y_offset,
+				gl_GLES_AddSkyMask(positions);
+				gl_GLES_SetSky(sky->texture[0], sky->x_offset[0], sky->y_offset,
 					sky->mirrored, sky->sky2, sky->fadecolor);
 				if (sky->doublesky && sky->texture[1] != NULL)
-					gl_AndroidNativeGLES_SetSkyLayer(sky->texture[1], sky->x_offset[1], sky->y_offset, false);
+					gl_GLES_SetSkyLayer(sky->texture[1], sky->x_offset[1], sky->y_offset, false);
 			}
 			// Sky walls are portal geometry even when their material is unavailable.
 			return;
@@ -806,7 +806,6 @@ void GLWall::DoTexture(int _type,seg_t * seg, int peg,
 	FTexCoordInfo tci;
 
 	gltexture->GetTexCoordInfo(&tci, seg->sidedef->GetTextureXScale(texpos), seg->sidedef->GetTextureYScale(texpos));
-
 	type = (seg->linedef->special == Line_Mirror && _type == RENDERWALL_M1S && gl_mirrors) ? RENDERWALL_MIRROR : _type;
 
 	float floatceilingref = FIXED2FLOAT(ceilingrefheight + tci.RowOffset(seg->sidedef->GetTextureYOffset(texpos)));
@@ -1516,7 +1515,6 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 	// note: we always have a valid sidedef and linedef reference when getting here.
 
 	this->seg = seg;
-
 	if ((seg->sidedef->Flags & WALLF_POLYOBJ) && seg->backsector)
 	{
 		// Textures on 2-sided polyobjects are aligned to the actual seg's sectors
@@ -1644,7 +1642,8 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 		SkyNormal(frontsector,v1,v2);
 		
 		// normal texture
-		gltexture=FMaterial::ValidateTexture(seg->sidedef->GetTexture(side_t::mid), true);
+		const FTextureID mirrorTexture = seg->sidedef->GetTexture(side_t::mid);
+		gltexture=FMaterial::ValidateTexture(mirrorTexture, true);
 		if (gltexture) 
 		{
 			DoTexture(RENDERWALL_M1S,seg,(seg->linedef->flags & ML_DONTPEGBOTTOM)>0,

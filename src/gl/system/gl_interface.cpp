@@ -45,8 +45,9 @@
 #include "v_text.h"
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 #ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
@@ -142,11 +143,21 @@ static bool CheckExtension(const char *ext)
 static void InitContext()
 {
 	gl.flags=0;
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+#endif
 	glBlendEquation = glBlendEquationDummy;
+#endif
 
 #ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
+#if !defined(__ANDROID__)
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (!gl_GLES_IsActive())
+#endif
 	for ( int i = 0; i < 4; ++i )
 		myGlBeginCharArray[i] = reinterpret_cast<char *>(glBegin)[i];
+#endif
 #endif
 }
 //==========================================================================
@@ -159,21 +170,37 @@ void gl_LoadExtensions()
 {
 	InitContext();
 
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_HasContext())
+	{
+		if (!gl_GLES_CollectCapabilities())
+			I_FatalError("Unable to query the GLES-compatible renderer capabilities.");
+		const FGLESNativeCapabilities &caps = gl_GLES_GetCapabilities();
+		gl.shadermodel = 0;
+		gl.flags = 0;
+		gl.vendorstring = const_cast<char *>(caps.vendor);
+		gl.max_texturesize = caps.maxTextureSize;
+		gl.maxuniforms = caps.maxFragmentUniformVectors;
+		return;
+	}
 #ifdef __ANDROID__
-	// Android uses the native GLES 3.2 entry points. The generated desktop
-	// loader remains available to other targets but is not selected here.
-	if (!gl_AndroidNativeGLES_CollectCapabilities())
-		I_FatalError("Unable to query the Android GLES capabilities.");
-	const FAndroidGLESInfo &caps = gl_AndroidNativeGLES_GetCapabilities();
+	if (!gl_GLES_CollectCapabilities())
+		I_FatalError("Unable to query the GLES-compatible renderer capabilities.");
+	const FGLESNativeCapabilities &caps = gl_GLES_GetCapabilities();
 	gl.shadermodel = 0;
 	gl.flags = 0;
 	gl.vendorstring = const_cast<char *>(caps.vendor);
 	gl.max_texturesize = caps.maxTextureSize;
 	gl.maxuniforms = caps.maxFragmentUniformVectors;
 	return;
-#else
+#endif
+#endif
 
+#if !defined(__ANDROID__)
+
+#if !defined(ZANDRONUM_GLES_BACKEND)
 	ogl_LoadFunctions();
+#endif
 
 	CollectExtensions();
 	const char *version = (const char*)glGetString(GL_VERSION);
@@ -362,7 +389,7 @@ void gl_LoadExtensions()
 		glTexBufferARB = (PFNGLTEXBUFFERARBPROC)myGetProcAddress("glTexBufferARB");
 		gl.flags|=RFL_TEXTUREBUFFER;
 	}
-#endif
+	#endif
 
 
 
@@ -380,13 +407,14 @@ void gl_LoadExtensions()
 
 void gl_PrintStartupLog()
 {
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-		gl_AndroidNativeGLES_PrintStartupLog();
+		gl_GLES_PrintStartupLog();
 		return;
 	}
 #endif
+#if !defined(__ANDROID__)
 	Printf ("GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	Printf ("GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 	Printf ("GL_VERSION: %s\n", glGetString(GL_VERSION));
@@ -408,6 +436,7 @@ void gl_PrintStartupLog()
 	Printf ("Max. combined uniforms: %d\n", v);
 	glGetIntegerv(GL_MAX_COMBINED_UNIFORM_BLOCKS, &v);
 	Printf ("Max. combined uniform blocks: %d\n", v);
+#endif
 }
 
 //==========================================================================
@@ -438,6 +467,17 @@ static void APIENTRY glBlendEquationDummy (GLenum mode)
 
 void gl_SetTextureMode(int type)
 {
+#if defined(__ANDROID__)
+	(void)type;
+	return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		(void)type;
+		return;
+	}
+#endif
 	static float white[] = {1.f,1.f,1.f,1.f};
 
 	if (type == TM_MASK)
@@ -501,6 +541,7 @@ void gl_SetTextureMode(int type)
 	{
 		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 	}
+#endif
 }
 
 //} // extern "C"

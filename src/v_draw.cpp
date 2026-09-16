@@ -65,6 +65,10 @@
 #include "chat.h"
 #include "v_font.h"
 
+EXTERN_CVAR (Int, con_virtualwidth)
+EXTERN_CVAR (Int, con_virtualheight)
+extern bool g_bScale;
+
 // [RH] Stretch values to make a 320x200 image best fit the screen
 // without using fractional steppings
 int CleanXfac, CleanYfac;
@@ -496,6 +500,19 @@ bool DCanvas::ParseDrawTextureTags (FTexture *img, double x, double y, DWORD tag
 						parms->y = Height + parms->y;
 					parms->destwidth = parms->texwidth * CleanXfac;
 					parms->destheight = parms->texheight * CleanYfac;
+				}
+				else if (g_bScale)
+				{
+					// Let the classic fullscreen HUD use the text-scaling virtual screen.
+					parms->virtWidth = con_virtualwidth;
+					parms->virtHeight = con_virtualheight;
+					parms->keepratio = con_scaletext_usescreenratio;
+					if (intval == HUD_HorizCenter)
+						parms->x += parms->virtWidth * 0.5;
+					else if (xright)
+						parms->x += parms->virtWidth;
+					if (ybot)
+						parms->y += parms->virtHeight;
 				}
 				else
 				{

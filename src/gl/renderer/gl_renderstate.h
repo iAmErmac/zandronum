@@ -6,6 +6,10 @@
 
 EXTERN_CVAR(Bool, gl_direct_state_change)
 
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+bool gl_GLES_IsActive();
+#endif
+
 struct FStateAttr
 {
 	static int ChangeCounter;
@@ -234,8 +238,21 @@ public:
 		}
 	}
 
-	void AlphaFunc(int func, float thresh)
+void AlphaFunc(int func, float thresh)
 	{
+#if defined(__ANDROID__)
+		mAlphaFunc = func;
+		mAlphaThreshold = thresh;
+		return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+		{
+			mAlphaFunc = func;
+			mAlphaThreshold = thresh;
+			return;
+		}
+#endif
 		if (!gl_direct_state_change)
 		{
 			mAlphaFunc = func;
@@ -245,10 +262,22 @@ public:
 		{
 			::glAlphaFunc(func, thresh);
 		}
+#endif
 	}
 
-	void EnableAlphaTest(bool on)
+void EnableAlphaTest(bool on)
 	{
+#if defined(__ANDROID__)
+		mAlphaTest = on;
+		return;
+#else
+#if defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+		{
+			mAlphaTest = on;
+			return;
+		}
+#endif
 		if (!gl_direct_state_change)
 		{
 			mAlphaTest = on;
@@ -258,6 +287,7 @@ public:
 			if (on) glEnable(GL_ALPHA_TEST);
 			else glDisable(GL_ALPHA_TEST);
 		}
+#endif
 	}
 
 	void BlendEquation(int eq)

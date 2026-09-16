@@ -65,6 +65,9 @@
 #include "network.h"
 #include "gamemode.h"
 #include "st_hud.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#endif
 
 #define XHAIRSHRINKSIZE		(FRACUNIT/18)
 #define XHAIRPICKUPSIZE		(FRACUNIT*2+XHAIRSHRINKSIZE)
@@ -611,8 +614,9 @@ void DBaseStatusBar::DrawFadedImage (FTexture *img,
 
 void DBaseStatusBar::DrawPartialImage (FTexture *img, int wx, int ww) const
 {
-#ifdef __ANDROID__ // This does not work and breaks the status bar with NPOT = false
-	return;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+		return;
 #endif
 	if (img != NULL)
 	{

@@ -16,6 +16,9 @@
 
 #include "gl/renderer/gl_renderer.h"
 #include "gl/system/gl_framebuffer.h"
+#include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_targets.h"
 #include "gl/shaders/gl_shader.h"
 #include "gl/utility/gl_templates.h"
 
@@ -40,7 +43,13 @@ EXTERN_CVAR(Int, vid_refreshrate)
 //
 //==========================================================================
 
-Win32GLVideo::Win32GLVideo(int parm) : m_Modes(NULL), m_IsFullscreen(false)
+Win32GLVideo::Win32GLVideo(int parm) : m_Modes(NULL), m_IsFullscreen(false),
+	#if defined(ZANDRONUM_GLES_BACKEND)
+	m_GLES(parm != 0),
+	#else
+	m_GLES(false),
+	#endif
+	m_GLESContextReady(false)
 {
 	#ifdef _WIN32
 		 if (CPU.bRDTSC) gl_CalculateCPUSpeed();
@@ -371,6 +380,11 @@ DFrameBuffer *Win32GLVideo::CreateFrameBuffer(int width, int height, bool fs, DF
 	}
 
 	fb = new OpenGLFrameBuffer(m_hMonitor, m_DisplayWidth, m_DisplayHeight, m_DisplayBits, m_DisplayHz, fs);
+	if (m_GLES && !m_GLESContextReady)
+	{
+		delete fb;
+		return NULL;
+	}
 
 	return fb;
 }
@@ -386,7 +400,7 @@ bool Win32GLVideo::SetResolution (int width, int height, int bits)
 	if (GLRenderer != NULL) GLRenderer->FlushTextures();
 	I_ShutdownGraphics();
 	
-	Video = new Win32GLVideo(0);
+	Video = new Win32GLVideo(currentrenderer == RENDERER_GLES ? 1 : 0);
 	if (Video == NULL) I_FatalError ("Failed to initialize display");
 	
 	bits=32;
@@ -726,6 +740,58 @@ bool Win32GLVideo::SetupPixelFormat(bool allowsoftware, int multisample)
 	return true;
 }
 
+static void *ResolveGLESProc(const char *name)
+{
+	PROC proc = wglGetProcAddress(name);
+	if (proc != NULL && proc != reinterpret_cast<PROC>(1) && proc != reinterpret_cast<PROC>(2) &&
+		proc != reinterpret_cast<PROC>(3) && proc != reinterpret_cast<PROC>(-1))
+		return reinterpret_cast<void *>(proc);
+	HMODULE module = GetModuleHandleA("opengl32.dll");
+	return module != NULL ? reinterpret_cast<void *>(GetProcAddress(module, name)) : NULL;
+}
+
+static bool PresentGLESFrame(void *userData)
+{
+	return userData != NULL && ::SwapBuffers(static_cast<HDC>(userData)) != FALSE;
+}
+
+static void PrepareGLESFrame(void *)
+{
+	RECT client = {};
+	FGLESTargetDescriptor target = {};
+	if (Window == NULL || !GetClientRect(Window, &client) ||
+		client.right <= client.left || client.bottom <= client.top)
+	{
+		gl_GLES_InvalidateHostTarget();
+		return;
+	}
+	target.renderWidth = client.right - client.left;
+	target.renderHeight = client.bottom - client.top;
+	target.sampleCount = 1;
+	target.hostOwnsPresentation = true;
+	const FGLESProcTable &procedures = gl_GLES_GetProcTable();
+	if (procedures.GetIntegerv != NULL && procedures.BindFramebuffer != NULL)
+	{
+		GLint previousDrawFramebuffer = 0;
+		GLint sampleBuffers = 0;
+		GLint samples = 0;
+		procedures.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+		procedures.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+		procedures.GetIntegerv(GL_SAMPLE_BUFFERS, &sampleBuffers);
+		procedures.GetIntegerv(GL_SAMPLES, &samples);
+		procedures.BindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
+		if (sampleBuffers > 0 && samples > 0)
+			target.sampleCount = samples;
+	}
+	if (!gl_GLES_SetHostTarget(target))
+		gl_GLES_Report("target", "WGL host could not supply a valid window target");
+}
+
+static void LogGLESMessage(void *, const char *message)
+{
+	if (message != NULL) Printf("%s\n", message);
+}
+
 //==========================================================================
 //
 // 
@@ -750,7 +816,7 @@ bool Win32GLVideo::InitHardware (HWND Window, bool allowsoftware, int multisampl
 			WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
 			WGL_CONTEXT_MINOR_VERSION_ARB, 3,
 			WGL_CONTEXT_FLAGS_ARB, gl_debug? WGL_CONTEXT_DEBUG_BIT_ARB : 0,
-			WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+			WGL_CONTEXT_PROFILE_MASK_ARB, m_GLES ? WGL_CONTEXT_CORE_PROFILE_BIT_ARB : WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
 			0
 		};
 
@@ -768,6 +834,33 @@ bool Win32GLVideo::InitHardware (HWND Window, bool allowsoftware, int multisampl
 	}
 
 	wglMakeCurrent(m_hDC, m_hRC);
+	#if defined(ZANDRONUM_GLES_BACKEND)
+	if (m_GLES)
+	{
+		FGLESContextInfo context = {};
+		if (!gl_GLES_LoadContext(&ResolveGLESProc, 3, 3, false, &context))
+		{
+			Printf("R_OPENGL: OpenGL 3.3 core context is unavailable for the GLES renderer.\n");
+			wglMakeCurrent(NULL, NULL);
+			wglDeleteContext(m_hRC);
+			m_hRC = NULL;
+			return false;
+		}
+		FGLESHostCallbacks callbacks = {};
+		callbacks.userData = m_hDC;
+		callbacks.prepareFrame = &PrepareGLESFrame;
+		callbacks.log = &LogGLESMessage;
+		callbacks.present = &PresentGLESFrame;
+		gl_GLES_RegisterHostCallbacks(&callbacks);
+		m_GLESContextReady = true;
+		Printf("GLES WGL context: OpenGL %d.%d, GLSL %s, renderer %s.\n",
+			context.majorVersion, context.minorVersion,
+			context.shadingLanguageVersion != NULL ? context.shadingLanguageVersion : "unknown",
+			context.renderer != NULL ? context.renderer : "unknown");
+	}
+	#else
+	(void)m_GLES;
+	#endif
 	return true;
 }
 
@@ -779,6 +872,13 @@ bool Win32GLVideo::InitHardware (HWND Window, bool allowsoftware, int multisampl
 
 void Win32GLVideo::Shutdown()
 {
+	#if defined(ZANDRONUM_GLES_BACKEND)
+	if (m_GLES)
+	{
+		gl_GLES_OnContextLost();
+		m_GLESContextReady = false;
+	}
+	#endif
 	if (m_hRC)
 	{
 		wglMakeCurrent(0, 0);
@@ -1060,7 +1160,15 @@ void Win32GLFrameBuffer::SetVSync (bool vsync)
 
 void Win32GLFrameBuffer::SwapBuffers()
 {
-	::SwapBuffers(static_cast<Win32GLVideo *>(Video)->m_hDC);
+	Win32GLVideo *video = static_cast<Win32GLVideo *>(Video);
+	#if defined(ZANDRONUM_GLES_BACKEND)
+	if (video->IsGLES())
+	{
+		gl_GLES_PresentFrame();
+		return;
+	}
+	#endif
+	::SwapBuffers(video->m_hDC);
 }
 
 //==========================================================================
@@ -1085,3 +1193,10 @@ IVideo *gl_CreateVideo()
 {
 	return new Win32GLVideo(0);
 }
+
+#if defined(ZANDRONUM_GLES_BACKEND)
+IVideo *gl_CreateGLESVideo()
+{
+	return new Win32GLVideo(1);
+}
+#endif

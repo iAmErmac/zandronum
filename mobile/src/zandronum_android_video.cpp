@@ -15,8 +15,15 @@ AndroidGLVideo::AndroidGLVideo(int)
 {
 }
 
-void AndroidGLVideo::SetWindowedScale(float)
+void AndroidGLVideo::SetWindowedScale(float scale)
 {
+	if (scale <= 1.0f) return;
+	static bool reported = false;
+	if (!reported)
+	{
+		reported = true;
+		Printf("Android GLES uses the host surface directly; window scaling is unsupported.\n");
+	}
 }
 
 DFrameBuffer *AndroidGLVideo::CreateFrameBuffer(int width, int height, bool, DFrameBuffer *old)
@@ -61,30 +68,25 @@ bool AndroidGLVideo::SetResolution(int width, int height, int)
 }
 
 AndroidGLFB::AndroidGLFB(void *, int width, int height, int, int, bool)
-	: DFrameBuffer(width, height), LockDepth(0), m_supportsGamma(false)
+	: DFrameBuffer(width, height), m_supportsGamma(false)
 {
 }
 
 bool AndroidGLFB::Lock(bool)
 {
-	++LockDepth;
+	// The shared framebuffer API requires this hook, but native GLES has no CPU surface.
 	return false;
-}
-
-bool AndroidGLFB::Lock()
-{
-	return Lock(true);
 }
 
 void AndroidGLFB::Unlock()
 {
-	if (LockDepth > 0)
-		--LockDepth;
+	// GLES draws directly to the active target; there is no CPU surface to unlock.
 }
 
 bool AndroidGLFB::IsLocked()
 {
-	return LockDepth != 0;
+	// Rendering stays in the active GLES target for the entire frame.
+	return false;
 }
 
 bool AndroidGLFB::IsValid()
@@ -116,10 +118,6 @@ void AndroidGLFB::SetGammaTable(WORD *)
 		reported = true;
 		Printf("Android hardware gamma tables are unsupported; display correction stays in the GLES present pass.\n");
 	}
-}
-
-void AndroidGLFB::InitializeState()
-{
 }
 
 #endif

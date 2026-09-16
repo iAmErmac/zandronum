@@ -22,6 +22,7 @@ struct FGLESTargetDescriptor
 bool gl_GLES_CreateRenderTarget(FGLESTargetDescriptor *target, int width, int height,
 	int requestedSamples);
 void gl_GLES_DestroyRenderTarget(FGLESTargetDescriptor *target);
+void gl_GLES_InvalidateRenderTarget(FGLESTargetDescriptor *target);
 bool gl_GLES_ResolveRenderTarget(const FGLESTargetDescriptor *target);
 void gl_GLES_BindRenderTarget(const FGLESTargetDescriptor *target);
 

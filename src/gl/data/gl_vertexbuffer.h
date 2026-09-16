@@ -35,13 +35,13 @@ struct FFlatVertex	// exactly 32 bytes large
 class FFlatVertexBuffer : public FVertexBuffer
 {
 	FFlatVertex *map;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	unsigned int vao_id;
 	unsigned int ebo_id;
-	bool android_data_uploaded;
-	static TArray<FFlatVertexBuffer *> android_buffers;
-	bool RestoreAndroidObjects();
-	void AndroidContextLost();
+	bool gles_data_uploaded;
+	static TArray<FFlatVertexBuffer *> gles_buffers;
+	bool RestoreGLESObjects();
+	void GLESContextLost();
 #endif
 
 	void MapVBO();
@@ -65,8 +65,8 @@ public:
 	void CheckUpdate(sector_t *sector);
 	void UnmapVBO();
 
-#ifdef __ANDROID__
-	static void AndroidContextLostAll();
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	static void GLESContextLostAll();
 #endif
 
 };

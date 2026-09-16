@@ -1,6 +1,7 @@
 #include "gl/system/gl_gles_shader.h"
 
 #include <stdio.h>
+#include <string>
 #include <string.h>
 
 #include "gl/system/gl_gles_context.h"
@@ -39,6 +40,26 @@ namespace
 		gles.GetProgramInfoLog(program, sizeof(driverLog) - 1, &length, driverLog);
 		CopyLog(log, logSize, label, driverLog);
 	}
+
+	const char *PrepareShaderSource(const char *source, std::string &portableSource)
+	{
+		const FGLESContextInfo &context = gl_GLES_GetContextInfo();
+		static const char esVersion[] = "#version 320 es";
+		static const char desktopVersion[] = "#version 330 core";
+		static const char precisionQualifier[] = "precision highp float;\n";
+		if (source == nullptr || context.isGLES || strncmp(source, esVersion, sizeof(esVersion) - 1) != 0)
+			return source;
+
+		portableSource = source;
+		portableSource.replace(0, sizeof(esVersion) - 1, desktopVersion);
+		for (size_t precision = portableSource.find(precisionQualifier);
+			precision != std::string::npos;
+			precision = portableSource.find(precisionQualifier, precision))
+		{
+			portableSource.erase(precision, sizeof(precisionQualifier) - 1);
+		}
+		return portableSource.c_str();
+	}
 }
 
 GLuint gl_GLES_CompileShader(GLenum type, const char *source, const char *label,
@@ -51,13 +72,15 @@ GLuint gl_GLES_CompileShader(GLenum type, const char *source, const char *label,
 		return 0;
 	}
 	const FGLESProcTable &gles = gl_GLES_GetProcTable();
+	std::string portableSource;
+	const char *preparedSource = PrepareShaderSource(source, portableSource);
 	GLuint shader = gles.CreateShader(type);
 	if (shader == 0)
 	{
 		CopyLog(log, logSize, label, "glCreateShader returned zero");
 		return 0;
 	}
-	const GLchar *sources[] = { source };
+	const GLchar *sources[] = { preparedSource };
 	gles.ShaderSource(shader, 1, sources, nullptr);
 	gles.CompileShader(shader);
 	GLint compiled = GL_FALSE;

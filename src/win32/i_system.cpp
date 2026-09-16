@@ -58,6 +58,7 @@
 #define USE_WINDOWS_DWORD
 #include "hardware.h"
 #include "doomerrors.h"
+#include "r_renderer.h"
 #include <math.h>
 
 #include "doomtype.h"
@@ -1201,6 +1202,7 @@ BOOL CALLBACK IWADBoxCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
 {
 	HWND ctrl;
 	int i;
+	int rendererControl;
 
 	switch (message)
 	{
@@ -1212,7 +1214,9 @@ BOOL CALLBACK IWADBoxCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
 		SetDlgItemText (hDlg, IDC_WELCOME_VERSION, szString);
 
 		// Check the current video settings.
-		SendDlgItemMessage( hDlg, vid_renderer ? IDC_WELCOME_OPENGL : IDC_WELCOME_SOFTWARE, BM_SETCHECK, BST_CHECKED, 0 );
+		rendererControl = vid_renderer == RENDERER_GLES ? IDC_WELCOME_GLES :
+			(vid_renderer == RENDERER_OPENGL ? IDC_WELCOME_OPENGL : IDC_WELCOME_SOFTWARE);
+		SendDlgItemMessage( hDlg, rendererControl, BM_SETCHECK, BST_CHECKED, 0 );
 		SendDlgItemMessage( hDlg, IDC_WELCOME_FULLSCREEN, BM_SETCHECK, fullscreen ? BST_CHECKED : BST_UNCHECKED, 0 );
 
 		// Set the state of the "Don't ask me again" checkbox.
@@ -1278,7 +1282,12 @@ BOOL CALLBACK IWADBoxCallback(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
 			/* [RC] No longer the primary control. > || (LOWORD(wParam) == IDC_IWADLIST && HIWORD(wParam) == LBN_DBLCLK)<*/)
 		{
 			SetQueryIWad(hDlg);
-			vid_renderer = SendDlgItemMessage( hDlg, IDC_WELCOME_OPENGL, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
+			if (SendDlgItemMessage(hDlg, IDC_WELCOME_GLES, BM_GETCHECK, 0, 0) == BST_CHECKED)
+				vid_renderer = RENDERER_GLES;
+			else if (SendDlgItemMessage(hDlg, IDC_WELCOME_OPENGL, BM_GETCHECK, 0, 0) == BST_CHECKED)
+				vid_renderer = RENDERER_OPENGL;
+			else
+				vid_renderer = RENDERER_SOFTWARE;
 			fullscreen = SendDlgItemMessage( hDlg, IDC_WELCOME_FULLSCREEN, BM_GETCHECK, 0, 0 ) == BST_CHECKED;
 			ctrl = GetDlgItem (hDlg, IDC_IWADLIST);
 			EndDialog(hDlg, SendMessage (ctrl, LB_GETCURSEL, 0, 0));

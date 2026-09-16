@@ -113,12 +113,16 @@ int TexFormat[]={
 	GL_RGBA8,
 	GL_RGB5_A1,
 	GL_RGBA4,
+#if defined(__ANDROID__)
+	GL_RGBA8,
+#else
 	GL_RGBA2,
 	// [BB] Added compressed texture formats.
 	GL_COMPRESSED_RGBA_ARB,
 	GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,
 	GL_COMPRESSED_RGBA_S3TC_DXT3_EXT,
 	GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
+#endif
 };
 
 

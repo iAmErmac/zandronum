@@ -49,8 +49,8 @@
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
 #include "gl/scene/gl_drawinfo.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_texture.h"
@@ -302,8 +302,8 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		
 	zpos+= FRACUNIT*(flipy? decalheight-decaltopo : decaltopo);
 
-#ifdef __ANDROID__
-	const bool nativeGLES = gl_AndroidNativeGLES_IsActive();
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool nativeGLES = gl_GLES_IsActive();
 	if (!nativeGLES)
 #endif
 		tex->BindPatch(p.colormap, decal->Translation);
@@ -367,8 +367,8 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		for(i=0;i<4;i++) dv[i].v=vb-dv[i].v;
 	}
 
-#ifdef __ANDROID__
-	if (gl_AndroidNativeGLES_IsActive())
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
 		float color[3];
 		if (loadAlpha)
@@ -422,37 +422,37 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		}
 		const bool masked = textureHandle != 0 && (tex->isMasked() || decal->RenderStyle.SrcAlpha == STYLEALPHA_One);
 		const bool nativeFuzz = decal->RenderStyle.BlendOp == STYLEOP_Fuzz;
-		EAndroidNativeBlendMode blendMode = nativeFuzz ? ANDROID_BLEND_FUZZ :
-			a < 0.999f ? ANDROID_BLEND_ALPHA : ANDROID_BLEND_OPAQUE;
+		EGLESBlendMode blendMode = nativeFuzz ? GLES_BLEND_FUZZ :
+			a < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
 		switch (decal->RenderStyle.BlendOp)
 		{
 		case STYLEOP_Add:
-			if (decal->RenderStyle.DestAlpha == STYLEALPHA_One) blendMode = ANDROID_BLEND_ADD;
+			if (decal->RenderStyle.DestAlpha == STYLEALPHA_One) blendMode = GLES_BLEND_ADD;
 			break;
 		case STYLEOP_Sub:
-			blendMode = ANDROID_BLEND_SUBTRACT;
+			blendMode = GLES_BLEND_SUBTRACT;
 			break;
 		case STYLEOP_RevSub:
-			blendMode = ANDROID_BLEND_REVERSE_SUBTRACT;
+			blendMode = GLES_BLEND_REVERSE_SUBTRACT;
 			break;
 		default:
 			break;
 		}
-		gl_AndroidNativeGLES_AddWall(positions, texcoords, color, a, textureHandle, masked,
+		gl_GLES_AddWall(positions, texcoords, color, a, textureHandle, masked,
 			nativeFog, false, fogColor, fogDensity, blendMode,
-			(nativeFuzz ? ANDROID_MATERIAL_FUZZ : 0) |
-			((decal->RenderStyle.Flags & STYLEF_RedIsAlpha) ? ANDROID_MATERIAL_RED_IS_ALPHA : 0) |
-			((decal->RenderStyle.Flags & STYLEF_InvertOverlay) ? ANDROID_MATERIAL_INVERT : 0) |
-			((decal->RenderStyle.Flags & STYLEF_FadeToBlack) ? ANDROID_MATERIAL_FADE_TO_BLACK : 0) |
-			((decal->RenderStyle.Flags & STYLEF_InvertSource) ? ANDROID_MATERIAL_INVERT_SOURCE : 0) |
-			((decal->RenderStyle.Flags & STYLEF_ColorIsFixed) ? ANDROID_MATERIAL_COLOR_FIXED : 0),
+			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
+			((decal->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
+			((decal->RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
+			((decal->RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
+			((decal->RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
+			((decal->RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0),
 			NULL, NULL, brightmapHandle,
 			(p.colormap >= CM_DESAT0 && p.colormap <= CM_DESAT31) ? p.colormap : 0);
 		rendered_decals++;
 		return;
 	}
 #endif
-
+#if !defined(__ANDROID__)
 	// fog is set once per wall in the calling function and not per decal!
 
 	if (loadAlpha)
@@ -503,6 +503,7 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 	rendered_decals++;
 	gl_RenderState.SetFog(fc,-1);
 	gl_RenderState.SetDynLight(0,0,0);
+#endif
 }
 
 //==========================================================================

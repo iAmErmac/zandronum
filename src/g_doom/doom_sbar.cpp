@@ -29,8 +29,8 @@
 #include "gamemode.h"
 #include "st_hud.h"
 #include "survival.h"
-#ifdef __ANDROID__
-#include "gl/system/gl_android.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
 #endif
 
 
@@ -117,11 +117,13 @@ public:
 
 	void Draw (EHudState state)
 	{
-		#ifdef __ANDROID__
-		if (gl_AndroidNativeGLES_IsActive())
+		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
 		{
 			if (state == HUD_StatusBar)
 			{
+				if (setblocks <= 10)
+					RefreshBackground();
 				// The native renderer rebuilds the 2D batch every frame. Keep the
 				// complete status bar submission independent of the retained-frame
 				// refresh counters used by the desktop framebuffer.
@@ -247,9 +249,11 @@ private:
 	{
 		int amount;
 
-#ifndef __ANDROID__ // Fix corrupt status bar on NPOT
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive() || ForceRefresh())
+	#else
 		if ( ForceRefresh() )
-#endif
+	#endif
 			DrawImage (&StatusBarTex, 0, 0);
 
 		DrawAmmoStats ();
