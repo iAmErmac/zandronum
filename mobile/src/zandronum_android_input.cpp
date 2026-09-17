@@ -21,6 +21,7 @@ static std::atomic<float> AndroidTouchAxes[2] = {};
 static std::atomic<float> AndroidControllerAxes[4] = {};
 static std::atomic<int> AndroidLookX = 0;
 static std::atomic<int> AndroidLookY = 0;
+static std::atomic<int> AndroidOverlayMode = 0;
 static FButtonStatus AndroidTouchJump;
 static FButtonStatus AndroidTouchCrouch;
 
@@ -317,6 +318,17 @@ void Zandronum_AndroidInput_Reset()
 	AndroidLookY.store(0);
 	AndroidTouchJump.Reset();
 	AndroidTouchCrouch.Reset();
+}
+
+void Zandronum_AndroidInput_UpdateOverlayMode()
+{
+	const int mode = menuactive != MENU_Off ? 1 : (ConsoleState != c_up ? 2 : 0);
+	AndroidOverlayMode.store(mode, std::memory_order_relaxed);
+}
+
+int Zandronum_AndroidInput_GetOverlayMode()
+{
+	return AndroidOverlayMode.load(std::memory_order_relaxed);
 }
 
 bool Zandronum_AndroidInput_FlyActive()

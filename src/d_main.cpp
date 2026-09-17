@@ -1515,6 +1515,14 @@ void D_DoomLoop ()
 #ifdef __ANDROID__
 		if (Zandronum_AndroidHost_IsStopping())
 			return;
+		Zandronum_AndroidHost_ProcessSurfaceState();
+		if (Zandronum_AndroidHost_IsPaused())
+		{
+			I_FreezeTime(true);
+			Zandronum_AndroidHost_WaitWhilePaused();
+			I_FreezeTime(false);
+			continue;
+		}
 #endif
 		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 		const bool nativeWipeInProgress = gl_GLES_IsActive() &&

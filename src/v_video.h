@@ -503,7 +503,7 @@ extern "C" void ASM_PatchPitch (void);
 
 int CheckRatio (int width, int height, int *trueratio=NULL);
 static inline int CheckRatio (double width, double height) { return CheckRatio(int(width), int(height)); }
-extern const int BaseRatioSizes[5][4];
+extern const int BaseRatioSizes[6][4];
 
 extern int currentrenderer;
 

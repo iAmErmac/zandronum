@@ -23,7 +23,8 @@
 #include "zandronum_android_input.h"
 
 extern int main_android(int argc, char **argv);
-extern void S_SetSoundPaused(int paused);
+extern void S_SetSoundPaused(int active);
+extern void I_SetDisplayRefreshRate(int refreshHz);
 
 #if defined(__GNUC__)
 #define ZANDRONUM_JNI_EXPORT __attribute__((visibility("default"), used))
@@ -105,6 +106,14 @@ namespace
 		vm = AndroidJavaVM;
 		activity = AndroidActivity;
 		return vm != nullptr && activity != nullptr;
+	}
+
+	bool IsCurrentActivity(JNIEnv *env, jobject activity)
+	{
+		if (env == nullptr || activity == nullptr)
+			return false;
+		std::lock_guard<std::mutex> lock(HostMutex);
+		return AndroidActivity != nullptr && env->IsSameObject(AndroidActivity, activity) == JNI_TRUE;
 	}
 
 	void HostLog(const char *message)
@@ -367,10 +376,22 @@ bool Zandronum_AndroidHost_IsSurfaceReady()
 	return SurfaceReady && ContextReady && Surface != EGL_NO_SURFACE;
 }
 
+bool Zandronum_AndroidHost_IsPaused()
+{
+	std::lock_guard<std::mutex> lock(HostMutex);
+	return Paused;
+}
+
 bool Zandronum_AndroidHost_IsStopping()
 {
 	std::lock_guard<std::mutex> lock(HostMutex);
 	return Stopping;
+}
+
+void Zandronum_AndroidHost_WaitWhilePaused()
+{
+	std::unique_lock<std::mutex> lock(HostMutex);
+	HostCondition.wait(lock, [] { return !Paused || Stopping; });
 }
 
 bool Zandronum_AndroidHost_SwapBuffers()
@@ -410,7 +431,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 
 	if (paused != AppliedPause)
 	{
-		S_SetSoundPaused(paused);
+		S_SetSoundPaused(paused ? 0 : 1);
 		AppliedPause = paused;
 	}
 	if (lost)
@@ -425,7 +446,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 	{
 		if (CreateWindowSurface())
 		{
-		RegisterGLESHostCallbacks();
+			RegisterGLESHostCallbacks();
 			if (gl_GLES_OnContextRestored(SurfaceWidth, SurfaceHeight))
 				HostLog("Zandronum GLES Android surface restored");
 			else
@@ -450,16 +471,48 @@ void Zandronum_AndroidHost_SetPaused(bool paused)
 {
 	std::lock_guard<std::mutex> lock(HostMutex);
 	Paused = paused;
+	HostCondition.notify_all();
 }
 
 void Zandronum_AndroidHost_Start()
 {
-	std::lock_guard<std::mutex> lock(HostMutex);
-	if (Starting || GameThread.joinable())
-		return;
-	Starting = true;
-	Stopping = false;
-	GameThread = std::thread(RunEngine);
+	std::thread finishedThread;
+	{
+		std::lock_guard<std::mutex> lock(HostMutex);
+		if (Starting)
+			return;
+		if (GameThread.joinable())
+			finishedThread = std::move(GameThread);
+	}
+	if (finishedThread.joinable())
+		finishedThread.join();
+
+	ANativeWindow *staleWindow = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(HostMutex);
+		if (Starting)
+			return;
+		if (NextSurfaceWindow != nullptr)
+		{
+			staleWindow = SurfaceWindow;
+			SurfaceWindow = NextSurfaceWindow;
+			NextSurfaceWindow = nullptr;
+		}
+		else if (!SurfaceReady)
+		{
+			staleWindow = SurfaceWindow;
+			SurfaceWindow = nullptr;
+		}
+		SurfaceLostPending = false;
+		SurfaceRestoredPending = false;
+		Starting = true;
+		Stopping = false;
+		Paused = false;
+		AppliedPause = false;
+		GameThread = std::thread(RunEngine);
+	}
+	if (staleWindow != nullptr)
+		ANativeWindow_release(staleWindow);
 }
 
 void Zandronum_AndroidHost_Stop()
@@ -561,8 +614,10 @@ void Zandronum_AndroidHost_SurfaceDestroyed()
 	HostCondition.notify_all();
 }
 
-extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeStart(JNIEnv *, jclass)
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeStart(JNIEnv *env, jobject activity)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_Start();
 }
 
@@ -586,9 +641,15 @@ extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActiv
 			AndroidJavaVM = nullptr;
 			return JNI_FALSE;
 		}
-		std::lock_guard<std::mutex> lock(HostMutex);
-		AndroidActivity = activityReference;
-		AudioJniReady = true;
+		jobject previousActivity = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(HostMutex);
+			previousActivity = AndroidActivity;
+			AndroidActivity = activityReference;
+			AudioJniReady = true;
+		}
+		if (previousActivity != nullptr)
+			env->DeleteGlobalRef(previousActivity);
 		return JNI_TRUE;
 	}
 	std::lock_guard<std::mutex> lock(HostMutex);
@@ -597,42 +658,65 @@ extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActiv
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceCreated(
-	JNIEnv *env, jclass, jobject surface, jint width, jint height)
+	JNIEnv *env, jobject activity, jobject surface, jint width, jint height)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_SurfaceCreated(env, surface, width, height, false);
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceRecreated(
-	JNIEnv *env, jclass, jobject surface, jint width, jint height)
+	JNIEnv *env, jobject activity, jobject surface, jint width, jint height)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_SurfaceCreated(env, surface, width, height, true);
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceChanged(
-	JNIEnv *, jclass, jint width, jint height)
+	JNIEnv *env, jobject activity, jint width, jint height)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_SurfaceChanged(width, height);
 }
 
-extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceDestroyed(
-	JNIEnv *, jclass)
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSetDisplayRefreshRate(
+	JNIEnv *env, jobject activity, jint refreshHz)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
+	I_SetDisplayRefreshRate(static_cast<int>(refreshHz));
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeSurfaceDestroyed(
+	JNIEnv *env, jobject activity)
+{
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_SurfaceDestroyed();
 }
 
-extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativePause(JNIEnv *, jclass)
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativePause(JNIEnv *env, jobject activity)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_SetPaused(true);
 }
 
-extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeResume(JNIEnv *, jclass)
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeResume(JNIEnv *env, jobject activity)
 {
+	if (!IsCurrentActivity(env, activity))
+		return;
 	Zandronum_AndroidHost_SetPaused(false);
 }
 
-extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeStop(JNIEnv *, jclass)
+extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActivity_nativeStop(JNIEnv *env, jobject activity)
 {
+	if (!IsCurrentActivity(env, activity))
+		return JNI_FALSE;
 	Zandronum_AndroidHost_Stop();
+	return JNI_TRUE;
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputKey(JNIEnv *, jclass, jint keycode, jboolean pressed)
@@ -721,6 +805,11 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMenuAction(JNIEnv *, jclass, jint direction, jboolean pressed)
 {
 	Zandronum_AndroidInput_MenuAction(static_cast<int>(direction), pressed != 0);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT jint Java_com_ermac_zandromeda_GLES3JNIActivity_nativeGetOverlayMode(JNIEnv *, jclass)
+{
+	return static_cast<jint>(Zandronum_AndroidInput_GetOverlayMode());
 }
 
 void Zandronum_AndroidHost_Tactile(int on, int off, int total)

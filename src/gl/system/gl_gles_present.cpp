@@ -379,6 +379,53 @@ bool gl_GLESInternalCopyTargetToTexture(const FGLESTargetDescriptor &target, GLu
 	return copyError == GL_NO_ERROR;
 }
 
+bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned char *rgba,
+	int width, int height)
+{
+	if (rgba == nullptr || width <= 0 || height <= 0 ||
+		target.renderWidth <= 0 || target.renderHeight <= 0)
+		return false;
+	const GLuint readFramebuffer = target.resolveFramebuffer != 0 ?
+		target.resolveFramebuffer : target.framebuffer;
+	if (readFramebuffer == 0)
+		return false;
+
+	const int sourceWidth = target.renderWidth;
+	const int sourceHeight = target.renderHeight;
+	std::vector<unsigned char> source(static_cast<size_t>(sourceWidth) * sourceHeight * 4);
+	GLint previousDrawFramebuffer = 0;
+	GLint previousReadFramebuffer = 0;
+	GLint previousPackAlignment = 4;
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+	glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glReadPixels(0, 0, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
+	const GLenum readbackError = gl_GLES_CheckErrors("screenshot readback");
+	glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+	if (readbackError != GL_NO_ERROR)
+		return false;
+
+	for (int y = 0; y < height; ++y)
+	{
+		const int sourceY = (y * sourceHeight) / height;
+		for (int x = 0; x < width; ++x)
+		{
+			const int sourceX = (x * sourceWidth) / width;
+			const size_t sourceOffset = (static_cast<size_t>(sourceY) * sourceWidth + sourceX) * 4;
+			const size_t destinationOffset = (static_cast<size_t>(y) * width + x) * 4;
+			rgba[destinationOffset + 0] = source[sourceOffset + 0];
+			rgba[destinationOffset + 1] = source[sourceOffset + 1];
+			rgba[destinationOffset + 2] = source[sourceOffset + 2];
+			rgba[destinationOffset + 3] = source[sourceOffset + 3];
+		}
+	}
+	return true;
+}
+
 bool gl_GLESInternalWriteSavePic(FILE *file, const FGLESTargetDescriptor &target,
 	int width, int height)
 {

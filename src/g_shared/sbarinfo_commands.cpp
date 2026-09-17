@@ -2013,6 +2013,8 @@ class CommandAspectRatio : public SBarInfoCommandFlowControl
 				ratio = ASPECTRATIO_17_10;
 			else if(sc.Compare("5:4"))
 				ratio = ASPECTRATIO_5_4;
+			else if(sc.Compare("21:9"))
+				ratio = ASPECTRATIO_21_9;
 			else
 				sc.ScriptError("Unkown aspect ratio: %s", sc.String);
 
@@ -2036,16 +2038,17 @@ class CommandAspectRatio : public SBarInfoCommandFlowControl
 			ASPECTRATIO_16_9 = 1,
 			ASPECTRATIO_16_10 = 2,
 			ASPECTRATIO_17_10 = 3,
-			ASPECTRATIO_5_4 = 4
+			ASPECTRATIO_5_4 = 4,
+			ASPECTRATIO_21_9 = 5
 		};
 		// Since the number of aspect ratios may change at any time, we should
 		// track what aspect ratios the statusbar supports and use the widest
 		// or tallest available ratio.
-		static Ratio	ratioMap[5];
+		static Ratio	ratioMap[6];
 
 		Ratio			ratio;
 };
-CommandAspectRatio::Ratio CommandAspectRatio::ratioMap[5] = {ASPECTRATIO_4_3,ASPECTRATIO_16_9,ASPECTRATIO_16_10,ASPECTRATIO_16_10,ASPECTRATIO_5_4};
+CommandAspectRatio::Ratio CommandAspectRatio::ratioMap[6] = {ASPECTRATIO_4_3,ASPECTRATIO_16_9,ASPECTRATIO_16_10,ASPECTRATIO_16_10,ASPECTRATIO_5_4,ASPECTRATIO_16_9};
 
 ////////////////////////////////////////////////////////////////////////////////
 

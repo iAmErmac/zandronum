@@ -28,6 +28,7 @@ IVideo *Video;
 int currentrenderer = RENDERER_GLES;
 static std::atomic<int> AndroidFPSLimit(0);
 static std::atomic<int64_t> AndroidNextFrameDeadline(0);
+static std::atomic<int> AndroidDisplayFPSLimit(0);
 static const int AndroidMaximumFPS = 240;
 
 static int64_t AndroidMonotonicNanoseconds()
@@ -127,16 +128,46 @@ void I_SetFPSLimit(int limit)
 	if (cl_capfps || limit == 0)
 		limit = 0;
 	else
+	{
 		limit = clamp(limit, TICRATE, AndroidMaximumFPS);
+		const int displayLimit = AndroidDisplayFPSLimit.load(std::memory_order_relaxed);
+		if (displayLimit > 0)
+			limit = MIN(limit, displayLimit);
+	}
 	AndroidFPSLimit.store(limit, std::memory_order_relaxed);
 	AndroidNextFrameDeadline.store(0, std::memory_order_relaxed);
+	static int lastConfiguredLimit = -1;
+	static int lastDisplayLimit = -1;
+	static int lastEffectiveLimit = -1;
+	static bool lastCapFPS = false;
+	const int displayLimit = AndroidDisplayFPSLimit.load(std::memory_order_relaxed);
+	if (developer && (lastConfiguredLimit != vid_maxfps || lastDisplayLimit != displayLimit ||
+		lastEffectiveLimit != limit || lastCapFPS != !!cl_capfps))
+	{
+		DPrintf("Android GLES FPS pacing: vid_maxfps=%d cl_capfps=%d display=%d effective=%d\n",
+			static_cast<int>(vid_maxfps), cl_capfps ? 1 : 0, displayLimit, limit);
+	}
+	lastConfiguredLimit = vid_maxfps;
+	lastDisplayLimit = displayLimit;
+	lastEffectiveLimit = limit;
+	lastCapFPS = !!cl_capfps;
 }
 
-void I_WaitForFPSLimit()
+void I_SetDisplayRefreshRate(int refreshHz)
 {
+	if (refreshHz <= 0)
+		AndroidDisplayFPSLimit.store(0, std::memory_order_relaxed);
+	else
+		AndroidDisplayFPSLimit.store(MIN(refreshHz, AndroidMaximumFPS), std::memory_order_relaxed);
+	I_SetFPSLimit(-1);
+}
+
+double I_WaitForFPSLimit()
+{
+	const int64_t waitStart = AndroidMonotonicNanoseconds();
 	const int limit = AndroidFPSLimit.load(std::memory_order_relaxed);
 	if (limit <= 0)
-		return;
+		return 0.0;
 
 	const int64_t interval = 1000000000LL / limit;
 	const int64_t now = AndroidMonotonicNanoseconds();
@@ -154,6 +185,15 @@ void I_WaitForFPSLimit()
 		nanosleep(&sleepTime, nullptr);
 	}
 	AndroidNextFrameDeadline.store(deadline, std::memory_order_relaxed);
+	return static_cast<double>(AndroidMonotonicNanoseconds() - waitStart) / 1000000.0;
+}
+
+void I_GetAndroidFPSLimitState(int *displayLimit, int *effectiveLimit)
+{
+	if (displayLimit != nullptr)
+		*displayLimit = AndroidDisplayFPSLimit.load(std::memory_order_relaxed);
+	if (effectiveLimit != nullptr)
+		*effectiveLimit = AndroidFPSLimit.load(std::memory_order_relaxed);
 }
 
 CUSTOM_CVAR(Int, vid_maxfps, 240, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)

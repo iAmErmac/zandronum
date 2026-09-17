@@ -214,9 +214,10 @@ void I_ReleaseMouseCapture()
 	Zandronum_AndroidHost_SetPointerCapture(false);
 }
 
-// Android delivers input and controller changes through JNI, so neither hook polls a platform queue.
+// Android delivers input and controller changes through JNI; the tick hook only publishes UI state.
 void I_StartTic()
 {
+	Zandronum_AndroidInput_UpdateOverlayMode();
 }
 
 void I_StartFrame()

@@ -696,11 +696,13 @@ bool M_Responder (event_t *ev)
 			ch = ev->data1;
 			switch (ch)
 			{
+			case KEY_ENTER:
 			case KEY_JOY1:
 			case KEY_PAD_A:
 				mkey = MKEY_Enter;
 				break;
 
+			case KEY_ESCAPE:
 			case KEY_JOY2:
 			case KEY_PAD_B:
 				mkey = MKEY_Back;
@@ -721,6 +723,7 @@ bool M_Responder (event_t *ev)
 				mkey = MKEY_PageDown;
 				break;
 
+			case KEY_UPARROW:
 			case KEY_PAD_DPAD_UP:
 			case KEY_PAD_LTHUMB_UP:
 			case KEY_JOYAXIS1MINUS:
@@ -728,6 +731,7 @@ bool M_Responder (event_t *ev)
 				mkey = MKEY_Up;
 				break;
 
+			case KEY_DOWNARROW:
 			case KEY_PAD_DPAD_DOWN:
 			case KEY_PAD_LTHUMB_DOWN:
 			case KEY_JOYAXIS1PLUS:
@@ -735,6 +739,7 @@ bool M_Responder (event_t *ev)
 				mkey = MKEY_Down;
 				break;
 
+			case KEY_LEFTARROW:
 			case KEY_PAD_DPAD_LEFT:
 			case KEY_PAD_LTHUMB_LEFT:
 			case KEY_JOYAXIS2MINUS:
@@ -742,6 +747,7 @@ bool M_Responder (event_t *ev)
 				mkey = MKEY_Left;
 				break;
 
+			case KEY_RIGHTARROW:
 			case KEY_PAD_DPAD_RIGHT:
 			case KEY_PAD_LTHUMB_RIGHT:
 			case KEY_JOYAXIS2PLUS:

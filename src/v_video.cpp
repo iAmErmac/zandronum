@@ -24,6 +24,7 @@
 
 
 #include <stdio.h>
+#include <utility>
 
 #include "i_system.h"
 #include "x86.h"
@@ -68,6 +69,10 @@
 // [TP] New includes.
 #include "cl_commands.h"
 
+EXTERN_CVAR (Bool, con_scaletext)
+EXTERN_CVAR (Int, con_virtualwidth)
+EXTERN_CVAR (Int, con_virtualheight)
+EXTERN_CVAR (Bool, con_scaletext_usescreenratio)
 
 FRenderer *Renderer;
 
@@ -857,13 +862,47 @@ void DFrameBuffer::DrawRateStuff ()
 		if ((signed)howlong >= 0)
 		{
 			char fpsbuff[40];
-			int chars;
 			int rate_x;
 
-			chars = mysnprintf (fpsbuff, countof(fpsbuff), "%2u ms (%3u fps)", howlong, LastCount);
-			rate_x = Width - chars * 8;
-			Clear (rate_x, 0, Width, 8, GPalette.BlackIndex, 0);
-			DrawText (ConFont, CR_WHITE, rate_x, 0, (char *)&fpsbuff[0], TAG_DONE);
+			mysnprintf (fpsbuff, countof(fpsbuff), "%2u ms (%3u fps)", howlong, LastCount);
+			const bool scaleText = con_scaletext && con_virtualwidth > 0 && con_virtualheight > 0;
+			const int logicalWidth = scaleText ? con_virtualwidth : Width;
+			const int safeMargin = scaleText ? 24 : 8;
+			const int textWidth = ConFont->StringWidth(fpsbuff);
+			rate_x = logicalWidth - safeMargin - textWidth;
+			const int rate_y = scaleText ? 8 : 0;
+
+			double clear_x = rate_x;
+			double clear_y = rate_y;
+			double clear_w = textWidth;
+			double clear_h = ConFont->GetHeight() + 1;
+			if (scaleText)
+			{
+				VirtualToRealCoords(clear_x, clear_y, clear_w, clear_h,
+					con_virtualwidth, con_virtualheight, false, !con_scaletext_usescreenratio);
+			}
+			int clearLeft = static_cast<int>(clear_x);
+			int clearTop = static_cast<int>(clear_y);
+			int clearRight = static_cast<int>(clear_x + clear_w + 0.5);
+			int clearBottom = static_cast<int>(clear_y + clear_h + 0.5);
+			if (clearLeft < 0) clearLeft = 0;
+			if (clearTop < 0) clearTop = 0;
+			if (clearRight > Width) clearRight = Width;
+			if (clearBottom > Height) clearBottom = Height;
+			if (clearLeft < clearRight && clearTop < clearBottom)
+				Clear(clearLeft, clearTop, clearRight, clearBottom, GPalette.BlackIndex, 0);
+			if (scaleText)
+			{
+				DrawText (ConFont, CR_WHITE, rate_x, rate_y, fpsbuff,
+					DTA_VirtualWidth, static_cast<int>(con_virtualwidth),
+					DTA_VirtualHeight, static_cast<int>(con_virtualheight),
+					DTA_KeepRatio, static_cast<bool>(con_scaletext_usescreenratio),
+					TAG_DONE);
+			}
+			else
+			{
+				DrawText (ConFont, CR_WHITE, rate_x, rate_y, fpsbuff, TAG_DONE);
+			}
 
 			DWORD thisSec = ms/1000;
 			if (LastSec < thisSec)
@@ -1661,12 +1700,11 @@ CUSTOM_CVAR (Int, vid_aspect, 0, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
 // 2: 16:10
 // 3: 17:10
 // 4: 5:4
-int CheckRatio (int width, int height, int *trueratio)
+// 5: 21:9
+int ActiveFakeRatio(int width, int height)
 {
 	int fakeratio = -1;
-	int ratio;
-
-	if ((vid_aspect >= 1) && (vid_aspect <= 5))
+	if ((vid_aspect >= 1) && (vid_aspect <= 6))
 	{
 		// [SP] User wants to force aspect ratio; let them.
 		fakeratio = int(vid_aspect);
@@ -1678,6 +1716,10 @@ int CheckRatio (int width, int height, int *trueratio)
 		{
 			fakeratio = 3;
 		}
+		else if (fakeratio == 6)
+		{
+			fakeratio = 5;
+		}
 	}
 	if (vid_nowidescreen)
 	{
@@ -1687,54 +1729,46 @@ int CheckRatio (int width, int height, int *trueratio)
 		}
 		else
 		{
-			fakeratio = (height * 5/4 == width) ? 4 : 0;
+			fakeratio = (height * 5 / 4 == width) ? 4 : 0;
 		}
 	}
-	// If the size is approximately 16:9, consider it so.
-	if (abs (height * 16/9 - width) < 10)
+	return fakeratio;
+}
+
+int CheckRatio (int width, int height, int *trueratio)
+{
+	float aspect = width / (float)height;
+
+	static std::pair<float, int> ratioTypes[] =
 	{
-		ratio = 1;
-	}
-	// Consider 17:10 as well.
-	else if (abs (height * 17/10 - width) < 10)
+		{ 21 / 9.0f, 5 },
+		{ 16 / 9.0f, 1 },
+		{ 17 / 10.0f, 3 },
+		{ 16 / 10.0f, 2 },
+		{ 4 / 3.0f, 0 },
+		{ 5 / 4.0f, 4 },
+		{ 0.0f, 0 }
+	};
+
+	int ratio = ratioTypes[0].second;
+	float distance = abs(ratioTypes[0].first - aspect);
+	for (int i = 1; ratioTypes[i].first != 0.0f; i++)
 	{
-		ratio = 3;
-	}
-	// 16:10 has more variance in the pixel dimensions. Grr.
-	else if (abs (height * 16/10 - width) < 60)
-	{
-		// 320x200 and 640x400 are always 4:3, not 16:10
-		if ((width == 320 && height == 200) || (width == 640 && height == 400))
+		float d = abs(ratioTypes[i].first - aspect);
+		if (d < distance)
 		{
-			ratio = 0;
+			ratio = ratioTypes[i].second;
+			distance = d;
 		}
-		else
-		{
-			ratio = 2;
-		}
-	}
-	// Unless vid_tft is set, 1280x1024 is 4:3, not 5:4.
-	else if (height * 5/4 == width && vid_tft)
-	{
-		ratio = 4;
-	}
-#ifdef __ANDROID__
-	else if (((float)width / (float)height) > 1.77 ) // Mobiles can be super widescreen..
-	{
-		ratio = 2; // 16:9
-	}
-#endif
-	// Assume anything else is 4:3. (Which is probably wrong these days...)
-	else
-	{
-		ratio = 0;
 	}
 
-	if (trueratio != NULL)
-	{
+	int fakeratio = ActiveFakeRatio(width, height);
+	if (fakeratio == -1)
+		fakeratio = ratio;
+
+	if (trueratio)
 		*trueratio = ratio;
-	}
-	return (fakeratio >= 0) ? fakeratio : ratio;
+	return fakeratio;
 }
 
 // First column: Base width
@@ -1746,13 +1780,14 @@ int CheckRatio (int width, int height, int *trueratio)
 //     base_width = 240 * x / y
 //     multiplier = 320 / base_width
 //     base_height = 200 * multiplier
-const int BaseRatioSizes[5][4] =
+const int BaseRatioSizes[6][4] =
 {
 	{  960, 600, 0,                   48 },			//  4:3   320,      200,      multiplied by three
 	{ 1280, 450, 0,                   48*3/4 },		// 16:9   426.6667, 150,      multiplied by three
 	{ 1152, 500, 0,                   48*5/6 },		// 16:10  386,      166.6667, multiplied by three
 	{ 1224, 471, 0,                   48*40/51 },	// 17:10  408,		156.8627, multiplied by three
-	{  960, 640, (int)(6.5*FRACUNIT), 48*15/16 }	//  5:4   320,      213.3333, multiplied by three
+	{  960, 640, (int)(6.5*FRACUNIT), 48*15/16 },	//  5:4   320,      213.3333, multiplied by three
+	{ 1707, 338, 0,                   48*9/16 }		// 21:9   568.8889, 337.5,    multiplied by three
 };
 
 void IVideo::DumpAdapters ()

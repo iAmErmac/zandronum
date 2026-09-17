@@ -49,6 +49,10 @@
 #include "gl/system/gl_gles_context.h"
 #include "gl/system/gl_gles_renderer.h"
 #endif
+#if defined(ZANDRONUM_GLES_BACKEND)
+#include "r_renderer.h"
+EXTERN_CVAR (Int, vid_renderer)
+#endif
 
 #ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
 char myGlBeginCharArray[4] = {0,0,0,0};
@@ -145,7 +149,7 @@ static void InitContext()
 	gl.flags=0;
 #if !defined(__ANDROID__)
 #if defined(ZANDRONUM_GLES_BACKEND)
-	if (!gl_GLES_IsActive())
+	if (vid_renderer != RENDERER_GLES)
 #endif
 	glBlendEquation = glBlendEquationDummy;
 #endif
@@ -153,7 +157,7 @@ static void InitContext()
 #ifdef _WIN32 // [BB] Detect some kinds of glBegin hooking.
 #if !defined(__ANDROID__)
 #if defined(ZANDRONUM_GLES_BACKEND)
-	if (!gl_GLES_IsActive())
+	if (vid_renderer != RENDERER_GLES)
 #endif
 	for ( int i = 0; i < 4; ++i )
 		myGlBeginCharArray[i] = reinterpret_cast<char *>(glBegin)[i];
@@ -171,7 +175,12 @@ void gl_LoadExtensions()
 	InitContext();
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_HasContext())
+	#if defined(__ANDROID__)
+	const bool useNativeGLES = true;
+	#else
+	const bool useNativeGLES = vid_renderer == RENDERER_GLES;
+	#endif
+	if (useNativeGLES && gl_GLES_HasContext())
 	{
 		if (!gl_GLES_CollectCapabilities())
 			I_FatalError("Unable to query the GLES-compatible renderer capabilities.");
@@ -407,8 +416,14 @@ void gl_LoadExtensions()
 
 void gl_PrintStartupLog()
 {
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#if defined(__ANDROID__)
 	if (gl_GLES_IsActive())
+	{
+		gl_GLES_PrintStartupLog();
+		return;
+	}
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (vid_renderer == RENDERER_GLES && gl_GLES_IsActive())
 	{
 		gl_GLES_PrintStartupLog();
 		return;
@@ -472,7 +487,7 @@ void gl_SetTextureMode(int type)
 	return;
 #else
 #if defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive())
+	if (vid_renderer == RENDERER_GLES)
 	{
 		(void)type;
 		return;

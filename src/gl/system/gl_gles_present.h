@@ -48,6 +48,8 @@ bool gl_GLESInternalFillStencil(int width, int height, GLuint stencilReference,
 void gl_GLESInternalPublishFrameContract(uint64_t frameNumber, double timeSeconds,
 	const FGLESTargetDescriptor &target, const FGLESViewDescriptor &view, bool viewValid);
 bool gl_GLESInternalCopyTargetToTexture(const FGLESTargetDescriptor &target, GLuint texture);
+bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned char *rgba,
+	int width, int height);
 bool gl_GLESInternalWriteSavePic(FILE *file, const FGLESTargetDescriptor &target,
 	int width, int height);
 

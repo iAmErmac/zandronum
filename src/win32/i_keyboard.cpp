@@ -117,6 +117,11 @@ FKeyboard::~FKeyboard()
 	AllKeysUp();
 }
 
+void FKeyboard::PostSysRqEvent(bool down)
+{
+	PostKeyEvent(DIK_SYSRQ, down, true);
+}
+
 //==========================================================================
 //
 // FKeyboard :: CheckAndSetKey

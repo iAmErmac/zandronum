@@ -444,6 +444,13 @@ LRESULT CALLBACK WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			return result;
 		}
 	}
+	if (Keyboard != NULL &&
+		(wParam == VK_SNAPSHOT) &&
+		(message == WM_KEYDOWN || message == WM_SYSKEYDOWN ||
+		 message == WM_KEYUP || message == WM_SYSKEYUP))
+	{
+		Keyboard->PostSysRqEvent(message == WM_KEYDOWN || message == WM_SYSKEYDOWN);
+	}
 
 
 	switch (message)

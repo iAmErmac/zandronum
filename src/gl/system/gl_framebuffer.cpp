@@ -52,6 +52,7 @@
 #include "farchive.h"
 
 #include "gl/system/gl_interface.h"
+#include "r_renderer.h"
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_context.h"
 #include "gl/system/gl_gles_renderer.h"
@@ -73,6 +74,9 @@ IMPLEMENT_CLASS(OpenGLFrameBuffer)
 EXTERN_CVAR (Float, vid_brightness)
 EXTERN_CVAR (Float, vid_contrast)
 EXTERN_CVAR (Bool, vid_vsync)
+#if defined(ZANDRONUM_GLES_BACKEND)
+EXTERN_CVAR (Int, vid_renderer)
+#endif
 
 CVAR(Bool, gl_aalines, false, CVAR_ARCHIVE)
 
@@ -151,7 +155,7 @@ void OpenGLFrameBuffer::InitializeState()
 	I_FatalError("Zandronum GLES bootstrap failed; refusing to enter the legacy renderer.");
 	return;
 #elif defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_HasContext())
+	if (vid_renderer == RENDERER_GLES && gl_GLES_HasContext())
 	{
 		if (!gl_GLES_InitializeBootstrap(GetWidth(), GetHeight()))
 		{
@@ -654,10 +658,16 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 	if (gl_GLES_IsActive())
 	{
 		BYTE *rgba = new BYTE[w * h * 4];
-		gl_GLES_GetProcTable().BindFramebuffer(GL_FRAMEBUFFER, 0);
-		glPixelStorei(GL_PACK_ALIGNMENT, 1);
-		glReadPixels(0, (GetTrueHeight() - GetHeight()) / 2, w, h,
-			GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+		if (!gl_GLES_ReadScreenshot(rgba, w, h))
+		{
+			delete [] rgba;
+			delete [] ScreenshotBuffer;
+			ScreenshotBuffer = nullptr;
+			buffer = nullptr;
+			pitch = 0;
+			color_type = SS_RGB;
+			return;
+		}
 		for (int pixel = 0; pixel < w * h; ++pixel)
 		{
 			ScreenshotBuffer[pixel * 3 + 0] = rgba[pixel * 4 + 0];
@@ -665,7 +675,6 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 			ScreenshotBuffer[pixel * 3 + 2] = rgba[pixel * 4 + 2];
 		}
 		delete [] rgba;
-		glPixelStorei(GL_PACK_ALIGNMENT, 4);
 		gl_GLES_ResetState(GetWidth(), GetHeight());
 		pitch = -w*3;
 		color_type = SS_RGB;

@@ -52,12 +52,15 @@ enum EGLESMaterialFlags
 	GLES_MATERIAL_FUZZ = 8,
 	GLES_MATERIAL_COLOR_OVERLAY = 16,
 	GLES_MATERIAL_INVERT_SOURCE = 32,
-	GLES_MATERIAL_COLOR_FIXED = 64
+	GLES_MATERIAL_COLOR_FIXED = 64,
+	GLES_MATERIAL_DECAL = 128
 };
 
 bool gl_GLES_CollectCapabilities();
 bool gl_GLES_InitializeBootstrap(int width, int height);
 void gl_GLES_RenderBootstrap(int width, int height);
+void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilliseconds,
+	bool presented, int configuredLimit, int capFPS, int displayLimit, int effectiveLimit);
 bool gl_GLES_WipeStart(int type);
 void gl_GLES_WipeEnd();
 bool gl_GLES_WipeDo(int ticks);
@@ -116,6 +119,7 @@ void gl_GLES_MarkMaterialFramebufferContent(const void *key, int colormap,
 bool gl_GLES_EndSceneToTexture(unsigned int targetTexture, int width, int height);
 void gl_GLES_ClearMaterialCache();
 void gl_GLES_EndScene();
+bool gl_GLES_ReadScreenshot(unsigned char *rgba, int width, int height);
 bool gl_GLES_WriteSavePic(FILE *file, int width, int height);
 unsigned int gl_GLES_BeginPortalCapture();
 bool gl_GLES_ClearPortalCapture();

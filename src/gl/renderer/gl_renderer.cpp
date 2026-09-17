@@ -71,6 +71,10 @@
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
 #endif
+#if defined(ZANDRONUM_GLES_BACKEND)
+#include "r_renderer.h"
+EXTERN_CVAR(Int, vid_renderer)
+#endif
 
 //===========================================================================
 // 
@@ -146,8 +150,10 @@ void FGLRenderer::Initialize()
 	mFBID = 0;
 	SetupLevel();
 	mShaderManager = new FShaderManager;
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	gl_GLES_RegisterShaderPrograms();
+	#if defined(__ANDROID__)
+	if (gl_GLES_IsActive()) gl_GLES_RegisterShaderPrograms();
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (vid_renderer == RENDERER_GLES && gl_GLES_IsActive()) gl_GLES_RegisterShaderPrograms();
 	#endif
 }
 

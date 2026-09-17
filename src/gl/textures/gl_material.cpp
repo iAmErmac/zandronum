@@ -65,6 +65,10 @@
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
 #endif
+#if defined(ZANDRONUM_GLES_BACKEND)
+#include "r_renderer.h"
+EXTERN_CVAR(Int, vid_renderer)
+#endif
 
 EXTERN_CVAR(Bool, gl_render_precise)
 EXTERN_CVAR(Int, gl_lightmode)
@@ -631,8 +635,10 @@ FMaterial::FMaterial(FTexture * tx, bool forceexpand)
 		expanded = false;
 	}
 	else if (gl.shadermodel > 2
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	#if defined(__ANDROID__)
 		|| gl_GLES_GetCapabilities().majorVersion >= 3
+	#elif defined(ZANDRONUM_GLES_BACKEND)
+		|| (vid_renderer == RENDERER_GLES && gl_GLES_GetCapabilities().majorVersion >= 3)
 #endif
 	)
 	{
@@ -1150,8 +1156,11 @@ FMaterial * FMaterial::ValidateTexture(FTextureID no, bool translate)
 
 void FMaterial::FlushAll()
 {
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#if defined(__ANDROID__)
 	gl_GLES_ClearMaterialCache();
+#elif defined(ZANDRONUM_GLES_BACKEND)
+	if (vid_renderer == RENDERER_GLES)
+		gl_GLES_ClearMaterialCache();
 #endif
 	for(int i=mMaterials.Size()-1;i>=0;i--)
 	{

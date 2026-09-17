@@ -3,7 +3,8 @@
 
 #include "hardware.h"
 
-void I_WaitForFPSLimit();
+double I_WaitForFPSLimit();
+void I_GetAndroidFPSLimitState(int *displayLimit, int *effectiveLimit);
 
 class AndroidGLVideo : public IVideo
 {

@@ -2,11 +2,18 @@
 
 #ifdef __ANDROID__
 
+#include <chrono>
+
 #include "c_console.h"
+#include "c_cvars.h"
 #include "gl/system/gl_framebuffer.h"
 #include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_renderer.h"
 #include "gl/renderer/gl_renderer.h"
 #include "zandronum_android_host.h"
+
+EXTERN_CVAR(Int, vid_maxfps)
+EXTERN_CVAR(Bool, cl_capfps)
 
 IMPLEMENT_ABSTRACT_CLASS(AndroidGLFB)
 
@@ -101,8 +108,16 @@ bool AndroidGLFB::IsFullscreen()
 
 void AndroidGLFB::SwapBuffers()
 {
-	I_WaitForFPSLimit();
-	gl_GLES_PresentFrame();
+	const double waitMilliseconds = I_WaitForFPSLimit();
+	const std::chrono::steady_clock::time_point presentStart = std::chrono::steady_clock::now();
+	const bool presented = gl_GLES_PresentFrame();
+	const std::chrono::duration<double, std::milli> presentElapsed =
+		std::chrono::steady_clock::now() - presentStart;
+	int displayLimit = 0;
+	int effectiveLimit = 0;
+	I_GetAndroidFPSLimitState(&displayLimit, &effectiveLimit);
+	gl_GLES_RecordHostPresentation(waitMilliseconds, presentElapsed.count(), presented,
+		static_cast<int>(vid_maxfps), cl_capfps ? 1 : 0, displayLimit, effectiveLimit);
 }
 
 bool AndroidGLFB::CanUpdate()

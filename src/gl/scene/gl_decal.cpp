@@ -422,8 +422,9 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		}
 		const bool masked = textureHandle != 0 && (tex->isMasked() || decal->RenderStyle.SrcAlpha == STYLEALPHA_One);
 		const bool nativeFuzz = decal->RenderStyle.BlendOp == STYLEOP_Fuzz;
+		const bool sourceAlphaBlend = decal->RenderStyle.SrcAlpha == STYLEALPHA_Src;
 		EGLESBlendMode blendMode = nativeFuzz ? GLES_BLEND_FUZZ :
-			a < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
+			(sourceAlphaBlend || a < 0.999f) ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
 		switch (decal->RenderStyle.BlendOp)
 		{
 		case STYLEOP_Add:
@@ -441,6 +442,7 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		gl_GLES_AddWall(positions, texcoords, color, a, textureHandle, masked,
 			nativeFog, false, fogColor, fogDensity, blendMode,
 			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
+			GLES_MATERIAL_DECAL |
 			((decal->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
 			((decal->RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
 			((decal->RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |

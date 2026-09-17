@@ -23,6 +23,8 @@ void Zandronum_AndroidInput_Action(int action, bool pressed);
 void Zandronum_AndroidInput_MenuAction(int direction, bool pressed);
 void Zandronum_AndroidInput_ApplyAction(int action, bool pressed);
 void Zandronum_AndroidInput_ApplyAxes(float axes[]);
+void Zandronum_AndroidInput_UpdateOverlayMode();
+int Zandronum_AndroidInput_GetOverlayMode();
 #endif
 
 #endif

@@ -1487,7 +1487,9 @@ void C_DrawConsole (bool hw2d)
 	const int drawWidth = g_bScale ? con_virtualwidth : SCREENWIDTH;
 	const int drawHeight = g_bScale ? con_virtualheight : SCREENHEIGHT;
 	const int fontHeight = ConFont->GetHeight ();
-	const int consoleCols = (drawWidth - LEFTMARGIN - RIGHTMARGIN) / ConFont->GetCharWidth ('M');
+	const bool extraWideSafeArea = SCREENWIDTH > SCREENHEIGHT * 2;
+	const int rightMargin = extraWideSafeArea ? 24 : RIGHTMARGIN;
+	const int consoleCols = (drawWidth - LEFTMARGIN - rightMargin) / ConFont->GetCharWidth ('M');
 
 	// [AK] Check if we should interpolate the console.
 	const bool bInterpolate = ((con_interpolate) && (ConsoleState == c_falling || ConsoleState == c_rising));
@@ -1562,7 +1564,7 @@ void C_DrawConsole (bool hw2d)
 			versionString.Format( "v%s (" TEXTCOLOR_GREEN "%s" TEXTCOLOR_NORMAL ") ", GetVersionString( ), ZDOOMVERSIONSTR );
 			versionString.AppendFormat( TEXTCOLOR_BLUE "%s", GetGitTime( ));
 
-			C_DrawConsoleText (ConFont, CR_ORANGE, drawWidth - 8 -
+			C_DrawConsoleText (ConFont, CR_ORANGE, drawWidth - rightMargin -
 				ConFont->StringWidth( versionString.GetChars( )),
 				drawBottom - fontHeight - 4,
 				versionString.GetChars( ));

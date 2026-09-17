@@ -120,10 +120,9 @@ public:
 		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 		if (gl_GLES_IsActive())
 		{
+			DBaseStatusBar::Draw(state);
 			if (state == HUD_StatusBar)
 			{
-				if (setblocks <= 10)
-					RefreshBackground();
 				// The native renderer rebuilds the 2D batch every frame. Keep the
 				// complete status bar submission independent of the retained-frame
 				// refresh counters used by the desktop framebuffer.

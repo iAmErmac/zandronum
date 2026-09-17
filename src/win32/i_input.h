@@ -90,6 +90,7 @@ public:
 	~FKeyboard();
 
 	void AllKeysUp();
+	void PostSysRqEvent(bool down);
 
 protected:
 	BYTE KeyStates[256/8];

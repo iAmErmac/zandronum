@@ -7,7 +7,9 @@
 #include <string>
 
 bool Zandronum_AndroidHost_IsSurfaceReady();
+bool Zandronum_AndroidHost_IsPaused();
 bool Zandronum_AndroidHost_IsStopping();
+void Zandronum_AndroidHost_WaitWhilePaused();
 bool Zandronum_AndroidHost_SwapBuffers();
 void Zandronum_AndroidHost_ProcessSurfaceState();
 int Zandronum_AndroidHost_GetWidth();

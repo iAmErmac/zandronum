@@ -553,27 +553,28 @@ static void RenderBox(FTextureID texno, FMaterial * gltex, float x_offset, int C
 void GLSkyPortal::DrawContents()
 {
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
 	{
-	if (!gl_GLES_IsActive() || origin == NULL || origin->texture[0] == NULL)
-		return;
+		if (origin == NULL || origin->texture[0] == NULL)
+			return;
 
-	for (unsigned int index = 0; index < lines.Size(); ++index)
-	{
-		const GLWall &line = lines[index];
-		const float positions[12] =
+		for (unsigned int index = 0; index < lines.Size(); ++index)
 		{
-			line.glseg.x1, line.zbottom[0], line.glseg.y1,
-			line.glseg.x1, line.ztop[0], line.glseg.y1,
-			line.glseg.x2, line.ztop[1], line.glseg.y2,
-			line.glseg.x2, line.zbottom[1], line.glseg.y2
-		};
-		gl_GLES_AddSkyMask(positions);
-	}
-	gl_GLES_SetSky(origin->texture[0], origin->x_offset[0], origin->y_offset,
-		origin->mirrored, origin->sky2, origin->fadecolor);
-	if (origin->doublesky && origin->texture[1] != NULL)
-		gl_GLES_SetSkyLayer(origin->texture[1], origin->x_offset[1], origin->y_offset, false);
-	return;
+			const GLWall &line = lines[index];
+			const float positions[12] =
+			{
+				line.glseg.x1, line.zbottom[0], line.glseg.y1,
+				line.glseg.x1, line.ztop[0], line.glseg.y1,
+				line.glseg.x2, line.ztop[1], line.glseg.y2,
+				line.glseg.x2, line.zbottom[1], line.glseg.y2
+			};
+			gl_GLES_AddSkyMask(positions);
+		}
+		gl_GLES_SetSky(origin->texture[0], origin->x_offset[0], origin->y_offset,
+			origin->mirrored, origin->sky2, origin->fadecolor);
+		if (origin->doublesky && origin->texture[1] != NULL)
+			gl_GLES_SetSkyLayer(origin->texture[1], origin->x_offset[1], origin->y_offset, false);
+		return;
 	}
 #endif
 #if !defined(__ANDROID__)
