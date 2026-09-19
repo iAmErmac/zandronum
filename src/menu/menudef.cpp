@@ -1369,6 +1369,9 @@ static void InitKeySections()
 					menu->mItems.Push(item);
 				}
 			}
+
+			menu->mItems.Push(new FOptionMenuItemStaticText(" ", false));
+			menu->mItems.Push(new FOptionMenuItemSafeCommand("Reset to Defaults", "resetbinddefaults"));
 		}
 	}
 }

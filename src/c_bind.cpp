@@ -858,6 +858,11 @@ CCMD(binddefaults)
 	C_BindDefaults ();
 }
 
+CCMD(resetbinddefaults)
+{
+	C_SetDefaultBindings ();
+}
+
 void C_SetDefaultBindings ()
 {
 	C_UnbindAll ();

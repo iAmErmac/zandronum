@@ -368,7 +368,6 @@ bool DOptionMenu::MouseEvent(int type, int x, int y)
 			return true;
 		}
 	}
-	mDesc->mSelectedItem = -1;
 	return Super::MouseEvent(type, x, y);
 }
 

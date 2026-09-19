@@ -384,6 +384,18 @@ public:
 		return false;
 	}
 
+	bool MenuEvent(int mkey, bool fromcontroller)
+	{
+		if (mkey == MKEY_Clear)
+		{
+			menuactive = MENU_On;
+			SetMenuMessage(0);
+			Close();
+			return true;
+		}
+		return DMenu::MenuEvent(mkey, fromcontroller);
+	}
+
 	void Drawer()
 	{
 		mParentMenu->Drawer();
@@ -448,6 +460,7 @@ public:
 		}
 		else if (mkey == MKEY_Clear)
 		{
+			mWaiting = false;
 			mBindings->UnbindACommand(mAction);
 			return true;
 		}

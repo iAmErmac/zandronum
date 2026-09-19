@@ -68,6 +68,17 @@ void DListMenu::Init(DMenu *parent, FListMenuDescriptor *desc)
 	mParentMenu = parent;
 	GC::WriteBarrier(this, parent);
 	mDesc = desc;
+	if (mDesc != NULL && mDesc->mSelectedItem == -1)
+	{
+		for (unsigned i = 0; i < mDesc->mItems.Size(); ++i)
+		{
+			if (mDesc->mItems[i]->Selectable())
+			{
+				mDesc->mSelectedItem = i;
+				break;
+			}
+		}
+	}
 	if (desc->mCenter)
 	{
 		int center = 160;
@@ -198,8 +209,6 @@ bool DListMenu::MenuEvent (int mkey, bool fromcontroller)
 
 bool DListMenu::MouseEvent(int type, int x, int y)
 {
-	int sel = -1;
-
 	// convert x/y from screen to virtual coordinates, according to CleanX/Yfac use in DrawTexture
 	x = ((x - (screen->GetWidth() / 2)) / CleanXfac) + 160;
 	y = ((y - (screen->GetHeight() / 2)) / CleanYfac) + 100;
@@ -229,7 +238,6 @@ bool DListMenu::MouseEvent(int type, int x, int y)
 			}
 		}
 	}
-	mDesc->mSelectedItem = -1;
 	return Super::MouseEvent(type, x, y);
 }
 

@@ -15,6 +15,7 @@
 #include "doomstat.h"
 #include "m_joy.h"
 #include "menu/menu.h"
+#include "scoreboard.h"
 #include "sdl/dikeys.h"
 
 static std::atomic<float> AndroidTouchAxes[2] = {};
@@ -54,9 +55,13 @@ enum AndroidAction
 	ANDROID_ACTION_MENU_DOWN,
 	ANDROID_ACTION_MENU_LEFT,
 	ANDROID_ACTION_MENU_RIGHT,
+	ANDROID_ACTION_USE_ITEM = 39,
+	ANDROID_ACTION_SCORE_SCROLL_UP = 40,
+	ANDROID_ACTION_SCORE_SCROLL_DOWN,
 };
 
 static constexpr int AndroidTouchKeyBase = 0x7000;
+static constexpr int AndroidTouchScoreboardKeyBase = AndroidTouchKeyBase + 0x40;
 
 static void PostKey(int keycode, bool pressed, int character = 0)
 {
@@ -100,6 +105,14 @@ void Zandronum_AndroidInput_Key(int keycode, bool pressed)
 		const int digit = keycode - 7;
 		translated = digit == 0 ? DIK_0 : DIK_1 + digit - 1;
 		character = '0' + digit;
+	}
+	else if (keycode >= 145 && keycode <= 152)
+	{
+		static const int numpadKeys[] = {
+			DIK_NUMPAD1, DIK_NUMPAD2, DIK_NUMPAD3, DIK_NUMPAD4,
+			DIK_NUMPAD5, DIK_NUMPAD6, DIK_NUMPAD7, DIK_NUMPAD8
+		};
+		translated = numpadKeys[keycode - 145];
 	}
 	else
 	{
@@ -318,6 +331,8 @@ void Zandronum_AndroidInput_Reset()
 	AndroidLookY.store(0);
 	AndroidTouchJump.Reset();
 	AndroidTouchCrouch.Reset();
+	Button_SB_ScrollUp.ReleaseKey(AndroidTouchScoreboardKeyBase);
+	Button_SB_ScrollDn.ReleaseKey(AndroidTouchScoreboardKeyBase + 1);
 }
 
 void Zandronum_AndroidInput_UpdateOverlayMode()
@@ -376,11 +391,48 @@ void Zandronum_AndroidInput_Action(int action, bool pressed)
 	D_PostEvent(&event);
 }
 
+void Zandronum_AndroidInput_MenuClear()
+{
+	if (menuactive == MENU_Off || DMenu::CurrentMenu == nullptr)
+		return;
+
+	if (menuactive == MENU_WaitKey && DMenu::CurrentMenu->mParentMenu != nullptr)
+	{
+		DMenu *inputMenu = DMenu::CurrentMenu;
+		DMenu *parentMenu = inputMenu->mParentMenu;
+		menuactive = MENU_On;
+		parentMenu->MenuEvent(MKEY_Clear, true);
+		inputMenu->MenuEvent(MKEY_Clear, true);
+		return;
+	}
+
+	DMenu::CurrentMenu->MenuEvent(MKEY_Clear, true);
+}
+
 void Zandronum_AndroidInput_MenuAction(int direction, bool pressed)
 {
 	if (direction < 0 || direction > 3)
 		return;
-	Zandronum_AndroidInput_Action(ANDROID_ACTION_MENU_UP + direction, pressed);
+	if (menuactive == MENU_WaitKey)
+		return;
+	static const int androidDpadKeys[] = {
+		19, 20, 21, 22
+	};
+	Zandronum_AndroidInput_Key(androidDpadKeys[direction], pressed);
+}
+
+void Zandronum_AndroidInput_ScoreboardScroll(int direction, bool pressed)
+{
+	if (direction < 0 || direction > 1)
+		return;
+	Zandronum_AndroidInput_Action(
+		direction == 0 ? ANDROID_ACTION_SCORE_SCROLL_UP : ANDROID_ACTION_SCORE_SCROLL_DOWN,
+		pressed);
+}
+
+bool Zandronum_AndroidInput_ScoreboardActive()
+{
+	return Button_ShowScores.bDown && SCOREBOARD_ShouldDrawBoard();
 }
 
 void Zandronum_AndroidInput_ApplyAction(int action, bool pressed)
@@ -393,6 +445,22 @@ void Zandronum_AndroidInput_ApplyAction(int action, bool pressed)
 				KEY_PAD_DPAD_UP, KEY_PAD_DPAD_DOWN, KEY_PAD_DPAD_LEFT, KEY_PAD_DPAD_RIGHT
 			};
 			PostKey(menuKeys[action - ANDROID_ACTION_MENU_UP], pressed);
+		}
+		return;
+	}
+
+	if (action == ANDROID_ACTION_SCORE_SCROLL_UP || action == ANDROID_ACTION_SCORE_SCROLL_DOWN)
+	{
+		if (menuactive == MENU_Off)
+		{
+			FButtonStatus *button = action == ANDROID_ACTION_SCORE_SCROLL_UP
+				? &Button_SB_ScrollUp : &Button_SB_ScrollDn;
+			const int key = AndroidTouchScoreboardKeyBase +
+				(action == ANDROID_ACTION_SCORE_SCROLL_UP ? 0 : 1);
+			if (pressed)
+				button->PressKey(key);
+			else
+				button->ReleaseKey(key);
 		}
 		return;
 	}
@@ -457,6 +525,7 @@ void Zandronum_AndroidInput_ApplyAction(int action, bool pressed)
 	case ANDROID_ACTION_ITEM_NEXT: C_DoCommand("invnext"); break;
 	case ANDROID_ACTION_DROP_ITEM: C_DoCommand("invdrop"); break;
 	case ANDROID_ACTION_DROP_WEAPON: C_DoCommand("weapdrop"); break;
+	case ANDROID_ACTION_USE_ITEM: C_DoCommand("invuse"); break;
 	case ANDROID_ACTION_CONSOLE: C_ToggleConsole(); break;
 	case ANDROID_ACTION_AUTOMAP: C_DoCommand("togglemap"); break;
 	case ANDROID_ACTION_CHAT:

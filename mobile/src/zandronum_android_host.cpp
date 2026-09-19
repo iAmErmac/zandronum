@@ -802,9 +802,24 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_
 	Zandronum_AndroidInput_Action(static_cast<int>(action), pressed != 0);
 }
 
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMenuClear(JNIEnv *, jclass)
+{
+	Zandronum_AndroidInput_MenuClear();
+}
+
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputMenuAction(JNIEnv *, jclass, jint direction, jboolean pressed)
 {
 	Zandronum_AndroidInput_MenuAction(static_cast<int>(direction), pressed != 0);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputScoreboardScroll(JNIEnv *, jclass, jint direction, jboolean pressed)
+{
+	Zandronum_AndroidInput_ScoreboardScroll(static_cast<int>(direction), pressed != 0);
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActivity_nativeIsScoreboardActive(JNIEnv *, jclass)
+{
+	return Zandronum_AndroidInput_ScoreboardActive() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT jint Java_com_ermac_zandromeda_GLES3JNIActivity_nativeGetOverlayMode(JNIEnv *, jclass)

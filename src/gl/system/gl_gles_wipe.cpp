@@ -160,8 +160,9 @@ namespace
 		{
 			for (int x = 0; x < FGLESWipe::BurnWidth; ++x)
 			{
+				const int sourceY = FGLESWipe::BurnHeight - 1 - y;
 				const int intensity = std::max(0, std::min(255,
-					static_cast<int>(Wipe.burnArray[y * FGLESWipe::BurnWidth + x]) * 2));
+					static_cast<int>(Wipe.burnArray[sourceY * FGLESWipe::BurnWidth + x]) * 2));
 				SetMaskPixel(Wipe.maskPixels, FGLESWipe::BurnWidth, x, y,
 					static_cast<BYTE>(intensity));
 			}
