@@ -372,10 +372,37 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 
 void GLWall::RenderFogBoundary()
 {
-#if defined(__ANDROID__)
-	return;
-#elif defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive()) return;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		OVERRIDE_FOGMODE_IF_NECESSARY
+		if (!gl_fogmode || gl_fixedcolormap != 0) return;
+
+		PalEntry fog = Colormap.FadeColor;
+		float fogDensity = 0.0f;
+		if (level.flags & LEVEL_HASFADETABLE)
+		{
+			fog = 0x808080;
+			fogDensity = 70.0f;
+		}
+		else
+		{
+			fogDensity = gl_GetFogDensity(lightlevel, fog);
+			gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
+		}
+		const float fogColor[3] = { fog.r / 255.0f, fog.g / 255.0f, fog.b / 255.0f };
+		const float color[3] = { 1.0f, 1.0f, 1.0f };
+		const float positions[12] =
+		{
+			glseg.x1, zbottom[0], glseg.y1,
+			glseg.x1, ztop[0], glseg.y1,
+			glseg.x2, ztop[1], glseg.y2,
+			glseg.x2, zbottom[1], glseg.y2
+		};
+		gl_GLES_AddWall(positions, NULL, color, 1.0f, 0, false, true, false,
+			fogColor, fogDensity, GLES_BLEND_ALPHA, GLES_MATERIAL_FOG_BOUNDARY);
+		return;
+	}
 #endif
 #if !defined(__ANDROID__)
 	// [BB/EP] Take care of gl_fogmode and ZADF_FORCE_VIDEO_DEFAULTS.
@@ -441,10 +468,50 @@ void GLWall::RenderFogBoundary()
 //==========================================================================
 void GLWall::RenderMirrorSurface()
 {
-#if defined(__ANDROID__)
-	return;
-#elif defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive()) return;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		OVERRIDE_FOGMODE_IF_NECESSARY
+		if (GLRenderer->mirrortexture == NULL) return;
+		FMaterial *material = FMaterial::ValidateTexture(GLRenderer->mirrortexture);
+		if (material == NULL) return;
+		const unsigned int texture = material->BindNative(Colormap.colormap, 0, false);
+		if (texture == 0) return;
+		float color[3];
+		gl_GetLightColor(lightlevel, 0, &Colormap, color + 0, color + 1, color + 2);
+		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
+		float fogDensity = 0.0f;
+		const bool nativeFog = gl_fogmode != 0 && ((level.flags & LEVEL_HASFADETABLE) || !gl_fixedcolormap);
+		if (nativeFog)
+		{
+			PalEntry fog = Colormap.FadeColor;
+			if (level.flags & LEVEL_HASFADETABLE)
+			{
+				fog = 0x808080;
+				fogDensity = 70.0f;
+			}
+			else
+			{
+				fogDensity = gl_GetFogDensity(lightlevel, fog);
+				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
+			}
+			// Additive mirror fog uses black to avoid applying the scene fog color twice.
+			fogColor[0] = 0.0f;
+			fogColor[1] = 0.0f;
+			fogColor[2] = 0.0f;
+		}
+		const float positions[12] =
+		{
+			glseg.x1, zbottom[0], glseg.y1,
+			glseg.x1, ztop[0], glseg.y1,
+			glseg.x2, ztop[1], glseg.y2,
+			glseg.x2, zbottom[1], glseg.y2
+		};
+		gl_GLES_AddWall(positions, NULL, color, 0.1f, texture, false, nativeFog, false,
+			fogColor, fogDensity, GLES_BLEND_ADD, GLES_MATERIAL_SPHERE_MAP);
+		if (seg->sidedef->AttachedDecals) DoDrawDecals();
+		return;
+	}
 #endif
 #if !defined(__ANDROID__)
 	if (GLRenderer->mirrortexture == NULL) return;

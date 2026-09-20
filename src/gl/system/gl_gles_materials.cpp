@@ -6,6 +6,8 @@
 #include <GLES3/gl32.h>
 #endif
 #include <string.h>
+#include <functional>
+#include <unordered_map>
 #include <vector>
 
 #include "gl/system/gl_gles_dispatch.h"
@@ -27,20 +29,59 @@ namespace
 		std::vector<unsigned char> pixels;
 	};
 
+	struct FGLESMaterialKey
+	{
+		const void *key;
+		int colormap;
+		int translation;
+		bool repeat;
+		bool allowhires;
+
+		bool operator==(const FGLESMaterialKey &other) const
+		{
+			return key == other.key && colormap == other.colormap &&
+				translation == other.translation && repeat == other.repeat &&
+				allowhires == other.allowhires;
+		}
+	};
+
+	struct FGLESMaterialKeyHash
+	{
+		size_t operator()(const FGLESMaterialKey &value) const
+		{
+			size_t hash = std::hash<const void *>()(value.key);
+			hash ^= static_cast<size_t>(value.colormap) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+			hash ^= static_cast<size_t>(value.translation) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+			hash ^= static_cast<size_t>(value.repeat) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+			return hash ^ (static_cast<size_t>(value.allowhires) + 0x9e3779b9 + (hash << 6) + (hash >> 2));
+		}
+	};
+
 	std::vector<FGLESMaterialTexture> MaterialTextures;
+	std::unordered_map<FGLESMaterialKey, size_t, FGLESMaterialKeyHash> MaterialTextureIndices;
+
+	FGLESMaterialKey MakeMaterialKey(const void *key, int colormap, int translation,
+		bool repeat, bool allowhires)
+	{
+		return { key, colormap, translation, repeat, allowhires };
+	}
+
+	FGLESMaterialTexture *FindMaterialEntry(const FGLESMaterialKey &key)
+	{
+		const auto found = MaterialTextureIndices.find(key);
+		if (found == MaterialTextureIndices.end() || found->second >= MaterialTextures.size())
+			return nullptr;
+		return &MaterialTextures[found->second];
+	}
 }
 
 GLuint gl_GLESInternalFindMaterialTexture(const void *key, int colormap, int translation,
 	bool repeat, bool allowhires, int width, int height)
 {
-	for (size_t i = 0; i < MaterialTextures.size(); ++i)
-	{
-		const FGLESMaterialTexture &entry = MaterialTextures[i];
-		if (entry.key == key && entry.colormap == colormap && entry.translation == translation &&
-			entry.repeat == repeat && entry.allowhires == allowhires && entry.texture != 0 &&
-			entry.width == width && entry.height == height)
-			return entry.texture;
-	}
+	const FGLESMaterialTexture *entry = FindMaterialEntry(
+		MakeMaterialKey(key, colormap, translation, repeat, allowhires));
+	if (entry != nullptr && entry->texture != 0 && entry->width == width && entry->height == height)
+		return entry->texture;
 	return 0;
 }
 
@@ -51,30 +92,15 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	if (!resourcesAvailable || key == NULL || pixels == NULL || width <= 0 || height <= 0)
 		return 0;
 	const size_t pixelBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-	for (size_t i = 0; i < MaterialTextures.size(); ++i)
+	const FGLESMaterialKey materialKey = MakeMaterialKey(key, colormap, translation, repeat, allowhires);
+	FGLESMaterialTexture *entry = FindMaterialEntry(materialKey);
+	if (entry != NULL)
 	{
-		FGLESMaterialTexture &entry = MaterialTextures[i];
-		if (entry.key == key && entry.colormap == colormap && entry.translation == translation &&
-			entry.repeat == repeat && entry.allowhires == allowhires)
-		{
-			if (entry.framebufferContent && entry.texture != 0 && entry.width == width && entry.height == height)
-				return entry.texture;
-			if (entry.texture != 0 && entry.width == width && entry.height == height &&
-				entry.pixels.size() == pixelBytes && memcmp(entry.pixels.data(), pixels, pixelBytes) == 0)
-				return entry.texture;
-			break;
-		}
-	}
-	FGLESMaterialTexture *entry = NULL;
-	for (size_t i = 0; i < MaterialTextures.size(); ++i)
-	{
-		FGLESMaterialTexture &candidate = MaterialTextures[i];
-		if (candidate.key == key && candidate.colormap == colormap && candidate.translation == translation &&
-			candidate.repeat == repeat && candidate.allowhires == allowhires)
-		{
-			entry = &candidate;
-			break;
-		}
+		if (entry->framebufferContent && entry->texture != 0 && entry->width == width && entry->height == height)
+			return entry->texture;
+		if (entry->texture != 0 && entry->width == width && entry->height == height &&
+			entry->pixels.size() == pixelBytes && memcmp(entry->pixels.data(), pixels, pixelBytes) == 0)
+			return entry->texture;
 	}
 	if (entry == NULL)
 	{
@@ -88,6 +114,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 		value.repeat = repeat;
 		value.palette = palette;
 		MaterialTextures.push_back(value);
+		MaterialTextureIndices.emplace(materialKey, MaterialTextures.size() - 1);
 		entry = &MaterialTextures.back();
 	}
 	if (entry->width != width || entry->height != height)
@@ -151,16 +178,9 @@ void gl_GLESInternalMarkMaterialFramebufferContent(const void *key, int colormap
 	int translation, bool repeat, bool allowhires)
 {
 	if (key == NULL) return;
-	for (size_t i = 0; i < MaterialTextures.size(); ++i)
-	{
-		FGLESMaterialTexture &entry = MaterialTextures[i];
-		if (entry.key == key && entry.colormap == colormap && entry.translation == translation &&
-			entry.repeat == repeat && entry.allowhires == allowhires)
-		{
-			entry.framebufferContent = true;
-			return;
-		}
-	}
+	FGLESMaterialTexture *entry = FindMaterialEntry(
+		MakeMaterialKey(key, colormap, translation, repeat, allowhires));
+	if (entry != NULL) entry->framebufferContent = true;
 }
 
 void gl_GLESInternalDeleteMaterialTextures()
@@ -182,6 +202,7 @@ void gl_GLESInternalClearMaterials(bool contextAvailable)
 {
 	if (contextAvailable) gl_GLESInternalDeleteMaterialTextures();
 	MaterialTextures.clear();
+	MaterialTextureIndices.clear();
 }
 
 #endif

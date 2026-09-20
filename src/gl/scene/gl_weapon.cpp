@@ -73,7 +73,7 @@ EXTERN_CVAR (Bool, r_deathcamera)
 //
 //==========================================================================
 
-void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader, float nativeAlpha, unsigned int nativeMaterialFlags)
+void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader, float nativeAlpha, unsigned int nativeMaterialFlags, uint32 nativeStyle)
 {
 	float			fU1,fV1;
 	float			fU2,fV2;
@@ -184,10 +184,27 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		const float texcoords[8] = { nativeLeft, 0.0f, nativeLeft, 1.0f,
 			nativeRight, 1.0f, nativeRight, 0.0f };
 		const unsigned int texture = tex->BindNative(cm_index, 0, false);
-		const EGLESBlendMode blendMode = nativeAlpha < 0.999f ?
-			GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
+		FRenderStyle style = {};
+		style.AsDWORD = nativeStyle;
+		int textureMode = 0;
+		int sourceBlend = GL_SRC_ALPHA;
+		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
+		int blendEquation = GL_FUNC_ADD;
+		gl_GetRenderStyle(style, false, false, &textureMode, &sourceBlend, &destinationBlend, &blendEquation);
+		EGLESBlendMode blendMode = GLES_BLEND_ALPHA;
+		if ((nativeMaterialFlags & GLES_MATERIAL_FUZZ) != 0) blendMode = GLES_BLEND_FUZZ;
+		else if (style.BlendOp == STYLEOP_Sub) blendMode = GLES_BLEND_SUBTRACT;
+		else if (style.BlendOp == STYLEOP_RevSub) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
+		else if (style.BlendOp == STYLEOP_Add && style.DestAlpha == STYLEALPHA_One) blendMode = GLES_BLEND_ADD;
+		else if (sourceBlend == GL_ONE && destinationBlend == GL_ZERO && nativeAlpha >= 0.999f)
+			blendMode = GLES_BLEND_OPAQUE;
+		const bool customBlend = blendMode != GLES_BLEND_OPAQUE && blendMode != GLES_BLEND_FUZZ;
+		const bool masked = tex->isMasked() && !tex->GetTransparent() &&
+			OverrideShader == 0;
+		const float alphaCutoff = masked ? nativeAlpha * gl_mask_sprite_threshold : 0.5f;
 		gl_GLES_AddHUDQuad(positions, texcoords, NULL, nativeAlpha,
-			tex->isMasked(), texture, blendMode, nativeMaterialFlags);
+			masked, texture, blendMode, nativeMaterialFlags, customBlend, sourceBlend,
+			destinationBlend, alphaCutoff);
 		return;
 	}
 #endif
@@ -457,7 +474,8 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 				((vis.RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
 				((vis.RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0);
 			#endif
-			DrawPSprite (player,psp,psp->sx+ofsx, psp->sy+ofsy, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags);
+			DrawPSprite (player,psp,psp->sx+ofsx, psp->sy+ofsy, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags,
+				vis.RenderStyle.AsDWORD);
 		}
 	}
 	gl_RenderState.EnableBrightmap(false);

@@ -1518,7 +1518,7 @@ void FGLInterface::Init()
 // Camera texture rendering
 //
 //===========================================================================
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND) // Native GLES uses framebuffer targets for camera textures.
+#if defined(__ANDROID__) // Native GLES uses framebuffer targets for camera textures.
 CVAR(Bool, gl_usefb, true , CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 #else
 CVAR(Bool, gl_usefb, false , CVAR_ARCHIVE|CVAR_GLOBALCONFIG)

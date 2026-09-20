@@ -86,6 +86,10 @@ namespace
 		GLsizei floodWallFirstIndex;
 		unsigned int materialFlags;
 		EGLESBlendMode blendMode;
+		bool customBlend;
+		GLenum sourceBlend;
+		GLenum destinationBlend;
+		float alphaCutoff;
 		float sortDepth;
 		float fogColor[3];
 		float fogDensity;
@@ -310,6 +314,8 @@ namespace
 		// GLES 3.2 core indices keep large model surfaces in the shared stream.
 		std::vector<GLuint> sceneIndices;
 		std::vector<FSceneBatch> sceneBatches;
+		std::vector<FGLESSceneOrderRecord> sceneOrderRecords;
+		std::vector<FGLESSceneOrderRecord> portalOrderRecords;
 		std::vector<FNativePortalTarget> portalTargets;
 		FNativeSkyRecord outerSky;
 		FMaterial *skyMaterial;
@@ -325,7 +331,22 @@ namespace
 		PalEntry skyLowerCapColor;
 		PalEntry skyFogColor;
 		bool skyFogEnabled;
+		unsigned int sceneWallCount;
+		unsigned int sceneFlatCount;
 		unsigned int sceneSpriteCount;
+		unsigned int sceneOpaqueBatchMerges;
+		unsigned int sceneProgramBinds;
+		unsigned int sceneProgramBindSkips;
+		unsigned int sceneTextureBinds;
+		unsigned int sceneTextureBindSkips;
+		unsigned int sceneSamplerBinds;
+		unsigned int sceneSamplerBindSkips;
+		unsigned int sceneOpaqueStateSets;
+		unsigned int sceneOpaqueStateSkips;
+		unsigned int sceneLightUniformUploads;
+		unsigned int sceneLightUniformUploadSkips;
+		unsigned int sceneGlowUniformUploads;
+		unsigned int sceneGlowUniformUploadSkips;
 		float viewProjection[16];
 		float cameraX;
 		float cameraY;
@@ -355,9 +376,14 @@ namespace
 	static FGLESTargetDescriptor *NativeActiveTarget = NULL;
 	static bool NativeOffscreenRender = false;
 	static bool NativeWipeOverlayCollecting = false;
+	static GLuint NativeBoundProgram = 0;
+	static bool NativeProgramBindingKnown = false;
 	static GLuint NativeGlowPrograms[5] = {};
 	static GLint NativeGlowTopLocations[5] = { -1, -1, -1, -1, -1 };
 	static GLint NativeGlowBottomLocations[5] = { -1, -1, -1, -1, -1 };
+	static GLfloat NativeGlowTopValues[5][4] = {};
+	static GLfloat NativeGlowBottomValues[5][4] = {};
+	static bool NativeGlowValuesKnown[5] = {};
 
 	static void SetNativeFullViewport(int width, int height)
 	{
@@ -373,6 +399,7 @@ namespace
 		{
 			NativeGlowTopLocations[i] = -1;
 			NativeGlowBottomLocations[i] = -1;
+			NativeGlowValuesKnown[i] = false;
 		}
 	}
 	static void SetNativeGlowUniforms(GLuint program, const FSceneBatch &batch)
@@ -391,11 +418,24 @@ namespace
 			NativeGlowPrograms[slot] = program;
 			NativeGlowTopLocations[slot] = glGetUniformLocation(program, "u_glow_top_color");
 			NativeGlowBottomLocations[slot] = glGetUniformLocation(program, "u_glow_bottom_color");
+			NativeGlowValuesKnown[slot] = false;
+		}
+		const bool unchanged = NativeGlowValuesKnown[slot] &&
+			memcmp(NativeGlowTopValues[slot], batch.glowTopColor, sizeof(batch.glowTopColor)) == 0 &&
+			memcmp(NativeGlowBottomValues[slot], batch.glowBottomColor, sizeof(batch.glowBottomColor)) == 0;
+		if (unchanged)
+		{
+			++Resources.sceneGlowUniformUploadSkips;
+			return;
 		}
 		if (NativeGlowTopLocations[slot] >= 0)
 			glUniform4fv(NativeGlowTopLocations[slot], 1, batch.glowTopColor);
 		if (NativeGlowBottomLocations[slot] >= 0)
 			glUniform4fv(NativeGlowBottomLocations[slot], 1, batch.glowBottomColor);
+		memcpy(NativeGlowTopValues[slot], batch.glowTopColor, sizeof(batch.glowTopColor));
+		memcpy(NativeGlowBottomValues[slot], batch.glowBottomColor, sizeof(batch.glowBottomColor));
+		NativeGlowValuesKnown[slot] = true;
+		++Resources.sceneGlowUniformUploads;
 	}
 	static std::vector<unsigned int> NativePortalCaptureStack;
 	// Bits 0 and 1 belong to the outer sky and flood masks. The remaining
@@ -505,6 +545,7 @@ namespace
 
 	static void DeleteResources(bool clearTextureCache)
 	{
+		gl_GLESInternalSceneInvalidateBuffers();
 		if (Resources.sceneProgram != 0) glDeleteProgram(Resources.sceneProgram);
 		if (Resources.fogProgram != 0) glDeleteProgram(Resources.fogProgram);
 		if (Resources.fogMaskedProgram != 0) glDeleteProgram(Resources.fogMaskedProgram);
@@ -653,6 +694,8 @@ namespace
 		Resources.sceneVertices.clear();
 		Resources.sceneIndices.clear();
 		Resources.sceneBatches.clear();
+		Resources.sceneOrderRecords.clear();
+		Resources.portalOrderRecords.clear();
 		gl_GLESInternalSceneClearLights();
 		Resources.portalTargets.clear();
 		NativePortalCaptureStack.clear();
@@ -671,6 +714,7 @@ namespace
 
 	static void InvalidateResources()
 	{
+		gl_GLESInternalSceneInvalidateBuffers();
 		Resources.sceneProgram = 0;
 		Resources.fogProgram = 0;
 		Resources.fogMaskedProgram = 0;
@@ -802,6 +846,8 @@ namespace
 		Resources.sceneVertices.clear();
 		Resources.sceneIndices.clear();
 		Resources.sceneBatches.clear();
+		Resources.sceneOrderRecords.clear();
+		Resources.portalOrderRecords.clear();
 		gl_GLESInternalSceneClearLights();
 		Resources.portalTargets.clear();
 		NativePortalCaptureStack.clear();
@@ -1008,6 +1054,14 @@ namespace
 	static void CopyNativeLightData(FSceneBatch &batch, const float *lightData,
 		const unsigned int *lightCounts)
 	{
+		if (lightData == NULL || lightCounts == NULL)
+		{
+			batch.lightOffset = 0;
+			batch.lightCount = 0;
+			batch.lightNormalCount = 0;
+			batch.lightSubtractiveCount = 0;
+			return;
+		}
 		FGLESSceneLightSelection selection = {};
 		gl_GLESInternalSceneAppendLights(lightData, lightCounts, &selection);
 		batch.lightOffset = selection.streamOffset;
@@ -1098,20 +1152,70 @@ namespace
 		return false;
 	}
 
+	static bool CanMergeOpaqueBatches(const FSceneBatch &previous, const FSceneBatch &batch)
+	{
+		// Keep every order-sensitive path as its own command. Consecutive opaque
+		// world quads sharing the exact selected-light payload are safe to submit together.
+		return !previous.translucent && !batch.translucent &&
+			previous.flat == batch.flat && !previous.hud && !batch.hud &&
+			!previous.wipeOverlay && !batch.wipeOverlay && !previous.model && !batch.model &&
+			!previous.cullBackFaces && !batch.cullBackFaces && !previous.skyMask && !batch.skyMask &&
+			!previous.flood && !batch.flood && !previous.portalMask && !batch.portalMask &&
+			previous.portalId < 0 && batch.portalId < 0 &&
+			previous.firstIndex + previous.indexCount == batch.firstIndex &&
+			previous.texture == batch.texture && previous.brightmap == batch.brightmap &&
+			previous.brightmapDesaturation == batch.brightmapDesaturation &&
+			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.repeat == batch.repeat && previous.palette == batch.palette &&
+			previous.materialFlags == batch.materialFlags && previous.blendMode == batch.blendMode &&
+			previous.customBlend == batch.customBlend && previous.sourceBlend == batch.sourceBlend &&
+			previous.destinationBlend == batch.destinationBlend &&
+			previous.alphaCutoff == batch.alphaCutoff &&
+			((previous.lightCount == 0 && batch.lightCount == 0) ||
+				(previous.lightOffset == batch.lightOffset &&
+				previous.lightNormalCount == batch.lightNormalCount &&
+				previous.lightSubtractiveCount == batch.lightSubtractiveCount &&
+				previous.lightCount == batch.lightCount &&
+				memcmp(previous.lightPlaneNormal, batch.lightPlaneNormal, sizeof(batch.lightPlaneNormal)) == 0)) &&
+			previous.clipPlaneEnabled == batch.clipPlaneEnabled &&
+			memcmp(previous.fogColor, batch.fogColor, sizeof(batch.fogColor)) == 0 &&
+			previous.fogDensity == batch.fogDensity &&
+			memcmp(previous.glowTopColor, batch.glowTopColor, sizeof(batch.glowTopColor)) == 0 &&
+			memcmp(previous.glowBottomColor, batch.glowBottomColor, sizeof(batch.glowBottomColor)) == 0 &&
+			memcmp(previous.viewProjection, batch.viewProjection, sizeof(batch.viewProjection)) == 0 &&
+			memcmp(previous.cameraPosition, batch.cameraPosition, sizeof(batch.cameraPosition)) == 0 &&
+			memcmp(previous.clipPlane, batch.clipPlane, sizeof(batch.clipPlane)) == 0;
+	}
+
+	static void AppendOpaqueBatch(FSceneBatch &batch)
+	{
+		if (!Resources.sceneBatches.empty() && CanMergeOpaqueBatches(Resources.sceneBatches.back(), batch))
+		{
+			Resources.sceneBatches.back().indexCount += batch.indexCount;
+			++Resources.sceneOpaqueBatchMerges;
+			return;
+		}
+		Resources.sceneBatches.push_back(batch);
+	}
+
 	static void AddSceneQuad(const FSceneVertex &a, const FSceneVertex &b,
 		const FSceneVertex &c, const FSceneVertex &d, GLuint texture, bool masked, bool fog, bool translucent, bool repeat,
 		EGLESBlendMode blendMode, const float *fogColor, float fogDensity, unsigned int materialFlags,
 		const float *lightData, const unsigned int *lightCounts, GLuint brightmap = 0,
 		int brightmapDesaturation = 0, const float *topGlowColor = NULL,
-		const float *bottomGlowColor = NULL)
+		const float *bottomGlowColor = NULL, bool customBlend = false,
+		GLenum sourceBlend = GL_SRC_ALPHA, GLenum destinationBlend = GL_ONE_MINUS_SRC_ALPHA,
+	float alphaCutoff = 0.5f, bool hud = false)
 	{
 		if (!CanAppendSceneGeometry(4, 6, "quad")) return;
-		const unsigned int first = AddSceneVertex(a);
-		const unsigned int second = AddSceneVertex(b);
-		const unsigned int third = AddSceneVertex(c);
-		const unsigned int fourth = AddSceneVertex(d);
-		if (fourth == 0xffffffffu || third == 0xffffffffu || second == 0xffffffffu || first == 0xffffffffu)
-			return;
+		const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
+		Resources.sceneVertices.push_back(a);
+		Resources.sceneVertices.push_back(b);
+		Resources.sceneVertices.push_back(c);
+		Resources.sceneVertices.push_back(d);
+		const unsigned int second = first + 1;
+		const unsigned int third = first + 2;
+		const unsigned int fourth = first + 3;
 		const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
 		Resources.sceneIndices.push_back(first);
 		Resources.sceneIndices.push_back(second);
@@ -1139,8 +1243,14 @@ namespace
 		batch.palette = IsPaletteTexture(texture);
 		batch.materialFlags = materialFlags;
 		batch.blendMode = blendMode;
-		SetLightPlaneNormal(batch, a, b, c);
+		batch.customBlend = customBlend;
+		batch.sourceBlend = sourceBlend;
+		batch.destinationBlend = destinationBlend;
+		batch.alphaCutoff = alphaCutoff;
+		batch.hud = hud;
 		CopyNativeLightData(batch, lightData, lightCounts);
+		if (batch.lightCount > 0)
+			SetLightPlaneNormal(batch, a, b, c);
 		batch.sortDepth = dx * dx + dy * dy + dz * dz;
 		if (fogColor != NULL)
 		{
@@ -1151,21 +1261,22 @@ namespace
 		batch.fogDensity = std::max(0.0f, fogDensity);
 		if (topGlowColor != NULL) memcpy(batch.glowTopColor, topGlowColor, sizeof(batch.glowTopColor));
 		if (bottomGlowColor != NULL) memcpy(batch.glowBottomColor, bottomGlowColor, sizeof(batch.glowBottomColor));
-		Resources.sceneBatches.push_back(batch);
+		AppendOpaqueBatch(batch);
 	}
 
 	static void AddHUDQuad(const FSceneVertex &a, const FSceneVertex &b,
 		const FSceneVertex &c, const FSceneVertex &d, GLuint texture, bool masked,
-		EGLESBlendMode blendMode, unsigned int materialFlags)
+		EGLESBlendMode blendMode, unsigned int materialFlags, bool customBlend = false,
+		GLenum sourceBlend = GL_SRC_ALPHA, GLenum destinationBlend = GL_ONE_MINUS_SRC_ALPHA,
+		float alphaCutoff = 0.5f)
 	{
 		const size_t batchCount = Resources.sceneBatches.size();
 		const bool translucent = masked || blendMode != GLES_BLEND_OPAQUE || a.a < 0.999f ||
 			b.a < 0.999f || c.a < 0.999f || d.a < 0.999f;
 		AddSceneQuad(a, b, c, d, texture, masked, false, translucent, false, blendMode, NULL, 0.0f, materialFlags,
-			NULL, NULL);
+			NULL, NULL, 0, 0, NULL, NULL, customBlend, sourceBlend, destinationBlend, alphaCutoff, true);
 		if (Resources.sceneBatches.size() <= batchCount) return;
 		FSceneBatch &batch = Resources.sceneBatches.back();
-		batch.hud = true;
 		if (!batch.wipeOverlay || Resources.sceneBatches.size() < 2) return;
 
 		FSceneBatch &previous = Resources.sceneBatches[Resources.sceneBatches.size() - 2];
@@ -1178,6 +1289,8 @@ namespace
 			previous.palette == batch.palette && previous.model == batch.model &&
 			previous.cullBackFaces == batch.cullBackFaces &&
 			previous.materialFlags == batch.materialFlags &&
+			previous.customBlend == batch.customBlend && previous.sourceBlend == batch.sourceBlend &&
+			previous.destinationBlend == batch.destinationBlend && previous.alphaCutoff == batch.alphaCutoff &&
 			previous.blendMode == batch.blendMode && previous.portalId == batch.portalId &&
 			previous.clipPlaneEnabled == batch.clipPlaneEnabled &&
 			memcmp(previous.viewProjection, batch.viewProjection, sizeof(batch.viewProjection)) == 0 &&
@@ -1386,7 +1499,7 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
 		static const char *fogMaskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1657,7 +1770,22 @@ unsigned int gl_GLES_GetShaderProgram(const char *name)
 
 void gl_GLES_UseProgram(unsigned int handle)
 {
-	glUseProgram(static_cast<GLuint>(handle));
+	const GLuint program = static_cast<GLuint>(handle);
+	if (NativeProgramBindingKnown && NativeBoundProgram == program)
+	{
+		++Resources.sceneProgramBindSkips;
+		return;
+	}
+	glUseProgram(program);
+	NativeBoundProgram = program;
+	NativeProgramBindingKnown = true;
+	++Resources.sceneProgramBinds;
+}
+
+void gl_GLESInternalInvalidateProgramBinding()
+{
+	NativeProgramBindingKnown = false;
+	NativeBoundProgram = 0;
 }
 
 bool gl_GLES_CollectCapabilities()
@@ -1755,8 +1883,24 @@ void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	Resources.portalTargets.clear();
 	NativePortalCaptureStack.clear();
 	gl_GLESInternalPortalBeginFrame();
+	NativeProgramBindingKnown = false;
 	ResetNativeSkyRecord(Resources.outerSky, -1, 1u);
+	Resources.sceneWallCount = 0;
+	Resources.sceneFlatCount = 0;
 	Resources.sceneSpriteCount = 0;
+	Resources.sceneOpaqueBatchMerges = 0;
+	Resources.sceneProgramBinds = 0;
+	Resources.sceneProgramBindSkips = 0;
+	Resources.sceneTextureBinds = 0;
+	Resources.sceneTextureBindSkips = 0;
+	Resources.sceneSamplerBinds = 0;
+	Resources.sceneSamplerBindSkips = 0;
+	Resources.sceneOpaqueStateSets = 0;
+	Resources.sceneOpaqueStateSkips = 0;
+	Resources.sceneLightUniformUploads = 0;
+	Resources.sceneLightUniformUploadSkips = 0;
+	Resources.sceneGlowUniformUploads = 0;
+	Resources.sceneGlowUniformUploadSkips = 0;
 	Resources.skyMaterial = NULL;
 	Resources.skyXOffset = 0.0f;
 	Resources.skyYOffset = 0.0f;
@@ -1789,7 +1933,23 @@ void gl_GLES_ClearScene()
 	ResetNativeSkyRecord(Resources.outerSky, -1, 1u);
 	Resources.sceneIndexCount = 0;
 	Resources.sceneReady = false;
+	NativeProgramBindingKnown = false;
+	Resources.sceneWallCount = 0;
+	Resources.sceneFlatCount = 0;
 	Resources.sceneSpriteCount = 0;
+	Resources.sceneOpaqueBatchMerges = 0;
+	Resources.sceneProgramBinds = 0;
+	Resources.sceneProgramBindSkips = 0;
+	Resources.sceneTextureBinds = 0;
+	Resources.sceneTextureBindSkips = 0;
+	Resources.sceneSamplerBinds = 0;
+	Resources.sceneSamplerBindSkips = 0;
+	Resources.sceneOpaqueStateSets = 0;
+	Resources.sceneOpaqueStateSkips = 0;
+	Resources.sceneLightUniformUploads = 0;
+	Resources.sceneLightUniformUploadSkips = 0;
+	Resources.sceneGlowUniformUploads = 0;
+	Resources.sceneGlowUniformUploadSkips = 0;
 	Resources.skyMaterial = NULL;
 	Resources.skyXOffset = 0.0f;
 	Resources.skyYOffset = 0.0f;
@@ -1947,9 +2107,32 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	const float *topGlowColor, const float *bottomGlowColor, const float *glowDistances)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL) return;
+	++Resources.sceneWallCount;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	FSceneVertex vertices[4];
+	const bool sphereMap = (materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0;
+	float sphereNormal[3] = {};
+	if (sphereMap)
+	{
+		const float edgeX = positions[6] - positions[3];
+		const float edgeZ = positions[8] - positions[5];
+		const float length = sqrtf(edgeX * edgeX + edgeZ * edgeZ);
+		if (length > 0.0001f)
+		{
+			const float normal[3] = { edgeZ / length, 0.0f, -edgeX / length };
+			const float *view = Resources.viewContract.viewMatrix;
+			for (int row = 0; row < 3; ++row)
+				sphereNormal[row] = view[row] * normal[0] + view[4 + row] * normal[1] + view[8 + row] * normal[2];
+			const float viewLength = sqrtf(sphereNormal[0] * sphereNormal[0] + sphereNormal[1] * sphereNormal[1] + sphereNormal[2] * sphereNormal[2]);
+			if (viewLength > 0.0001f)
+			{
+				sphereNormal[0] /= viewLength;
+				sphereNormal[1] /= viewLength;
+				sphereNormal[2] /= viewLength;
+			}
+		}
+	}
 	for (int i = 0; i < 4; ++i)
 	{
 		vertices[i].x = positions[i * 3 + 0];
@@ -1958,6 +2141,34 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 		vertices[i].nx = vertices[i].ny = vertices[i].nz = 0.0f;
 		vertices[i].u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
 		vertices[i].v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
+		if (sphereMap)
+		{
+			const float *view = Resources.viewContract.viewMatrix;
+			const float eye[3] =
+			{
+				view[0] * vertices[i].x + view[4] * vertices[i].y + view[8] * vertices[i].z + view[12],
+				view[1] * vertices[i].x + view[5] * vertices[i].y + view[9] * vertices[i].z + view[13],
+				view[2] * vertices[i].x + view[6] * vertices[i].y + view[10] * vertices[i].z + view[14]
+			};
+			const float eyeLength = sqrtf(eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]);
+			if (eyeLength > 0.0001f)
+			{
+				const float dot = (eye[0] * sphereNormal[0] + eye[1] * sphereNormal[1] + eye[2] * sphereNormal[2]) / eyeLength;
+				const float reflection[3] =
+				{
+					eye[0] / eyeLength - 2.0f * dot * sphereNormal[0],
+					eye[1] / eyeLength - 2.0f * dot * sphereNormal[1],
+					eye[2] / eyeLength - 2.0f * dot * sphereNormal[2]
+				};
+				const float denominator = 2.0f * sqrtf(reflection[0] * reflection[0] + reflection[1] * reflection[1] +
+					(reflection[2] + 1.0f) * (reflection[2] + 1.0f));
+				if (denominator > 0.0001f)
+				{
+					vertices[i].u = reflection[0] / denominator + 0.5f;
+					vertices[i].v = reflection[1] / denominator + 0.5f;
+				}
+			}
+		}
 		vertices[i].r = rgb[0];
 		vertices[i].g = rgb[1];
 		vertices[i].b = rgb[2];
@@ -1976,6 +2187,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
+	++Resources.sceneFlatCount;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
@@ -2036,14 +2248,14 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 		batch.flat = true;
 		batch.materialFlags = materialFlags;
 		batch.blendMode = blendMode;
-		if (vertexCount >= 3)
+		CopyNativeLightData(batch, lightData, lightCounts);
+		if (batch.lightCount > 0 && vertexCount >= 3)
 		{
 			FSceneVertex &firstVertex = Resources.sceneVertices[first];
 			FSceneVertex &secondVertex = Resources.sceneVertices[first + 1];
 			FSceneVertex &thirdVertex = Resources.sceneVertices[first + 2];
 			SetLightPlaneNormal(batch, firstVertex, secondVertex, thirdVertex);
 		}
-		CopyNativeLightData(batch, lightData, lightCounts);
 		batch.sortDepth = dx * dx + dy * dy + dz * dz;
 		if (fogColor != NULL)
 		{
@@ -2052,7 +2264,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 			batch.fogColor[2] = ClampUnit(fogColor[2]);
 		}
 		batch.fogDensity = std::max(0.0f, fogDensity);
-		Resources.sceneBatches.push_back(batch);
+		AppendOpaqueBatch(batch);
 	}
 }
 
@@ -2185,18 +2397,40 @@ void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
 void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
-	unsigned int brightmap, int brightmapDesaturation)
+	unsigned int brightmap, int brightmapDesaturation, bool customBlend,
+	int sourceBlend, int destinationBlend, float alphaCutoff)
 {
 	if (gl_GLES_CanUseResources()) ++Resources.sceneSpriteCount;
-	gl_GLES_AddWall(positions, texcoords, color, alpha, texture, masked, fog, false,
-		fogColor, fogDensity, blendMode, materialFlags, NULL, NULL, brightmap, brightmapDesaturation);
+	if (!gl_GLES_CanUseResources() || positions == NULL) return;
+	const float white[3] = { 1.0f, 1.0f, 1.0f };
+	const float *rgb = color != NULL ? color : white;
+	FSceneVertex vertices[4];
+	for (int i = 0; i < 4; ++i)
+	{
+		vertices[i].x = positions[i * 3 + 0];
+		vertices[i].y = positions[i * 3 + 1];
+		vertices[i].z = positions[i * 3 + 2];
+		vertices[i].nx = vertices[i].ny = vertices[i].nz = 0.0f;
+		vertices[i].u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
+		vertices[i].v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
+		vertices[i].r = rgb[0];
+		vertices[i].g = rgb[1];
+		vertices[i].b = rgb[2];
+		vertices[i].a = ClampUnit(alpha);
+		vertices[i].glowTopDistance = vertices[i].glowBottomDistance = 0.0f;
+	}
+	AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, fog,
+		alpha < 0.999f, false, blendMode, fogColor, fogDensity, materialFlags, NULL, NULL,
+		brightmap, brightmapDesaturation, NULL, NULL, customBlend,
+		static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend), alphaCutoff);
 }
 
 void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
-	const float *normals, unsigned int brightmap, int brightmapDesaturation, bool cullBackFaces)
+	const float *normals, unsigned int brightmap, int brightmapDesaturation, bool cullBackFaces,
+	bool customBlend, int sourceBlend, int destinationBlend)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || indices == NULL ||
 		vertexCount == 0 || indexCount < 3 || (indexCount % 3) != 0) return;
@@ -2258,6 +2492,10 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	batch.cullBackFaces = cullBackFaces;
 	batch.materialFlags = materialFlags;
 	batch.blendMode = blendMode;
+	batch.customBlend = customBlend;
+	batch.sourceBlend = static_cast<GLenum>(sourceBlend);
+	batch.destinationBlend = static_cast<GLenum>(destinationBlend);
+	batch.alphaCutoff = 0.5f;
 	batch.sortDepth = dx * dx + dy * dy + dz * dz;
 	if (fogColor != NULL)
 	{
@@ -2271,7 +2509,8 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
-	EGLESBlendMode blendMode, unsigned int materialFlags)
+	EGLESBlendMode blendMode, unsigned int materialFlags, bool customBlend,
+	int sourceBlend, int destinationBlend, float alphaCutoff)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
@@ -2290,7 +2529,8 @@ void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 		vertices[i].b = rgb[2];
 		vertices[i].a = ClampUnit(alpha);
 	}
-	AddHUDQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, blendMode, materialFlags);
+	AddHUDQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, blendMode, materialFlags,
+		customBlend, static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend), alphaCutoff);
 }
 
 void gl_GLES_AddScreenQuad(const float *color, float alpha,
@@ -2323,19 +2563,30 @@ void gl_GLES_EndScene()
 		unsigned int skyMaskCount = static_cast<unsigned int>(Resources.outerSky.maskBatches.size());
 		unsigned int floodCount = 0;
 		unsigned int flatCount = 0;
+		unsigned int translucentCount = 0;
+		unsigned int hudCount = 0;
+		unsigned int portalCount = 0;
+		unsigned int maskedCount = 0;
 		for (size_t i = 0; i < Resources.sceneBatches.size(); ++i)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[i];
 			if (batch.flood) ++floodCount;
 			if (batch.flat) ++flatCount;
+			if (batch.translucent) ++translucentCount;
+			if (batch.hud) ++hudCount;
+			if (batch.portalId >= 0) ++portalCount;
+			if (batch.masked) ++maskedCount;
 		}
-		DPrintf("Zandronum GLES scene: %u vertices, %u indices, %u batches.\n",
+		DPrintf("Zandronum GLES scene: %u vertices, %u indices, %u batches, %u opaque commands coalesced.\n",
 			static_cast<unsigned int>(Resources.sceneVertices.size()),
 			static_cast<unsigned int>(Resources.sceneIndices.size()),
-			static_cast<unsigned int>(Resources.sceneBatches.size()));
-		DPrintf("Zandronum GLES scene sprites: %u.\n", Resources.sceneSpriteCount);
+			static_cast<unsigned int>(Resources.sceneBatches.size()), Resources.sceneOpaqueBatchMerges);
+		DPrintf("Zandronum GLES scene submissions: %u walls, %u flats, %u sprites.\n",
+			Resources.sceneWallCount, Resources.sceneFlatCount, Resources.sceneSpriteCount);
 		DPrintf("Zandronum GLES scene masks: %u sky, %u flood, %u flat.\n",
 			skyMaskCount, floodCount, flatCount);
+		DPrintf("Zandronum GLES scene kinds: %u translucent, %u HUD, %u portal, %u masked.\n",
+			translucentCount, hudCount, portalCount, maskedCount);
 	}
 }
 
@@ -2375,7 +2626,7 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	else
 	{
 		glEnable(GL_DEPTH_TEST);
-		glDepthFunc(GL_LESS);
+		glDepthFunc((batch.materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0 ? GL_LEQUAL : GL_LESS);
 		glDisable(GL_CULL_FACE);
 	}
 	if (batch.translucent)
@@ -2388,7 +2639,8 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		glBlendEquation(equation);
 		const bool additive = batch.blendMode == GLES_BLEND_ADD ||
 			batch.blendMode == GLES_BLEND_SUBTRACT || batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT;
-		if (batch.blendMode == GLES_BLEND_FUZZ) glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
+		if (batch.customBlend) glBlendFunc(batch.sourceBlend, batch.destinationBlend);
+		else if (batch.blendMode == GLES_BLEND_FUZZ) glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
 		else if (batch.blendMode == GLES_BLEND_MULTIPLY) glBlendFunc(GL_DST_COLOR, GL_ZERO);
 		else glBlendFunc(GL_SRC_ALPHA, additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 	}
@@ -2549,7 +2801,8 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, batch.clipPlane);
 	if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, batch.clipPlaneEnabled ? 1 : 0);
 	if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ||
-		(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f : 0.5f);
+		(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f :
+		(batch.alphaCutoff > 0.0f ? batch.alphaCutoff : 0.5f));
 	if (fogColor >= 0) glUniform4f(fogColor, batch.fogColor[0], batch.fogColor[1], batch.fogColor[2], 1.0f);
 	if (fogDensity >= 0) glUniform1f(fogDensity, batch.fogDensity / 64000.0f);
 	const GLfloat *lightPositions = NULL;
@@ -3109,7 +3362,8 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 			++drawnTargets;
 			continue;
 		}
-		std::vector<FGLESSceneOrderRecord> orderRecords;
+		std::vector<FGLESSceneOrderRecord> &orderRecords = Resources.portalOrderRecords;
+		orderRecords.clear();
 		for (size_t batchIndex = target.firstBatch; batchIndex < targetEndBatch; ++batchIndex)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[batchIndex];
@@ -3700,7 +3954,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 	if (renderScene)
 	{
 		glBindVertexArray(Resources.sceneVertexArray);
-		std::vector<FGLESSceneOrderRecord> orderRecords(Resources.sceneBatches.size());
+		std::vector<FGLESSceneOrderRecord> &orderRecords = Resources.sceneOrderRecords;
+		orderRecords.resize(Resources.sceneBatches.size());
 		for (size_t i = 0; i < orderRecords.size(); ++i)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[i];
@@ -3714,6 +3969,86 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		}
 		const FGLESSceneDrawOrderView drawOrder = gl_GLESInternalSceneSortBatches(
 			orderRecords.data(), orderRecords.size(), GLES_SCENE_ORDER_VIEW);
+		GLuint boundTextures[3] = { 0, 0, 0 };
+		GLuint boundSamplers[3] = { 0, 0, 0 };
+		bool textureKnown[3] = { false, false, false };
+		auto bindOpaqueTexture = [&](unsigned int unit, GLuint texture, GLuint sampler)
+		{
+			glActiveTexture(GL_TEXTURE0 + unit);
+			if (!textureKnown[unit] || boundTextures[unit] != texture)
+			{
+				glBindTexture(GL_TEXTURE_2D, texture);
+				boundTextures[unit] = texture;
+				++Resources.sceneTextureBinds;
+			}
+			else ++Resources.sceneTextureBindSkips;
+			if (!textureKnown[unit] || boundSamplers[unit] != sampler)
+			{
+				glBindSampler(unit, sampler);
+				boundSamplers[unit] = sampler;
+				++Resources.sceneSamplerBinds;
+			}
+			else ++Resources.sceneSamplerBindSkips;
+			textureKnown[unit] = true;
+		};
+		bool commonOpaqueStateReady = false;
+		auto applyCommonOpaqueState = [&]()
+		{
+			if (commonOpaqueStateReady)
+			{
+				++Resources.sceneOpaqueStateSkips;
+				return;
+			}
+			glEnable(GL_DEPTH_TEST);
+			glDepthFunc(GL_LESS);
+			glDisable(GL_CULL_FACE);
+			glDisable(GL_STENCIL_TEST);
+			glDisable(GL_BLEND);
+			glDepthMask(GL_TRUE);
+			glBlendEquation(GL_FUNC_ADD);
+			commonOpaqueStateReady = true;
+			++Resources.sceneOpaqueStateSets;
+		};
+		bool lightUniformStateKnown = false;
+		GLuint lastLightUniformProgram = 0;
+		size_t lastLightUniformOffset = 0;
+		unsigned int lastLightUniformNormalCount = 0;
+		unsigned int lastLightUniformSubtractiveCount = 0;
+		unsigned int lastLightUniformCount = 0;
+		GLint lastLightPositionRadius = -1;
+		GLint lastLightColor = -1;
+		GLint lastLightCounts = -1;
+		auto uploadOpaqueLights = [&](const FSceneBatch &batch, GLuint program,
+			GLint positionRadius, GLint color, GLint counts, const GLfloat *positions,
+			const GLfloat *colors, unsigned int normalCount, unsigned int subtractiveCount,
+			unsigned int count)
+		{
+			const bool sameSelection = lightUniformStateKnown && lastLightUniformProgram == program &&
+				lastLightUniformOffset == batch.lightOffset && lastLightUniformNormalCount == normalCount &&
+				lastLightUniformSubtractiveCount == subtractiveCount && lastLightUniformCount == count &&
+				lastLightPositionRadius == positionRadius && lastLightColor == color && lastLightCounts == counts;
+			if (sameSelection)
+			{
+				++Resources.sceneLightUniformUploadSkips;
+				return;
+			}
+			if (positionRadius >= 0 && count > 0) glUniform4fv(positionRadius, count, positions);
+			if (color >= 0 && count > 0) glUniform4fv(color, count, colors);
+			if (counts >= 0) glUniform3i(counts, static_cast<GLint>(normalCount),
+				static_cast<GLint>(subtractiveCount), static_cast<GLint>(count));
+			lightUniformStateKnown = true;
+			lastLightUniformProgram = program;
+			lastLightUniformOffset = batch.lightOffset;
+			lastLightUniformNormalCount = normalCount;
+			lastLightUniformSubtractiveCount = subtractiveCount;
+			lastLightUniformCount = count;
+			lastLightPositionRadius = positionRadius;
+			lastLightColor = color;
+			lastLightCounts = counts;
+			++Resources.sceneLightUniformUploads;
+		};
+		GLuint opaqueStaticUniformProgram = 0;
+		bool opaqueStaticUniformsKnown = false;
 		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[drawOrder.indices[orderIndex]];
@@ -3740,6 +4075,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			}
 			if (batch.flood)
 			{
+				commonOpaqueStateReady = false;
+				opaqueStaticUniformsKnown = false;
 				// Keep flood masks on a dedicated stencil bit so sky masks remain intact.
 				glEnable(GL_STENCIL_TEST);
 				glStencilMask(0x02);
@@ -3771,6 +4108,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glActiveTexture(GL_TEXTURE0);
 				glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 				glBindSampler(0, Resources.sceneSampler);
+				textureKnown[0] = false;
 				glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT,
 					reinterpret_cast<const void *>(batch.floodWallFirstIndex * sizeof(GLuint)));
 				glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -3791,6 +4129,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			}
 			else if (batch.model)
 			{
+				commonOpaqueStateReady = false;
 				glEnable(GL_DEPTH_TEST);
 				glDepthFunc(GL_LEQUAL);
 				glDisable(GL_CULL_FACE);
@@ -3802,11 +4141,9 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			}
 			else
 			{
-				glEnable(GL_DEPTH_TEST);
-				glDepthFunc(GL_LESS);
-				glDisable(GL_CULL_FACE);
+				applyCommonOpaqueState();
 			}
-			glDisable(GL_STENCIL_TEST);
+			if (!commonOpaqueStateReady) glDisable(GL_STENCIL_TEST);
 			if (batch.translucent)
 			{
 				glEnable(GL_BLEND);
@@ -3827,7 +4164,9 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				const bool additiveBlend = batch.blendMode == GLES_BLEND_ADD ||
 					batch.blendMode == GLES_BLEND_SUBTRACT ||
 					batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT;
-				if (batch.blendMode == GLES_BLEND_MULTIPLY)
+				if (batch.customBlend)
+					glBlendFunc(batch.sourceBlend, batch.destinationBlend);
+				else if (batch.blendMode == GLES_BLEND_MULTIPLY)
 					glBlendFunc(GL_DST_COLOR, GL_ZERO);
 				else if (batch.blendMode == GLES_BLEND_FUZZ)
 					glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
@@ -3836,9 +4175,12 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			}
 			else
 			{
-				glDisable(GL_BLEND);
-				glDepthMask((batch.flood || IsNativeDecal(batch)) ? GL_FALSE : GL_TRUE);
-				glBlendEquation(GL_FUNC_ADD);
+				if (!commonOpaqueStateReady)
+				{
+					glDisable(GL_BLEND);
+					glDepthMask((batch.flood || IsNativeDecal(batch)) ? GL_FALSE : GL_TRUE);
+					glBlendEquation(GL_FUNC_ADD);
+				}
 			}
 			const GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
 				(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram));
@@ -3846,7 +4188,9 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				(batch.masked ? "gles/masked" : (batch.palette ? "gles/palette" : "gles/opaque"));
 			BindNativeProgram(program, programName);
 			SetNativeGlowUniforms(program, batch);
-			if (program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
+			const bool setStaticUniforms = !opaqueStaticUniformsKnown ||
+				opaqueStaticUniformProgram != program;
+			if (setStaticUniforms && program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
 				glUniform1i(Resources.sceneSkyDepth, 0);
 			GLint viewProjection = Resources.sceneViewProjection;
 			GLint textureUniform = Resources.sceneTextureUniform;
@@ -3985,18 +4329,19 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			};
 			if (viewProjection >= 0)
 				glUniformMatrix4fv(viewProjection, 1, GL_FALSE, batch.hud ? identity : batch.viewProjection);
-			if (model >= 0) glUniformMatrix4fv(model, 1, GL_FALSE, identity);
-			if (textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
+			if (setStaticUniforms && model >= 0) glUniformMatrix4fv(model, 1, GL_FALSE, identity);
+			if (setStaticUniforms && textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 			if (cameraPosition >= 0)
 				glUniform3f(cameraPosition, batch.hud ? 0.0f : batch.cameraPosition[0],
 					batch.hud ? 0.0f : batch.cameraPosition[1], batch.hud ? 0.0f : batch.cameraPosition[2]);
-			if (objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+			if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags));
-			if (fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
+			if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
 			if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, batch.clipPlane);
 			if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, batch.clipPlaneEnabled ? 1 : 0);
 			if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ||
-				(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f : 0.5f);
+				(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f :
+				(batch.alphaCutoff > 0.0f ? batch.alphaCutoff : 0.5f));
 			const GLfloat *lightPositions = NULL;
 			const GLfloat *lightColors = NULL;
 			unsigned int lightNormalCount = 0;
@@ -4004,40 +4349,34 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			unsigned int lightCount = 0;
 			GetNativeLightUpload(batch, 0, GLES_MAX_LIGHTS, lightPositions, lightColors, lightNormalCount,
 				lightSubtractiveCount, lightCount);
-			if (lightPositionRadius >= 0 && lightCount > 0)
-				glUniform4fv(lightPositionRadius, lightCount, lightPositions);
-			if (lightColor >= 0 && lightCount > 0)
-				glUniform4fv(lightColor, lightCount, lightColors);
-			if (lightCounts >= 0)
-				glUniform3i(lightCounts, static_cast<GLint>(lightNormalCount),
-					static_cast<GLint>(lightSubtractiveCount), static_cast<GLint>(lightCount));
+			uploadOpaqueLights(batch, program, lightPositionRadius, lightColor, lightCounts,
+				lightPositions, lightColors, lightNormalCount, lightSubtractiveCount, lightCount);
 			if (lightPlaneNormal >= 0)
 				glUniform3fv(lightPlaneNormal, 1, batch.lightPlaneNormal);
 			const bool useProjectedLights = dynamicLightTexture != 0 && lightCount > 0 &&
 				(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
 			if (projectedLights >= 0) glUniform1i(projectedLights, useProjectedLights ? 1 : 0);
-			if (dynamicLightSampler >= 0) glUniform1i(dynamicLightSampler, 2);
-			if (textureUniform >= 0) glUniform1i(textureUniform, 0);
-			if (brightmapUniform >= 0) glUniform1i(brightmapUniform, 1);
+			if (setStaticUniforms && dynamicLightSampler >= 0) glUniform1i(dynamicLightSampler, 2);
+			if (setStaticUniforms && textureUniform >= 0) glUniform1i(textureUniform, 0);
+			if (setStaticUniforms && brightmapUniform >= 0) glUniform1i(brightmapUniform, 1);
 			if (useBrightmap >= 0) glUniform1i(useBrightmap, batch.brightmap != 0 ? 1 : 0);
 			if (brightmapDesaturation >= 0)
 				glUniform1i(brightmapDesaturation, batch.brightmapDesaturation);
 			if (useTexture >= 0) glUniform1i(useTexture, batch.texture != 0 ? 1 : 0);
-			glActiveTexture(GL_TEXTURE0);
-			glBindTexture(GL_TEXTURE_2D, batch.texture != 0 ? batch.texture : Resources.checkerTexture);
-			glBindSampler(0, batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
-			glActiveTexture(GL_TEXTURE1);
-			glBindTexture(GL_TEXTURE_2D, batch.brightmap != 0 ? batch.brightmap : Resources.checkerTexture);
-			glBindSampler(1, batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
-			glActiveTexture(GL_TEXTURE2);
-			glBindTexture(GL_TEXTURE_2D, useProjectedLights ? dynamicLightTexture : Resources.checkerTexture);
-			glBindSampler(2, Resources.sceneSampler);
+			bindOpaqueTexture(0, batch.texture != 0 ? batch.texture : Resources.checkerTexture,
+				batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
+			bindOpaqueTexture(1, batch.brightmap != 0 ? batch.brightmap : Resources.checkerTexture,
+				batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
+			bindOpaqueTexture(2, useProjectedLights ? dynamicLightTexture : Resources.checkerTexture,
+				Resources.sceneSampler);
 			glActiveTexture(GL_TEXTURE0);
 			SetNativeDecalDepthBias(batch, true);
 			glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_INT,
 				reinterpret_cast<const void *>(batch.firstIndex * sizeof(GLuint)));
 			DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
 				lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex);
+			if (batch.lightCount > GLES_MAX_LIGHTS)
+				lightUniformStateKnown = false;
 			SetNativeDecalDepthBias(batch, false);
 			if (batch.flood)
 			{
@@ -4057,6 +4396,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glDepthFunc(GL_LESS);
 				glDisable(GL_STENCIL_TEST);
 			}
+			opaqueStaticUniformProgram = program;
+			opaqueStaticUniformsKnown = batch.lightCount <= GLES_MAX_LIGHTS;
 		}
 		drawSkyMask();
 		drawSky();
@@ -4111,6 +4452,22 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(6 * sizeof(GLushort)));
 	}
 	CheckError(renderScene ? "world scene draw" : "bootstrap draw");
+	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
+		DPrintf("Zandronum GLES scene programs: %u binds, %u redundant binds skipped.\n",
+			Resources.sceneProgramBinds, Resources.sceneProgramBindSkips);
+	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
+		DPrintf("Zandronum GLES opaque bindings: %u texture binds, %u texture binds skipped, %u sampler binds, %u sampler binds skipped.\n",
+			Resources.sceneTextureBinds, Resources.sceneTextureBindSkips,
+			Resources.sceneSamplerBinds, Resources.sceneSamplerBindSkips);
+	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
+		DPrintf("Zandronum GLES opaque state: %u sets, %u redundant sets skipped.\n",
+			Resources.sceneOpaqueStateSets, Resources.sceneOpaqueStateSkips);
+	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
+		DPrintf("Zandronum GLES opaque lights: %u uniform uploads, %u redundant uploads skipped.\n",
+			Resources.sceneLightUniformUploads, Resources.sceneLightUniformUploadSkips);
+	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
+		DPrintf("Zandronum GLES scene glow: %u uniform uploads, %u redundant uploads skipped.\n",
+			Resources.sceneGlowUniformUploads, Resources.sceneGlowUniformUploadSkips);
 	if (!gl_GLES_ResolveRenderTarget(activeTarget))
 		I_FatalError("Zandronum GLES scene resolve failed.");
 	if (!NativeOffscreenRender && !gl_GLESInternalWipeCaptureEndFrame(Resources.sceneTarget))
@@ -4149,7 +4506,7 @@ void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilli
 	bool presented, int configuredLimit, int capFPS, int displayLimit, int effectiveLimit)
 {
 	if (!developer || NativeFrameStart.time_since_epoch().count() == 0 || Resources.frame == 0 ||
-		(Resources.frame % 120) != 0)
+		(Resources.frame != 1 && (Resources.frame % 120) != 0))
 		return;
 	const std::chrono::duration<double, std::milli> totalElapsed =
 		std::chrono::steady_clock::now() - NativeFrameStart;
@@ -4317,6 +4674,7 @@ void gl_GLES_PrintStartupLog()
 
 void gl_GLES_ResetState(int width, int height)
 {
+	NativeProgramBindingKnown = false;
 	gl_GLESInternalResetState(width, height);
 }
 

@@ -14,15 +14,54 @@ namespace
 {
 	bool SceneCapacityWarningLogged = false;
 	bool SceneLightFailureLogged = false;
+	size_t SceneVertexBufferCapacity = 0;
+	size_t SceneIndexBufferCapacity = 0;
+	FGLESSceneLightSelection LastLightSelection = {};
+	bool HasLastLightSelection = false;
 	std::vector<GLfloat> SceneLightPositionStream;
 	std::vector<GLfloat> SceneLightColorStream;
 	std::vector<size_t> SceneDrawOrders[2];
+	std::vector<const FGLESSceneOrderRecord *> SceneIncludedRecords;
 
 	void ReportSceneLightFailure(const char *message)
 	{
 		if (SceneLightFailureLogged) return;
 		SceneLightFailureLogged = true;
 		gl_GLES_Report("lights", message);
+	}
+
+	size_t GrowBufferCapacity(size_t capacity, size_t required)
+	{
+		if (capacity == 0) capacity = 64 * 1024;
+		while (capacity < required)
+		{
+			if (capacity > std::numeric_limits<size_t>::max() / 2)
+				return required;
+			capacity *= 2;
+		}
+		return capacity;
+	}
+
+	bool MatchesLastLightSelection(const float *lightData, unsigned int normalCount,
+		unsigned int subtractiveCount, unsigned int lightCount)
+	{
+		if (!HasLastLightSelection || lightData == nullptr ||
+			LastLightSelection.normalCount != normalCount ||
+			LastLightSelection.subtractiveCount != subtractiveCount ||
+			LastLightSelection.lightCount != lightCount)
+			return false;
+		const size_t streamEnd = LastLightSelection.streamOffset + lightCount;
+		if (streamEnd > SceneLightPositionStream.size() / 4 ||
+			streamEnd > SceneLightColorStream.size() / 4)
+			return false;
+		for (unsigned int light = 0; light < lightCount; ++light)
+		{
+			const size_t offset = (LastLightSelection.streamOffset + light) * 4;
+			if (memcmp(&SceneLightPositionStream[offset], lightData + light * 8, 4 * sizeof(GLfloat)) != 0 ||
+				memcmp(&SceneLightColorStream[offset], lightData + light * 8 + 4, 4 * sizeof(GLfloat)) != 0)
+				return false;
+		}
+		return true;
 	}
 }
 
@@ -37,22 +76,38 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 	drawOrder->clear();
 	if (records == nullptr || recordCount == 0) return { nullptr, 0 };
 
-	std::vector<const FGLESSceneOrderRecord *> included;
+	std::vector<const FGLESSceneOrderRecord *> &included = SceneIncludedRecords;
+	included.clear();
 	included.reserve(recordCount);
 	for (size_t i = 0; i < recordCount; ++i)
 		if (records[i].included) included.push_back(&records[i]);
-	std::stable_sort(included.begin(), included.end(),
-		[](const FGLESSceneOrderRecord *left, const FGLESSceneOrderRecord *right)
+	// The opaque groups only need their collection order preserved. Partition
+	// them in linear passes and reserve sorting for the translucent subgroups.
+	const auto nonHudEnd = std::stable_partition(included.begin(), included.end(),
+		[](const FGLESSceneOrderRecord *record) { return !record->hud; });
+	auto orderFloodGroup = [](std::vector<const FGLESSceneOrderRecord *>::iterator first,
+		std::vector<const FGLESSceneOrderRecord *>::iterator last)
 	{
-		if (left->hud != right->hud) return !left->hud;
-		if (left->hud) return left->batchIndex < right->batchIndex;
-		if (left->flood != right->flood) return !left->flood;
-		if (left->flat != right->flat) return !left->flat;
-		if (left->translucent != right->translucent) return !left->translucent;
-		if (left->translucent && left->sortDepth != right->sortDepth)
-			return left->sortDepth > right->sortDepth;
-		return left->batchIndex < right->batchIndex;
-	});
+		const auto wallEnd = std::stable_partition(first, last,
+			[](const FGLESSceneOrderRecord *record) { return !record->flat; });
+		auto orderSurfaceGroup = [](std::vector<const FGLESSceneOrderRecord *>::iterator surfaceFirst,
+			std::vector<const FGLESSceneOrderRecord *>::iterator surfaceLast)
+		{
+			const auto opaqueEnd = std::stable_partition(surfaceFirst, surfaceLast,
+				[](const FGLESSceneOrderRecord *record) { return !record->translucent; });
+			std::stable_sort(opaqueEnd, surfaceLast,
+				[](const FGLESSceneOrderRecord *left, const FGLESSceneOrderRecord *right)
+				{
+					return left->sortDepth > right->sortDepth;
+				});
+		};
+		orderSurfaceGroup(first, wallEnd);
+		orderSurfaceGroup(wallEnd, last);
+	};
+	const auto nonFloodEnd = std::stable_partition(included.begin(), nonHudEnd,
+		[](const FGLESSceneOrderRecord *record) { return !record->flood; });
+	orderFloodGroup(included.begin(), nonFloodEnd);
+	orderFloodGroup(nonFloodEnd, nonHudEnd);
 	drawOrder->reserve(included.size());
 	for (size_t i = 0; i < included.size(); ++i)
 		drawOrder->push_back(included[i]->batchIndex);
@@ -86,18 +141,36 @@ void gl_GLESInternalSceneUploadGeometry(GLuint vertexArray, GLuint vertexBuffer,
 		return;
 	glBindVertexArray(vertexArray);
 	glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
-	glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertexBytes), vertices, GL_DYNAMIC_DRAW);
+	if (vertexBytes > SceneVertexBufferCapacity)
+	{
+		SceneVertexBufferCapacity = GrowBufferCapacity(SceneVertexBufferCapacity, vertexBytes);
+		glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(SceneVertexBufferCapacity), nullptr, GL_DYNAMIC_DRAW);
+	}
+	glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertexBytes), vertices);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-		static_cast<GLsizeiptr>(indexCount * sizeof(GLuint)), indices, GL_DYNAMIC_DRAW);
+	const size_t indexBytes = indexCount * sizeof(GLuint);
+	if (indexBytes > SceneIndexBufferCapacity)
+	{
+		SceneIndexBufferCapacity = GrowBufferCapacity(SceneIndexBufferCapacity, indexBytes);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(SceneIndexBufferCapacity), nullptr, GL_DYNAMIC_DRAW);
+	}
+	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(indexBytes), indices);
 	glBindVertexArray(0);
 	gl_GLES_CheckErrors("scene geometry upload");
+}
+
+void gl_GLESInternalSceneInvalidateBuffers()
+{
+	SceneVertexBufferCapacity = 0;
+	SceneIndexBufferCapacity = 0;
 }
 
 void gl_GLESInternalSceneClearLights()
 {
 	SceneLightPositionStream.clear();
 	SceneLightColorStream.clear();
+	LastLightSelection = {};
+	HasLastLightSelection = false;
 }
 
 bool gl_GLESInternalSceneAppendLights(const float *lightData,
@@ -105,8 +178,14 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 {
 	if (selection == nullptr) return false;
 	*selection = {};
+	if (lightData == nullptr || lightCounts == nullptr)
+	{
+		// All empty selections share one stable offset so draw-state caching can
+		// recognize the identical zero-light uniform payload.
+		selection->streamOffset = 0;
+		return true;
+	}
 	selection->streamOffset = SceneLightPositionStream.size() / 4;
-	if (lightData == nullptr || lightCounts == nullptr) return true;
 
 	const unsigned int sourceNormalCount = lightCounts[0] / 2;
 	const unsigned int sourceSubtractiveCount = lightCounts[1] / 2;
@@ -127,6 +206,12 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 		selection->subtractiveCount = selection->lightCount;
 	if (selection->normalCount > selection->subtractiveCount)
 		selection->normalCount = selection->subtractiveCount;
+	if (MatchesLastLightSelection(lightData, selection->normalCount,
+		selection->subtractiveCount, selection->lightCount))
+	{
+		*selection = LastLightSelection;
+		return true;
+	}
 	for (unsigned int light = 0; light < selection->lightCount; ++light)
 	{
 		for (unsigned int component = 0; component < 4; ++component)
@@ -135,6 +220,8 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 			SceneLightColorStream.push_back(lightData[light * 8 + 4 + component]);
 		}
 	}
+	LastLightSelection = *selection;
+	HasLastLightSelection = true;
 	return true;
 }
 

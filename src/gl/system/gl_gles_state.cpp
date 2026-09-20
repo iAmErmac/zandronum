@@ -41,6 +41,7 @@ void gl_GLESInternalResetState(int width, int height)
 	glActiveTexture(GL_TEXTURE0);
 	glBindVertexArray(0);
 	glUseProgram(0);
+	gl_GLESInternalInvalidateProgramBinding();
 }
 
 void gl_GLESInternalStateContextLost()

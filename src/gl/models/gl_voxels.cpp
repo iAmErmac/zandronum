@@ -564,14 +564,27 @@ void FVoxelModel::RenderFrameInterpolated(FTexture * skin, int frame, int frame2
 }
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-bool FVoxelModel::RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
-	int cm, int translation, FModelNativeCollector *collector)
+struct FNativeVoxelScratch
 {
-	if (collector == NULL || mVertices.Size() == 0 || mIndices.Size() < 4) return false;
 	std::vector<float> positions;
 	std::vector<float> texcoords;
 	std::vector<float> normals;
 	std::vector<unsigned int> indices;
+};
+
+bool FVoxelModel::RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
+	int cm, int translation, FModelNativeCollector *collector)
+{
+	if (collector == NULL || mVertices.Size() == 0 || mIndices.Size() < 4) return false;
+	static FNativeVoxelScratch scratch;
+	std::vector<float> &positions = scratch.positions;
+	std::vector<float> &texcoords = scratch.texcoords;
+	std::vector<float> &normals = scratch.normals;
+	std::vector<unsigned int> &indices = scratch.indices;
+	positions.clear();
+	texcoords.clear();
+	normals.clear();
+	indices.clear();
 	positions.reserve((mIndices.Size() / 4) * 12);
 	texcoords.reserve((mIndices.Size() / 4) * 8);
 	normals.reserve((mIndices.Size() / 4) * 12);

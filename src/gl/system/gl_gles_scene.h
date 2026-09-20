@@ -71,6 +71,7 @@ bool gl_GLESInternalSceneCanAppend(size_t currentVertexCount, size_t currentInde
 void gl_GLESInternalSceneUploadGeometry(GLuint vertexArray, GLuint vertexBuffer,
 	GLuint indexBuffer, const void *vertices, size_t vertexBytes,
 	const GLuint *indices, size_t indexCount);
+void gl_GLESInternalSceneInvalidateBuffers();
 void gl_GLESInternalSceneClearLights();
 bool gl_GLESInternalSceneAppendLights(const float *lightData,
 	const unsigned int *lightCounts, FGLESSceneLightSelection *selection);

@@ -227,17 +227,30 @@ void GLSprite::Draw(int pass)
 		const float nativeRight = mirrored ? nativeU2 : nativeU1;
 		const float texcoords[8] = { nativeLeft, nativeV1, nativeRight, nativeV1,
 			nativeRight, nativeV2, nativeLeft, nativeV2 };
+		int textureMode = 0;
+		int sourceBlend = GL_SRC_ALPHA;
+		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
+		int blendEquation = GL_FUNC_ADD;
+		gl_GetRenderStyle(RenderStyle, false, false, &textureMode, &sourceBlend,
+			&destinationBlend, &blendEquation);
+		const EGLESBlendMode nativeBlend = GLESSpriteBlend(RenderStyle, nativeAlpha,
+			hw_styleflags == STYLEHW_Solid, nativeFuzz);
+		const bool customBlend = nativeBlend != GLES_BLEND_OPAQUE && nativeBlend != GLES_BLEND_FUZZ;
+		const bool nativeMasked = gltexture != NULL && gltexture->isMasked() &&
+			hw_styleflags != STYLEHW_NoAlphaTest;
+		const float nativeAlphaCutoff = nativeMasked ? nativeAlpha * gl_mask_sprite_threshold : 0.5f;
 		gl_GLES_AddSprite(positions, texcoords, color, nativeAlpha,
-			gltexture != NULL && gltexture->isMasked(),
+			nativeMasked,
 			nativeFog, texture, fogColor, fogDensity,
-			GLESSpriteBlend(RenderStyle, nativeAlpha, hw_styleflags == STYLEHW_Solid, nativeFuzz),
+			nativeBlend,
 			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
 			((RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
 			((RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
 			((RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
 			((RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
 			((RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0), brightmap,
-			(Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ? Colormap.colormap : 0);
+			(Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ? Colormap.colormap : 0,
+			customBlend, sourceBlend, destinationBlend, nativeAlphaCutoff);
 		return;
 	}
 #endif

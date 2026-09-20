@@ -259,6 +259,8 @@ void OpenGLFrameBuffer::Update()
 		nativeUpdateInProgress = true;
 		// Status-bar and message drawing appends to the native batch after the view.
 		DrawRateStuff();
+		if (GetTrueHeight() != GetHeight() && GLRenderer != NULL)
+			GLRenderer->ClearBorders();
 		gl_GLES_EndScene();
 		Swap();
 		swapped = false;

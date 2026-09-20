@@ -27,6 +27,7 @@ bool gl_GLESInternalWipeIsActive();
 FGLESWipeBindings gl_GLESInternalWipeGetBindings();
 
 void gl_GLESInternalResetState(int width, int height);
+void gl_GLESInternalInvalidateProgramBinding();
 void gl_GLESInternalStateContextLost();
 bool gl_GLESInternalApplyRenderState(bool resourcesAvailable, int srcBlend, int dstBlend,
 	int alphaFunc, float alphaThreshold, bool alphaTest, int blendEquation,
