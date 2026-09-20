@@ -303,10 +303,35 @@ unsigned char *FGLRenderer::GetTextureBuffer(FTexture *tex, int &w, int &h)
 
 void FGLRenderer::ClearBorders()
 {
-#if defined(__ANDROID__)
-	return;
-#elif defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive()) return;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		OpenGLFrameBuffer *glscreen = static_cast<OpenGLFrameBuffer*>(screen);
+		const int width = glscreen != NULL ? glscreen->GetWidth() : 0;
+		const int height = glscreen != NULL ? glscreen->GetHeight() : 0;
+		const int trueHeight = glscreen != NULL ? glscreen->GetTrueHeight() : 0;
+		if (width <= 0 || height <= 0 || trueHeight <= height) return;
+		const float border = static_cast<float>(trueHeight - height) /
+			(2.0f * static_cast<float>(trueHeight));
+		const float black[3] = { 0.0f, 0.0f, 0.0f };
+		const float upper[12] =
+		{
+			-1.0f, 1.0f - 2.0f * border, 0.0f,
+			-1.0f, 1.0f, 0.0f,
+			 1.0f, 1.0f, 0.0f,
+			 1.0f, 1.0f - 2.0f * border, 0.0f
+		};
+		const float lower[12] =
+		{
+			-1.0f, -1.0f, 0.0f,
+			-1.0f, -1.0f + 2.0f * border, 0.0f,
+			 1.0f, -1.0f + 2.0f * border, 0.0f,
+			 1.0f, -1.0f, 0.0f
+		};
+		gl_GLES_AddHUDQuad(upper, NULL, black, 1.0f, false, 0, GLES_BLEND_OPAQUE);
+		gl_GLES_AddHUDQuad(lower, NULL, black, 1.0f, false, 0, GLES_BLEND_OPAQUE);
+		return;
+	}
 #endif
 #if !defined(__ANDROID__)
 	OpenGLFrameBuffer *glscreen = static_cast<OpenGLFrameBuffer*>(screen);
@@ -431,12 +456,20 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		const bool alphaChannel = parms.alphaChannel;
 		const unsigned int texture = nativeMaterial->BindNative(alphaChannel ? CM_SHADE : CM_DEFAULT,
 			alphaChannel ? 0 : translation, false, false);
+		int textureMode = 0;
+		int sourceBlend = GL_SRC_ALPHA;
+		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
+		int blendEquation = GL_FUNC_ADD;
+		gl_GetRenderStyle(parms.style, !parms.masked, false, &textureMode, &sourceBlend,
+			&destinationBlend, &blendEquation);
 		EGLESBlendMode blendMode = GLES_BLEND_OPAQUE;
 		if (parms.style.BlendOp == STYLEOP_Add)
 			blendMode = parms.style.DestAlpha == STYLEALPHA_One ? GLES_BLEND_ADD : GLES_BLEND_ALPHA;
 		else if (parms.style.BlendOp == STYLEOP_Sub) blendMode = GLES_BLEND_SUBTRACT;
 		else if (parms.style.BlendOp == STYLEOP_RevSub) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
 		else if (parms.alpha < FRACUNIT || parms.style.BlendOp != STYLEOP_None) blendMode = GLES_BLEND_ALPHA;
+		const bool customBlend = blendMode != GLES_BLEND_OPAQUE &&
+			(parms.style.BlendOp < STYLEOP_Fuzz || parms.style.BlendOp > STYLEOP_FuzzOrRevSub);
 		unsigned int materialFlags = 0;
 		if (alphaChannel) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
 		if (parms.style.Flags & STYLEF_RedIsAlpha) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
@@ -445,7 +478,8 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		if (parms.style.Flags & STYLEF_InvertSource) materialFlags |= GLES_MATERIAL_INVERT_SOURCE;
 		if (parms.style.Flags & STYLEF_ColorIsFixed) materialFlags |= GLES_MATERIAL_COLOR_FIXED;
 		gl_GLES_AddHUDQuad(positions, texcoords, color, FIXED2FLOAT(parms.alpha),
-			parms.masked != 0, texture, blendMode, materialFlags);
+			parms.masked != 0, texture, blendMode, materialFlags, customBlend,
+			sourceBlend, destinationBlend);
 		if (colorOverlay != 0 && APART(colorOverlay) != 0)
 		{
 			const float overlayColor[3] =

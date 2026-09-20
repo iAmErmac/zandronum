@@ -310,6 +310,7 @@ bool gl_GLESInternalFillStencil(int width, int height, GLuint stencilReference,
 
 	glBindVertexArray(static_cast<GLuint>(vertexArray));
 	glUseProgram(static_cast<GLuint>(program));
+	gl_GLESInternalInvalidateProgramBinding();
 	glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
 	glColorMask(colorWrite[0], colorWrite[1], colorWrite[2], colorWrite[3]);
 	glStencilMask(static_cast<GLuint>(stencilWriteMask));

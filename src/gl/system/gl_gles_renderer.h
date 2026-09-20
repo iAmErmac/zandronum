@@ -53,7 +53,9 @@ enum EGLESMaterialFlags
 	GLES_MATERIAL_COLOR_OVERLAY = 16,
 	GLES_MATERIAL_INVERT_SOURCE = 32,
 	GLES_MATERIAL_COLOR_FIXED = 64,
-	GLES_MATERIAL_DECAL = 128
+	GLES_MATERIAL_DECAL = 128,
+	GLES_MATERIAL_FOG_BOUNDARY = 256,
+	GLES_MATERIAL_SPHERE_MAP = 512
 };
 
 bool gl_GLES_CollectCapabilities();
@@ -96,16 +98,19 @@ void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositio
 void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
-	unsigned int materialFlags = 0, unsigned int brightmap = 0, int brightmapDesaturation = 0);
+	unsigned int materialFlags = 0, unsigned int brightmap = 0, int brightmapDesaturation = 0,
+	bool customBlend = false, int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f);
 void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *normals = 0, unsigned int brightmap = 0,
-	int brightmapDesaturation = 0, bool cullBackFaces = false);
+	int brightmapDesaturation = 0, bool cullBackFaces = false, bool customBlend = false,
+	int sourceBlend = 0, int destinationBlend = 0);
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
-	EGLESBlendMode blendMode, unsigned int materialFlags = 0);
+	EGLESBlendMode blendMode, unsigned int materialFlags = 0, bool customBlend = false,
+	int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f);
 void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, bool masked,
 	unsigned int texture, bool repeat, EGLESBlendMode blendMode, unsigned int materialFlags = 0);

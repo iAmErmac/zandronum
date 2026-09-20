@@ -22,6 +22,8 @@
 #include "gl/shaders/gl_shader.h"
 #include "gl/utility/gl_templates.h"
 
+#include <chrono>
+
 void gl_CalculateCPUSpeed();
 extern int NewWidth, NewHeight, NewBits, DisplayBits;
 
@@ -36,6 +38,8 @@ CVAR(Bool, gl_debug, false, 0)
 CVAR(Bool, gl_quadbufferedstereo, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
 
 EXTERN_CVAR(Int, vid_refreshrate)
+EXTERN_CVAR(Int, vid_maxfps)
+EXTERN_CVAR(Bool, cl_capfps)
 
 //==========================================================================
 //
@@ -1164,7 +1168,12 @@ void Win32GLFrameBuffer::SwapBuffers()
 	#if defined(ZANDRONUM_GLES_BACKEND)
 	if (video->IsGLES())
 	{
-		gl_GLES_PresentFrame();
+		const std::chrono::steady_clock::time_point presentStart = std::chrono::steady_clock::now();
+		const bool presented = gl_GLES_PresentFrame();
+		const std::chrono::duration<double, std::milli> presentElapsed =
+			std::chrono::steady_clock::now() - presentStart;
+		gl_GLES_RecordHostPresentation(0.0, presentElapsed.count(), presented,
+			static_cast<int>(vid_maxfps), cl_capfps ? 1 : 0, 0, 0);
 		return;
 	}
 	#endif

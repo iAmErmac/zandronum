@@ -210,6 +210,13 @@ public:
 		else if (Sprite->trans >= 1.0f - FLT_EPSILON && Sprite->RenderStyle.BlendOp == STYLEOP_Add &&
 			(Sprite->RenderStyle.DestAlpha == STYLEALPHA_InvSrc || Sprite->RenderStyle.DestAlpha == STYLEALPHA_Zero))
 			blendMode = GLES_BLEND_OPAQUE;
+		int textureMode = 0;
+		int sourceBlend = GL_SRC_ALPHA;
+		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
+		int blendEquation = GL_FUNC_ADD;
+		gl_GetRenderStyle(Sprite->RenderStyle, false, false, &textureMode, &sourceBlend,
+			&destinationBlend, &blendEquation);
+		const bool customBlend = blendMode != GLES_BLEND_OPAQUE && !nativeFuzz;
 		gl_GLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
 			indices, indexCount, color, nativeAlpha, material->isMasked(), fog, texture,
 			fogColor, fogDensity, blendMode,
@@ -221,7 +228,8 @@ public:
 			((Sprite->RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0),
 			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
 			(Colormap >= CM_DESAT0 && Colormap <= CM_DESAT31) ? Colormap : 0,
-			!(Sprite->RenderStyle == LegacyRenderStyles[STYLE_Normal]));
+			!(Sprite->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
+			sourceBlend, destinationBlend);
 	}
 };
 

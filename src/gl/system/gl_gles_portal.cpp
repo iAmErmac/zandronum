@@ -17,6 +17,7 @@
 #include "gl/system/gl_gles_context.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/system/gl_gles_dispatch.h"
+#include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_gles_shader.h"
 #include "gl/textures/gl_material.h"
 #include "gl/textures/gl_skyboxtexture.h"
@@ -558,7 +559,7 @@ bool gl_GLESInternalPortalComposite(const FGLESPortalComposite &config)
 	}
 	else
 		glDisable(GL_STENCIL_TEST);
-	glUseProgram(Portal.compositeProgram);
+	gl_GLES_UseProgram(Portal.compositeProgram);
 	if (Portal.viewProjection >= 0)
 		glUniformMatrix4fv(Portal.viewProjection, 1, GL_FALSE, config.viewProjection);
 	if (Portal.sourceTexture >= 0)
@@ -585,7 +586,7 @@ bool gl_GLESInternalPortalComposite(const FGLESPortalComposite &config)
 		reinterpret_cast<const void *>(config.indexOffsetBytes));
 
 	glBindVertexArray(static_cast<GLuint>(previousVertexArray));
-	glUseProgram(static_cast<GLuint>(previousProgram));
+	gl_GLES_UseProgram(static_cast<GLuint>(previousProgram));
 	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
 	glBindSampler(0, static_cast<GLuint>(previousSampler));
 	glActiveTexture(static_cast<GLenum>(previousActiveTexture));
