@@ -145,6 +145,16 @@ bool BROWSER_IsActive( ULONG ulServer )
 
 //*****************************************************************************
 //
+bool BROWSER_IsServerCompatible( ULONG ulServer )
+{
+	if (( ulServer >= MAX_BROWSER_SERVERS ) || ( g_BrowserServerList[ulServer].ulActiveState != AS_ACTIVE ))
+		return ( false );
+
+	return g_BrowserServerList[ulServer].bVersionCompatible;
+}
+
+//*****************************************************************************
+//
 bool BROWSER_IsLAN( ULONG ulServer )
 {
 	if ( ulServer >= MAX_BROWSER_SERVERS )
@@ -239,6 +249,32 @@ const char *BROWSER_GetPWADName( ULONG ulServer, ULONG ulWadIdx )
 		return ( " " );
 
 	return ( g_BrowserServerList[ulServer].PWADNames[ulWadIdx].GetChars( ));
+}
+
+//*****************************************************************************
+//
+const char *BROWSER_GetPWADChecksum( ULONG ulServer, ULONG ulWadIdx )
+{
+	if (( ulServer >= MAX_BROWSER_SERVERS ) || ( g_BrowserServerList[ulServer].ulActiveState != AS_ACTIVE ))
+		return ( "" );
+
+	if ( ulWadIdx >= g_BrowserServerList[ulServer].PWADChecksums.Size() )
+		return ( "" );
+
+	return ( g_BrowserServerList[ulServer].PWADChecksums[ulWadIdx].GetChars( ));
+}
+
+//*****************************************************************************
+//
+bool BROWSER_IsPWADOptional( ULONG ulServer, ULONG ulWadIdx )
+{
+	if (( ulServer >= MAX_BROWSER_SERVERS ) || ( g_BrowserServerList[ulServer].ulActiveState != AS_ACTIVE ))
+		return false;
+
+	if ( ulWadIdx >= g_BrowserServerList[ulServer].PWADOptional.Size() )
+		return false;
+
+	return g_BrowserServerList[ulServer].PWADOptional[ulWadIdx] != 0;
 }
 
 //*****************************************************************************
@@ -381,8 +417,12 @@ void BROWSER_ClearServerList( void )
 	for ( ulIdx = 0; ulIdx < MAX_BROWSER_SERVERS; ulIdx++ )
 	{
 		g_BrowserServerList[ulIdx].ulActiveState = AS_INACTIVE;
+		g_BrowserServerList[ulIdx].bVersionCompatible = false;
 
 		g_BrowserServerList[ulIdx].Address.Clear();
+		g_BrowserServerList[ulIdx].PWADNames.Clear();
+		g_BrowserServerList[ulIdx].PWADChecksums.Clear();
+		g_BrowserServerList[ulIdx].PWADOptional.Clear();
 	}
 }
 
@@ -409,6 +449,7 @@ void BROWSER_AddServerToList( const NETADDRESS_s &Address )
 
 	// This server is now active.
 	g_BrowserServerList[ulServer].ulActiveState = AS_WAITINGFORREPLY;
+	g_BrowserServerList[ulServer].bVersionCompatible = false;
 
 	// Set the server address.
 	g_BrowserServerList[ulServer].Address = Address;
@@ -527,23 +568,16 @@ void BROWSER_ParseServerQuery( BYTESTREAM_s *pByteStream, bool bLAN )
 	// Read in the version.
 	g_BrowserServerList[lServer].Version = pByteStream->ReadString();
 
-	// If the version doesn't match ours, remove it from the list.
+	// Record compatibility separately so incompatible entries remain inspectable.
 	{
 		// [BB] Get rid of a trailing 'M' that indicates local source changes.
 		FString ourVersion = GetVersionStringRev();
 		if ( ourVersion[ourVersion.Len()-1] == 'M' )
 			ourVersion = ourVersion.Left ( ourVersion.Len()-1 );
 
-		// [BB] Check whether the server version starts with our version.
-		if ( g_BrowserServerList[lServer].Version.IndexOf ( ourVersion ) != 0 )
-		{
-			g_BrowserServerList[lServer].ulActiveState = AS_INACTIVE;
-			while ( 1 )
-			{
-				if ( pByteStream->ReadByte() == -1 )
-					return;
-			}
-		}
+		// [BB] Keep incompatible servers visible so their metadata can still be inspected.
+		g_BrowserServerList[lServer].bVersionCompatible =
+			ourVersion.IsNotEmpty() && g_BrowserServerList[lServer].Version.IndexOf ( ourVersion ) == 0;
 	}
 
 	// Read in the data that will be sent to us.
@@ -573,12 +607,20 @@ void BROWSER_ParseServerQuery( BYTESTREAM_s *pByteStream, bool bLAN )
 	// Read in the PWAD information.
 	if ( ulFlags & SQF_PWADS )
 	{
-		ULONG ulNumPWADs = static_cast<ULONG>( pByteStream->ReadByte() );
-		if ( ulNumPWADs > 0 )
+		const int rawNumPWADs = pByteStream->ReadByte();
+		g_BrowserServerList[lServer].PWADNames.Clear();
+		g_BrowserServerList[lServer].PWADChecksums.Clear();
+		g_BrowserServerList[lServer].PWADOptional.Clear();
+		if ( rawNumPWADs > 0 && rawNumPWADs <= 255 )
 		{
+			const ULONG ulNumPWADs = static_cast<ULONG>( rawNumPWADs );
 			g_BrowserServerList[lServer].PWADNames.Resize( ulNumPWADs );
+			g_BrowserServerList[lServer].PWADOptional.Resize( ulNumPWADs );
 			for ( ulIdx = 0; ulIdx < ulNumPWADs; ulIdx++ )
+			{
 				g_BrowserServerList[lServer].PWADNames[ulIdx] = pByteStream->ReadString();
+				g_BrowserServerList[lServer].PWADOptional[ulIdx] = 0;
+			}
 		}
 	}
 
@@ -750,8 +792,13 @@ void BROWSER_ParseServerQuery( BYTESTREAM_s *pByteStream, bool bLAN )
 	// [TP] Optional wads
 	if ( ulFlags & SQF_OPTIONAL_WADS )
 	{
-		for ( int i = pByteStream->ReadByte(); i > 0; --i )
-			pByteStream->ReadByte();
+		const int count = pByteStream->ReadByte();
+		for ( int i = 0; i < count; ++i )
+		{
+			const int index = pByteStream->ReadByte();
+			if ( index >= 0 && index < static_cast<int>(g_BrowserServerList[lServer].PWADOptional.Size()) )
+				g_BrowserServerList[lServer].PWADOptional[index] = 1;
+		}
 	}
 
 	// [TP] Dehacked patches
@@ -769,8 +816,13 @@ void BROWSER_ParseServerQuery( BYTESTREAM_s *pByteStream, bool bLAN )
 		// [SB] PWAD hashes
 		if ( ulFlags2 & SQF2_PWAD_HASHES )
 		{
-			for ( int i = pByteStream->ReadByte(); i > 0; --i )
-				pByteStream->ReadString();
+			const int count = pByteStream->ReadByte();
+			TArray<FString> checksums;
+			for ( int i = 0; i < count && i < 255; ++i )
+				checksums.Push( pByteStream->ReadString() );
+
+			if ( count == static_cast<int>(g_BrowserServerList[lServer].PWADNames.Size()) )
+				g_BrowserServerList[lServer].PWADChecksums = checksums;
 		}
 
 		// [SB] Server country code
@@ -903,7 +955,7 @@ static void browser_QueryServer( ULONG ulServer )
 	g_ServerBuffer.ByteStream.WriteLong( LAUNCHER_SERVER_CHALLENGE );
 	g_ServerBuffer.ByteStream.WriteLong( SQF_NAME|SQF_URL|SQF_EMAIL|SQF_MAPNAME|SQF_MAXCLIENTS|SQF_PWADS|SQF_GAMETYPE|SQF_IWAD|SQF_NUMPLAYERS|SQF_PLAYERDATA|SQF_EXTENDED_INFO );
 	g_ServerBuffer.ByteStream.WriteLong( I_MSTime( ));
-	g_ServerBuffer.ByteStream.WriteLong( SQF2_GAMEMODE_NAME|SQF2_GAMEMODE_SHORTNAME );
+	g_ServerBuffer.ByteStream.WriteLong( SQF2_PWAD_HASHES|SQF2_GAMEMODE_NAME|SQF2_GAMEMODE_SHORTNAME );
 
 	// Send the server our packet.
 	NETWORK_LaunchPacket( &g_ServerBuffer, g_BrowserServerList[ulServer].Address );

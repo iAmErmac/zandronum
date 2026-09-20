@@ -115,6 +115,7 @@
 #include "cl_statistics.h"
 #include "maprotation.h"
 #include "browser.h"
+#include "mod_manager.h"
 #include "p_spec.h"
 #include "joinqueue.h"
 #include "lastmanstanding.h"
@@ -2346,6 +2347,13 @@ static const char *BaseFileSearch (const char *file, const char *ext, bool lookf
 		return wad;
 	}
 
+	const char *managed = MODMANAGER_FindManagedFile( file );
+	if ( managed != NULL )
+	{
+		mysnprintf (wad, countof(wad), "%s", managed);
+		return wad;
+	}
+
 #ifdef __ANDROID__
 	mysnprintf (wad, countof(wad), "./res/%s", file);
 	if (DirEntryExists (wad))
@@ -2729,6 +2737,8 @@ static void D_DoomInit()
 
 	Printf ("M_LoadDefaults: Load system defaults.\n");
 	M_LoadDefaults ();			// load before initing other systems
+	MODMANAGER_Initialize();
+	atterm( MODMANAGER_Shutdown );
 
 }
 
@@ -3636,7 +3646,27 @@ UNSAFE_CCMD(restart)
 	// [BB]
 	Args->RemoveArgs("-connect");
 
-	if (argv.argc() > 1)
+	FString modAddress;
+	FString modIWAD;
+	TArray<FString> modFiles;
+	bool modConnect = true;
+	if ( MODMANAGER_TakePendingRestart( modAddress, modIWAD, modFiles, modConnect ) )
+	{
+		if ( modConnect )
+		{
+			Args->AppendArg( "-connect" );
+			Args->AppendArg( modAddress );
+		}
+		Args->AppendArg( "-iwad" );
+		Args->AppendArg( modIWAD );
+		if ( modFiles.Size() > 0 )
+		{
+			Args->AppendArg( "-file" );
+			for ( unsigned int i = 0; i < modFiles.Size(); ++i )
+				Args->AppendArg( modFiles[i] );
+		}
+	}
+	else if (argv.argc() > 1)
 	{
 		for(int i=1;i<argv.argc(); i++)
 		{

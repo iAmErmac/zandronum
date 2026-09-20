@@ -158,6 +158,43 @@ FGameConfigFile::FGameConfigFile ()
 #endif
 	}
 
+	SetSection ("ModDownloads", true);
+	auto setModDownloadDefault = [this] (const char *key, const char *value)
+	{
+		if (GetValueForKey (key) == NULL)
+		{
+			SetValueForKey (key, value, true);
+		}
+	};
+	setModDownloadDefault ("Source1.Enabled", "true");
+	setModDownloadDefault ("Source1.Mode", "direct-basename");
+	setModDownloadDefault ("Source1.BaseURL", "https://static.allfearthesentinel.com/wads/");
+	setModDownloadDefault ("Source1.Archive", "none");
+	setModDownloadDefault ("Source2.Enabled", "true");
+	setModDownloadDefault ("Source2.Mode", "direct-basename");
+	setModDownloadDefault ("Source2.BaseURL", "https://wads.firestick.games/");
+	setModDownloadDefault ("Source2.Archive", "none");
+	setModDownloadDefault ("Source3.Enabled", "true");
+	setModDownloadDefault ("Source3.Mode", "direct-basename");
+	setModDownloadDefault ("Source3.BaseURL", "https://euroboros.net/zandronum/wads/");
+	setModDownloadDefault ("Source3.Archive", "none");
+	setModDownloadDefault ("Source4.Enabled", "true");
+	setModDownloadDefault ("Source4.Mode", "direct-basename");
+	setModDownloadDefault ("Source4.BaseURL", "https://static.audrealms.org/wads/");
+	setModDownloadDefault ("Source4.Archive", "none");
+	setModDownloadDefault ("Source5.Enabled", "true");
+	setModDownloadDefault ("Source5.Mode", "filename-search");
+	setModDownloadDefault ("Source5.BaseURL", "https://doom.dogsoft.net/getwad.php?search=%WADNAME%");
+	setModDownloadDefault ("Source5.Archive", "none");
+	setModDownloadDefault ("Source6.Enabled", "true");
+	setModDownloadDefault ("Source6.Mode", "html-index");
+	setModDownloadDefault ("Source6.BaseURL", "https://doomshack.org/wadlist.php");
+	setModDownloadDefault ("Source6.Archive", "none");
+	setModDownloadDefault ("Source7.Enabled", "true");
+	setModDownloadDefault ("Source7.Mode", "idgames-zip");
+	setModDownloadDefault ("Source7.BaseURL", "https://www.doomworld.com/idgames/api/api.php?out=json&action=search&query=%WADNAME%&dir=desc");
+	setModDownloadDefault ("Source7.Archive", "zip-exact-entry");
+
 	// Set default search paths if none present
 	if (!SetSection ("FileSearch.Directories"))
 	{
@@ -224,6 +261,9 @@ FGameConfigFile::FGameConfigFile ()
 		"# These are the directories to search for wads added with the -file\n"
 		"# command line parameter, if they cannot be found with the path\n"
 		"# as-is. Layout is the same as for IWADSearch.Directories\n");
+	SetSectionNote("ModDownloads",
+		"# Trusted HTTPS sources for explicitly requested server mods.\n"
+		"# Disable or edit individual numbered records to control third-party hosts.\n");
 	SetSectionNote("Doom.AutoExec",
 		"# Files to automatically execute when running the corresponding game.\n"
 		"# Each file should be on its own line, preceded by Path=\n\n");

@@ -8,6 +8,7 @@
 #include <android/log.h>
 
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -21,6 +22,7 @@
 #include "gl/system/gl_gles_context.h"
 #include "gl/system/gl_gles_targets.h"
 #include "zandronum_android_input.h"
+#include "mod_manager.h"
 
 extern int main_android(int argc, char **argv);
 extern void S_SetSoundPaused(int active);
@@ -469,6 +471,11 @@ int Zandronum_AndroidHost_GetHeight()
 
 void Zandronum_AndroidHost_SetPaused(bool paused)
 {
+	if (paused)
+	{
+		MODMANAGER_CancelActiveDownload();
+		Zandronum_AndroidHost_CancelModDownload();
+	}
 	std::lock_guard<std::mutex> lock(HostMutex);
 	Paused = paused;
 	HostCondition.notify_all();
@@ -517,6 +524,9 @@ void Zandronum_AndroidHost_Start()
 
 void Zandronum_AndroidHost_Stop()
 {
+	MODMANAGER_CancelActiveDownload();
+	Zandronum_AndroidHost_CancelModDownload();
+	MODMANAGER_Shutdown();
 	ANativeWindow *window = nullptr;
 	ANativeWindow *nextWindow = nullptr;
 	{
@@ -560,6 +570,77 @@ void Zandronum_AndroidHost_Stop()
 		if (attachment.IsAttached())
 			attachment.GetEnv()->DeleteGlobalRef(activity);
 	}
+}
+
+bool Zandronum_AndroidHost_DownloadMod(const char *url, const char *tempName,
+	uint64_t maxBytes, std::atomic<bool> *cancel, char *error, size_t errorSize)
+{
+	if (error != nullptr && errorSize > 0)
+		error[0] = 0;
+	JavaVM *vm = nullptr;
+	jobject activity = nullptr;
+	if (!GetActivityBridge(vm, activity))
+		return false;
+
+	JavaThreadAttachment attachment(vm);
+	if (!attachment.IsAttached())
+		return false;
+	JNIEnv *env = attachment.GetEnv();
+	jclass activityClass = env->GetObjectClass(activity);
+	if (activityClass == nullptr)
+		return false;
+	jmethodID downloadMethod = env->GetMethodID(activityClass, "downloadModFile",
+		"(Ljava/lang/String;Ljava/lang/String;J)Z");
+	if (downloadMethod == nullptr)
+	{
+		ClearJavaException(env);
+		env->DeleteLocalRef(activityClass);
+		return false;
+	}
+	jstring urlString = env->NewStringUTF(url != nullptr ? url : "");
+	jstring tempString = env->NewStringUTF(tempName != nullptr ? tempName : "");
+	jboolean result = JNI_FALSE;
+	if (urlString != nullptr && tempString != nullptr)
+	{
+		result = env->CallBooleanMethod(activity, downloadMethod, urlString, tempString,
+			static_cast<jlong>(maxBytes));
+		if (env->ExceptionCheck())
+		{
+			ClearJavaException(env);
+			result = JNI_FALSE;
+		}
+	}
+	if (urlString != nullptr) env->DeleteLocalRef(urlString);
+	if (tempString != nullptr) env->DeleteLocalRef(tempString);
+	env->DeleteLocalRef(activityClass);
+	if (result == JNI_FALSE && error != nullptr && errorSize > 0)
+	{
+		const char *message = cancel != nullptr && cancel->load()
+			? "Download cancelled." : "Android HTTPS request failed.";
+		strncpy(error, message, errorSize - 1);
+		error[errorSize - 1] = 0;
+	}
+	return result == JNI_TRUE;
+}
+
+void Zandronum_AndroidHost_CancelModDownload()
+{
+	JavaVM *vm = nullptr;
+	jobject activity = nullptr;
+	if (!GetActivityBridge(vm, activity))
+		return;
+	JavaThreadAttachment attachment(vm);
+	if (!attachment.IsAttached())
+		return;
+	JNIEnv *env = attachment.GetEnv();
+	jclass activityClass = env->GetObjectClass(activity);
+	if (activityClass == nullptr)
+		return;
+	jmethodID cancelMethod = env->GetMethodID(activityClass, "cancelModDownload", "()V");
+	if (cancelMethod != nullptr)
+		env->CallVoidMethod(activity, cancelMethod);
+	ClearJavaException(env);
+	env->DeleteLocalRef(activityClass);
 }
 
 void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int width, int height,
@@ -717,6 +798,12 @@ extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActiv
 		return JNI_FALSE;
 	Zandronum_AndroidHost_Stop();
 	return JNI_TRUE;
+}
+
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeModDownloadProgress(
+	JNIEnv *, jclass, jlong received, jlong total)
+{
+	MODMANAGER_ReportPlatformProgress(static_cast<uint64_t>(received), static_cast<uint64_t>(total));
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputKey(JNIEnv *, jclass, jint keycode, jboolean pressed)

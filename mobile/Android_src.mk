@@ -212,6 +212,7 @@ GAME_ALL = \
 	maprotation.cpp \
 	memarena.cpp \
 	md5.cpp \
+	mod_manager.cpp \
 	medal.cpp \
 	name.cpp \
 	network.cpp \

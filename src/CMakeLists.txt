@@ -159,6 +159,7 @@ if( WIN32 )
 
 	set( ZDOOM_LIBS
 		wsock32
+		winhttp
 		winmm
 		"${DX_dxguid_LIBRARY}"
 		"${DX_dinput8_LIBRARY}"
@@ -1156,6 +1157,7 @@ add_executable( zdoom WIN32
 	maprotation.cpp #ST
 	memarena.cpp
 	md5.cpp
+	mod_manager.cpp
 	medal.cpp #ST
 	name.cpp
 	network.cpp #ST

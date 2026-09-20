@@ -338,6 +338,7 @@ OptionValue ZA_Announcers {}
 OptionMenu "OptionsMenu"
 {
 	Title "OPTIONS"
+	Command "Manage Mods", "menu_manage_mods"
 	Submenu "Multiplayer Options",		"ZA_MultiplayerOptions" // [TP]
 	StaticText " " // [TP]
 	Submenu "Customize Controls",		"CustomizeControls"

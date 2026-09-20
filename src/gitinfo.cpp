@@ -37,11 +37,7 @@
 #include "gitinfo.h"
 #include "version.h"
 
-#ifdef __ANDROID__
-#define HG_REVISION_HASH_STRING "R701547F4162"
-#define HG_TIME                 "250804-2140"
-#define HG_REVISION_NUMBER       1754343618
-#endif
+#define ZANDRONUM_RELEASE_NETWORK_REVISION "250804-2140"
 
 const char *GetGitDescription()
 {
@@ -79,9 +75,7 @@ const char *GetVersionString()
 // [BB]
 const char *GetVersionStringRev()
 {
-	//FString s = DOTVERSIONSTR "-r" HG_TIME;
-	//return s.GetChars();
-	return DOTVERSIONSTR_REV;
+	return DOTVERSIONSTR "-r" ZANDRONUM_RELEASE_NETWORK_REVISION;
 }
 
 // [BB]

@@ -376,7 +376,8 @@ OptionMenu ZA_Browser
 	Command		"Refresh",			"querymaster"
 	Command		"Clear filter",			"menu_clear_browser_filter"
 	Submenu		"Get server info",			"ZA_ServerInfo"
-	SafeCommand	"Join game!",			"menu_join_selected_server"
+	Command		"Join game!",			"menu_join_selected_server"
+	Command		"Play Offline",			"menu_play_selected_server_offline"
 }
 
 // =================================================================================================

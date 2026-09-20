@@ -121,6 +121,12 @@ typedef struct
 	// [SB] Converted to a TArray.
 	TArray<FString>	PWADNames;
 
+	// MD5 checksums in the same order as PWADNames.
+	TArray<FString>	PWADChecksums;
+
+	// Nonzero entries are optional server content.
+	TArray<BYTE>	PWADOptional;
+
 	// Name of the IWAD being used.
 	FString			IWADName;
 
@@ -135,6 +141,9 @@ typedef struct
 
 	// Version of the server.
 	FString			Version;
+
+	// Whether this server can be joined by this build.
+	bool			bVersionCompatible;
 
 	// Was this server broadcasted to us on a LAN?
 	bool			bLAN;
@@ -158,6 +167,7 @@ void			BROWSER_Construct( void );
 void			BROWSER_Destruct( void );
 
 bool			BROWSER_IsActive( ULONG ulServer );
+bool			BROWSER_IsServerCompatible( ULONG ulServer );
 bool			BROWSER_IsLAN( ULONG ulServer );
 NETADDRESS_s	BROWSER_GetAddress( ULONG ulServer );
 const char		*BROWSER_GetHostName( ULONG ulServer );
@@ -167,6 +177,8 @@ const char		*BROWSER_GetMapname( ULONG ulServer );
 LONG			BROWSER_GetMaxClients( ULONG ulServer );
 LONG			BROWSER_GetNumPWADs( ULONG ulServer );
 const char		*BROWSER_GetPWADName( ULONG ulServer, ULONG ulWadIdx );
+const char		*BROWSER_GetPWADChecksum( ULONG ulServer, ULONG ulWadIdx );
+bool			BROWSER_IsPWADOptional( ULONG ulServer, ULONG ulWadIdx );
 const char		*BROWSER_GetIWADName( ULONG ulServer );
 GAMEMODE_e		BROWSER_GetGameMode( ULONG ulServer );
 LONG			BROWSER_GetNumPlayers( ULONG ulServer );

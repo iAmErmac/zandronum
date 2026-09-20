@@ -4,6 +4,9 @@
 #ifdef __ANDROID__
 
 #include <jni.h>
+#include <atomic>
+#include <stddef.h>
+#include <stdint.h>
 #include <string>
 
 bool Zandronum_AndroidHost_IsSurfaceReady();
@@ -29,6 +32,9 @@ void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int widt
 	bool forceRebind);
 void Zandronum_AndroidHost_SurfaceChanged(int width, int height);
 void Zandronum_AndroidHost_SurfaceDestroyed();
+bool Zandronum_AndroidHost_DownloadMod(const char *url, const char *tempName,
+	uint64_t maxBytes, std::atomic<bool> *cancel, char *error, size_t errorSize);
+void Zandronum_AndroidHost_CancelModDownload();
 
 #endif
 
