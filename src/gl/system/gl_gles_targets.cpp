@@ -4,11 +4,10 @@
 #include <stdio.h>
 
 #include "gl/system/gl_gles_context.h"
+#include "gl/system/gl_gles_renderer.h"
 
 namespace
 {
-	bool TargetFallbackLogged = false;
-
 	void ClearErrors(const FGLESProcTable &gles)
 	{
 		while (gles.GetError() != GL_NO_ERROR) {}
@@ -181,21 +180,6 @@ bool gl_GLES_CreateRenderTarget(FGLESTargetDescriptor *target, int width, int he
 		candidate.hostOwnsPresentation = hostOwnsPresentation;
 		*target = candidate;
 		restoreState();
-		if (!TargetFallbackLogged)
-		{
-			TargetFallbackLogged = true;
-			char message[256];
-			if (requested > 1 && target->sampleCount != requested)
-				snprintf(message, sizeof(message), "render target selected %dx%d after requested %dx%d MSAA fallback",
-					target->renderWidth, target->renderHeight, requested, requested);
-			else if (target->sampleCount > 1)
-				snprintf(message, sizeof(message), "render target selected %dx%d with %dx MSAA and explicit color resolve",
-					target->renderWidth, target->renderHeight, target->sampleCount);
-			else
-				snprintf(message, sizeof(message), "render target selected %dx%d single-sample RGBA8 with depth/stencil",
-					target->renderWidth, target->renderHeight);
-			gl_GLES_Report("target", message);
-		}
 		return true;
 	}
 
@@ -251,6 +235,7 @@ bool gl_GLES_ResolveRenderTarget(const FGLESTargetDescriptor *target)
 	gles.BindFramebuffer(GL_DRAW_FRAMEBUFFER, target->resolveFramebuffer);
 	gles.BlitFramebuffer(0, 0, target->renderWidth, target->renderHeight,
 		0, 0, target->renderWidth, target->renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	gl_GLES_RecordProfileResolve();
 	const GLenum error = gl_GLES_CheckErrors("target resolve");
 	gles.BindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(drawFramebuffer));
 	gles.BindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer));

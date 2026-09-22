@@ -40,6 +40,7 @@
 */
 
 #include "gl/system/gl_system.h"
+#include <chrono>
 #include "files.h"
 #include "m_swap.h"
 #include "v_video.h"
@@ -77,10 +78,35 @@ EXTERN_CVAR (Bool, vid_vsync)
 #if defined(ZANDRONUM_GLES_BACKEND)
 EXTERN_CVAR (Int, vid_renderer)
 #endif
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+bool gl_GLES_IsProfileEnabled();
+#endif
 
 CVAR(Bool, gl_aalines, false, CVAR_ARCHIVE)
 
 FGLRenderer *GLRenderer;
+
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+static bool DesktopProfileFrameReady = false;
+static std::chrono::steady_clock::time_point DesktopProfileFrameStart;
+static double DesktopProfileRenderMilliseconds = 0.0;
+static unsigned int DesktopProfileFrame = 0;
+
+void gl_GLES_DesktopProfileBegin()
+{
+	if (!gl_GLES_IsProfileEnabled()) return;
+	DesktopProfileFrameStart = std::chrono::steady_clock::now();
+	DesktopProfileFrameReady = false;
+}
+
+void gl_GLES_DesktopProfileEnd()
+{
+	if (!gl_GLES_IsProfileEnabled()) return;
+	DesktopProfileRenderMilliseconds = std::chrono::duration<double, std::milli>(
+		std::chrono::steady_clock::now() - DesktopProfileFrameStart).count();
+	DesktopProfileFrameReady = true;
+}
+#endif
 
 void gl_SetupMenu();
 void gl_LoadExtensions();
@@ -276,6 +302,9 @@ void OpenGLFrameBuffer::Update()
 		GLRenderer->Flush();
 		return;
 	}
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool profileDesktopFrame = DesktopProfileFrameReady;
+#endif
 
 	Begin2D(false);
 
@@ -296,6 +325,22 @@ void OpenGLFrameBuffer::Update()
 	swapped = false;
 	Unlock();
 	CheckBench();
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (profileDesktopFrame)
+	{
+		++DesktopProfileFrame;
+		if (DesktopProfileFrame == 1 || DesktopProfileFrame % 30 == 0)
+		{
+			const auto desktopFrameEnd = std::chrono::steady_clock::now();
+			const double renderMilliseconds = DesktopProfileRenderMilliseconds;
+			const double totalMilliseconds = std::chrono::duration<double, std::milli>(
+				desktopFrameEnd - DesktopProfileFrameStart).count();
+			DPrintf("desktop profile: frame=%u cpu=%.3f total=%.3f ms; renderer=desktop\n",
+				DesktopProfileFrame, renderMilliseconds, totalMilliseconds);
+		}
+		DesktopProfileFrameReady = false;
+	}
+	#endif
 }
 
 

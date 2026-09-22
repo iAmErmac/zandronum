@@ -62,7 +62,6 @@
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
-#include <vector>
 #endif
 
 
@@ -457,7 +456,101 @@ void FVoxelModel::Initialize()
 			}
 		}
 	}
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	BuildNativeGeometry();
+#endif
 }
+
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+static void CalculateNativeVoxelNormal(const FVoxelVertex &a, const FVoxelVertex &b,
+	const FVoxelVertex &c, float normal[3])
+{
+	const float edge1[3] = { b.x - a.x, b.y - a.y, b.z - a.z };
+	const float edge2[3] = { c.x - a.x, c.y - a.y, c.z - a.z };
+	normal[0] = edge1[1] * edge2[2] - edge1[2] * edge2[1];
+	normal[1] = edge1[2] * edge2[0] - edge1[0] * edge2[2];
+	normal[2] = edge1[0] * edge2[1] - edge1[1] * edge2[0];
+	const float length = sqrtf(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+	if (length > 0.0001f)
+	{
+		normal[0] /= length;
+		normal[1] /= length;
+		normal[2] /= length;
+	}
+	else
+	{
+		normal[0] = 0.0f;
+		normal[1] = 0.0f;
+		normal[2] = 1.0f;
+	}
+}
+
+void FVoxelModel::BuildNativeGeometry()
+{
+	mNativePositions.Clear();
+	mNativeTexcoords.Clear();
+	mNativeNormals.Clear();
+	mNativeIndices.Clear();
+	const unsigned int quadCount = mIndices.Size() / 4;
+	if (quadCount == 0) return;
+	mNativePositions.Resize(quadCount * 12);
+	mNativeTexcoords.Resize(quadCount * 8);
+	mNativeNormals.Resize(quadCount * 12);
+	mNativeIndices.Resize(quadCount * 6);
+	for (unsigned int quad = 0; quad < quadCount; ++quad)
+	{
+		const unsigned int input = quad * 4;
+		const unsigned int a = mIndices[input + 0];
+		const unsigned int b = mIndices[input + 1];
+		const unsigned int c = mIndices[input + 2];
+		const unsigned int d = mIndices[input + 3];
+		if (a >= mVertices.Size() || b >= mVertices.Size() ||
+			c >= mVertices.Size() || d >= mVertices.Size())
+		{
+			mNativePositions.Clear();
+			mNativeTexcoords.Clear();
+			mNativeNormals.Clear();
+			mNativeIndices.Clear();
+			return;
+		}
+		const FVoxelVertex *corners[4] =
+		{
+			&mVertices[a], &mVertices[b], &mVertices[c], &mVertices[d]
+		};
+		float normal[3];
+		CalculateNativeVoxelNormal(*corners[0], *corners[1], *corners[2], normal);
+		const unsigned int firstVertex = quad * 4;
+		for (unsigned int corner = 0; corner < 4; ++corner)
+		{
+			const FVoxelVertex &vertex = *corners[corner];
+			const unsigned int positionOffset = (firstVertex + corner) * 3;
+			const unsigned int textureOffset = (firstVertex + corner) * 2;
+			// KVX data uses the opposite horizontal forward axis from the native model view.
+			mNativePositions[positionOffset + 0] = -vertex.x;
+			mNativePositions[positionOffset + 1] = vertex.y;
+			mNativePositions[positionOffset + 2] = -vertex.z;
+			mNativeTexcoords[textureOffset + 0] = vertex.u;
+			mNativeTexcoords[textureOffset + 1] = vertex.v;
+			mNativeNormals[positionOffset + 0] = -normal[0];
+			mNativeNormals[positionOffset + 1] = normal[1];
+			mNativeNormals[positionOffset + 2] = -normal[2];
+		}
+		const unsigned int indexOffset = quad * 6;
+		mNativeIndices[indexOffset + 0] = firstVertex + 0;
+		mNativeIndices[indexOffset + 1] = firstVertex + 1;
+		mNativeIndices[indexOffset + 2] = firstVertex + 2;
+		mNativeIndices[indexOffset + 3] = firstVertex + 0;
+		mNativeIndices[indexOffset + 4] = firstVertex + 2;
+		mNativeIndices[indexOffset + 5] = firstVertex + 3;
+	}
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	mVertices.Clear();
+	mVertices.ShrinkToFit();
+	mIndices.Clear();
+	mIndices.ShrinkToFit();
+#endif
+}
+#endif
 
 //===========================================================================
 //
@@ -564,97 +657,17 @@ void FVoxelModel::RenderFrameInterpolated(FTexture * skin, int frame, int frame2
 }
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-struct FNativeVoxelScratch
-{
-	std::vector<float> positions;
-	std::vector<float> texcoords;
-	std::vector<float> normals;
-	std::vector<unsigned int> indices;
-};
-
 bool FVoxelModel::RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 	int cm, int translation, FModelNativeCollector *collector)
 {
-	if (collector == NULL || mVertices.Size() == 0 || mIndices.Size() < 4) return false;
-	static FNativeVoxelScratch scratch;
-	std::vector<float> &positions = scratch.positions;
-	std::vector<float> &texcoords = scratch.texcoords;
-	std::vector<float> &normals = scratch.normals;
-	std::vector<unsigned int> &indices = scratch.indices;
-	positions.clear();
-	texcoords.clear();
-	normals.clear();
-	indices.clear();
-	positions.reserve((mIndices.Size() / 4) * 12);
-	texcoords.reserve((mIndices.Size() / 4) * 8);
-	normals.reserve((mIndices.Size() / 4) * 12);
-	indices.reserve((mIndices.Size() / 4) * 6);
-	for (unsigned int quad = 0; quad + 3 < mIndices.Size(); quad += 4)
-	{
-		const unsigned int a = mIndices[quad + 0];
-		const unsigned int b = mIndices[quad + 1];
-		const unsigned int c = mIndices[quad + 2];
-		const unsigned int d = mIndices[quad + 3];
-		if (a >= mVertices.Size() || b >= mVertices.Size() || c >= mVertices.Size() || d >= mVertices.Size())
-			return false;
-		const FVoxelVertex *corners[4] =
-		{
-			&mVertices[a], &mVertices[b], &mVertices[c], &mVertices[d]
-		};
-		const float edge1[3] =
-		{
-			corners[1]->x - corners[0]->x,
-			corners[1]->y - corners[0]->y,
-			corners[1]->z - corners[0]->z
-		};
-		const float edge2[3] =
-		{
-			corners[2]->x - corners[0]->x,
-			corners[2]->y - corners[0]->y,
-			corners[2]->z - corners[0]->z
-		};
-		float normal[3] =
-		{
-			edge1[1] * edge2[2] - edge1[2] * edge2[1],
-			edge1[2] * edge2[0] - edge1[0] * edge2[2],
-			edge1[0] * edge2[1] - edge1[1] * edge2[0]
-		};
-		const float length = sqrtf(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
-		if (length > 0.0001f)
-		{
-			normal[0] /= length;
-			normal[1] /= length;
-			normal[2] /= length;
-		}
-		else
-		{
-			normal[0] = 0.0f;
-			normal[1] = 0.0f;
-			normal[2] = 1.0f;
-		}
-		const unsigned int first = static_cast<unsigned int>(positions.size() / 3);
-		for (int corner = 0; corner < 4; ++corner)
-		{
-			positions.push_back(corners[corner]->x);
-			positions.push_back(corners[corner]->y);
-			positions.push_back(corners[corner]->z);
-			texcoords.push_back(corners[corner]->u);
-			texcoords.push_back(corners[corner]->v);
-			normals.push_back(normal[0]);
-			normals.push_back(normal[1]);
-			normals.push_back(normal[2]);
-		}
-		indices.push_back(first + 0);
-		indices.push_back(first + 1);
-		indices.push_back(first + 2);
-		indices.push_back(first + 0);
-		indices.push_back(first + 2);
-		indices.push_back(first + 3);
-	}
-	if (indices.empty()) return false;
-	collector->SubmitSurface(&positions[0], &texcoords[0],
-		static_cast<unsigned int>(positions.size() / 3), &indices[0],
-		static_cast<unsigned int>(indices.size()), skin != NULL ? skin : mPalette, &normals[0]);
+	if (collector == NULL || mNativePositions.Size() == 0 ||
+		mNativeTexcoords.Size() == 0 || mNativeNormals.Size() == 0 ||
+		mNativeIndices.Size() < 6)
+		return false;
+	collector->SubmitSurface(&mNativePositions[0], &mNativeTexcoords[0],
+		static_cast<unsigned int>(mNativePositions.Size() / 3), &mNativeIndices[0],
+		static_cast<unsigned int>(mNativeIndices.Size()), skin != NULL ? skin : mPalette,
+		&mNativeNormals[0]);
 	return true;
 }
 #endif

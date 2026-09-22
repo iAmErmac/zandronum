@@ -19,6 +19,7 @@ struct FGLESPortalComposite
 	GLuint sceneVertexArray;
 	GLuint sceneSampler;
 	GLsizei indexCount;
+	GLenum indexType;
 	size_t indexOffsetBytes;
 	const float *viewProjection;
 	int targetWidth;
@@ -39,6 +40,7 @@ struct FGLESPortalCompositeList
 	GLuint sourceTexture;
 	GLuint sceneVertexArray;
 	GLuint sceneSampler;
+	GLenum indexType;
 	const FGLESPortalMask *masks;
 	size_t maskCount;
 	int targetWidth;

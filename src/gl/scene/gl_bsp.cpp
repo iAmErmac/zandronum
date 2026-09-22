@@ -138,13 +138,6 @@ static sector_t *currentsector;
 
 static void AddLine (seg_t *seg)
 {
-#ifdef _DEBUG
-	if (seg->linedef - lines == 38)
-	{
-		int a = 0;
-	}
-#endif
-
 	angle_t startAngle, endAngle;
 	sector_t * backsector = NULL;
 	sector_t bs;
@@ -408,14 +401,6 @@ static void DoSubsector(subsector_t * sub)
 	// check for visibility of this entire subsector. This requires GL nodes.
 	// (disabled because it costs more time than it saves.)
 	//if (!clipper.CheckBox(sub->bbox)) return;
-
-
-#ifdef _DEBUG
-	if (sub->sector-sectors==931)
-	{
-		int a = 0;
-	}
-#endif
 
 	sector=sub->sector;
 	if (!sector) return;

@@ -359,14 +359,6 @@ void GLWall::SplitWall(sector_t * frontsector, bool translucent)
 		return;
 	}
 	::SplitWall.Clock();
-
-#ifdef _DEBUG
-	if (seg->linedef-lines==1)
-	{
-		int a = 0;
-	}
-#endif
-
 	if (lightlist.Size()>1)
 	{
 		for(i=0;i<lightlist.Size()-1;i++)
@@ -1504,14 +1496,6 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 	fixed_t ffh2;
 	sector_t * realfront;
 	sector_t * realback;
-
-#ifdef _DEBUG
-	if (seg->linedef-lines==4)
-	{
-		int a = 0;
-	}
-#endif
-		
 	// note: we always have a valid sidedef and linedef reference when getting here.
 
 	this->seg = seg;
@@ -1634,7 +1618,6 @@ void GLWall::Process(seg_t *seg, sector_t * frontsector, sector_t * backsector)
 		return;
 	}
 
-	//return;
 	// [GZ] 3D middle textures are necessarily two-sided, even if they lack the explicit two-sided flag
 	if (!backsector || !(seg->linedef->flags&(ML_TWOSIDED|ML_3DMIDTEX))) // one sided
 	{

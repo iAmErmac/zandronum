@@ -207,10 +207,6 @@ void gl_LoadExtensions()
 
 #if !defined(__ANDROID__)
 
-#if !defined(ZANDRONUM_GLES_BACKEND)
-	ogl_LoadFunctions();
-#endif
-
 	CollectExtensions();
 	const char *version = (const char*)glGetString(GL_VERSION);
 
@@ -387,19 +383,6 @@ void gl_LoadExtensions()
 
 		gl.flags|=RFL_FRAMEBUFFER;
 	}
-
-#if 0
-	if (CheckExtension("GL_ARB_texture_buffer_object") && 
-		CheckExtension("GL_ARB_texture_float") && 
-		CheckExtension("GL_EXT_GPU_Shader4") && 
-		CheckExtension("GL_ARB_texture_rg") && 
-		gl.shadermodel == 4)
-	{
-		glTexBufferARB = (PFNGLTEXBUFFERARBPROC)myGetProcAddress("glTexBufferARB");
-		gl.flags|=RFL_TEXTUREBUFFER;
-	}
-	#endif
-
 
 
 	glActiveTexture = (PFNGLACTIVETEXTUREPROC)myGetProcAddress("glActiveTextureARB");

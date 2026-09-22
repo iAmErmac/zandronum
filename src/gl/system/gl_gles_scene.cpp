@@ -16,10 +16,15 @@ namespace
 	bool SceneLightFailureLogged = false;
 	size_t SceneVertexBufferCapacity = 0;
 	size_t SceneIndexBufferCapacity = 0;
-	FGLESSceneLightSelection LastLightSelection = {};
-	bool HasLastLightSelection = false;
+	static const size_t MaxSceneLightSelections = 64;
+	struct FSceneLightSelectionCacheEntry
+	{
+		const float *sourceData;
+		FGLESSceneLightSelection selection;
+	};
 	std::vector<GLfloat> SceneLightPositionStream;
 	std::vector<GLfloat> SceneLightColorStream;
+	std::vector<FSceneLightSelectionCacheEntry> SceneLightSelections;
 	std::vector<size_t> SceneDrawOrders[2];
 	std::vector<const FGLESSceneOrderRecord *> SceneIncludedRecords;
 
@@ -42,21 +47,18 @@ namespace
 		return capacity;
 	}
 
-	bool MatchesLastLightSelection(const float *lightData, unsigned int normalCount,
-		unsigned int subtractiveCount, unsigned int lightCount)
+	bool MatchesLightSelection(const float *lightData,
+		const FGLESSceneLightSelection &candidate)
 	{
-		if (!HasLastLightSelection || lightData == nullptr ||
-			LastLightSelection.normalCount != normalCount ||
-			LastLightSelection.subtractiveCount != subtractiveCount ||
-			LastLightSelection.lightCount != lightCount)
+		if (lightData == nullptr)
 			return false;
-		const size_t streamEnd = LastLightSelection.streamOffset + lightCount;
+		const size_t streamEnd = candidate.streamOffset + candidate.lightCount;
 		if (streamEnd > SceneLightPositionStream.size() / 4 ||
 			streamEnd > SceneLightColorStream.size() / 4)
 			return false;
-		for (unsigned int light = 0; light < lightCount; ++light)
+		for (unsigned int light = 0; light < candidate.lightCount; ++light)
 		{
-			const size_t offset = (LastLightSelection.streamOffset + light) * 4;
+			const size_t offset = (candidate.streamOffset + light) * 4;
 			if (memcmp(&SceneLightPositionStream[offset], lightData + light * 8, 4 * sizeof(GLfloat)) != 0 ||
 				memcmp(&SceneLightColorStream[offset], lightData + light * 8 + 4, 4 * sizeof(GLfloat)) != 0)
 				return false;
@@ -75,6 +77,23 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 
 	drawOrder->clear();
 	if (records == nullptr || recordCount == 0) return { nullptr, 0 };
+	bool requiresOrdering = false;
+	for (size_t i = 0; i < recordCount; ++i)
+	{
+		if (records[i].included &&
+			(records[i].hud || records[i].flood || records[i].translucent))
+		{
+			requiresOrdering = true;
+			break;
+		}
+	}
+	if (!requiresOrdering)
+	{
+		drawOrder->reserve(recordCount);
+		for (size_t i = 0; i < recordCount; ++i)
+			if (records[i].included) drawOrder->push_back(records[i].batchIndex);
+		return { drawOrder->empty() ? nullptr : drawOrder->data(), drawOrder->size() };
+	}
 
 	std::vector<const FGLESSceneOrderRecord *> &included = SceneIncludedRecords;
 	included.clear();
@@ -132,31 +151,35 @@ bool gl_GLESInternalSceneCanAppend(size_t currentVertexCount, size_t currentInde
 	return valid;
 }
 
-void gl_GLESInternalSceneUploadGeometry(GLuint vertexArray, GLuint vertexBuffer,
+unsigned int gl_GLESInternalSceneUploadGeometry(GLuint vertexArray, GLuint vertexBuffer,
 	GLuint indexBuffer, const void *vertices, size_t vertexBytes,
-	const GLuint *indices, size_t indexCount)
+	const void *indices, size_t indexBytes)
 {
 	if (vertexArray == 0 || vertexBuffer == 0 || indexBuffer == 0 ||
-		vertices == nullptr || vertexBytes == 0 || indices == nullptr || indexCount == 0)
-		return;
+		vertices == nullptr || vertexBytes == 0 || indices == nullptr || indexBytes == 0)
+		return 0;
+	unsigned int reallocations = 0;
 	glBindVertexArray(vertexArray);
 	glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
 	if (vertexBytes > SceneVertexBufferCapacity)
 	{
+		++reallocations;
 		SceneVertexBufferCapacity = GrowBufferCapacity(SceneVertexBufferCapacity, vertexBytes);
 		glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(SceneVertexBufferCapacity), nullptr, GL_DYNAMIC_DRAW);
 	}
 	glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertexBytes), vertices);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
-	const size_t indexBytes = indexCount * sizeof(GLuint);
 	if (indexBytes > SceneIndexBufferCapacity)
 	{
+		++reallocations;
 		SceneIndexBufferCapacity = GrowBufferCapacity(SceneIndexBufferCapacity, indexBytes);
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(SceneIndexBufferCapacity), nullptr, GL_DYNAMIC_DRAW);
 	}
 	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(indexBytes), indices);
 	glBindVertexArray(0);
-	gl_GLES_CheckErrors("scene geometry upload");
+	if (gl_GLES_IsProfileEnabled())
+		gl_GLES_CheckErrors("scene geometry upload");
+	return reallocations;
 }
 
 void gl_GLESInternalSceneInvalidateBuffers()
@@ -169,8 +192,7 @@ void gl_GLESInternalSceneClearLights()
 {
 	SceneLightPositionStream.clear();
 	SceneLightColorStream.clear();
-	LastLightSelection = {};
-	HasLastLightSelection = false;
+	SceneLightSelections.clear();
 }
 
 bool gl_GLESInternalSceneAppendLights(const float *lightData,
@@ -185,13 +207,28 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 		selection->streamOffset = 0;
 		return true;
 	}
-	selection->streamOffset = SceneLightPositionStream.size() / 4;
-
 	const unsigned int sourceNormalCount = lightCounts[0] / 2;
 	const unsigned int sourceSubtractiveCount = lightCounts[1] / 2;
 	const unsigned int sourceLightCount = lightCounts[2] / 2;
+	const unsigned int normalCount = std::min(sourceNormalCount, sourceLightCount);
+	const unsigned int subtractiveCount = std::min(sourceSubtractiveCount, sourceLightCount);
+	const unsigned int normalizedNormalCount = std::min(normalCount, subtractiveCount);
 	const size_t maxLightCount = std::min(SceneLightPositionStream.max_size(),
 		SceneLightColorStream.max_size()) / 4;
+	for (size_t cachedIndex = SceneLightSelections.size(); cachedIndex > 0; --cachedIndex)
+	{
+		const FSceneLightSelectionCacheEntry &cached = SceneLightSelections[cachedIndex - 1];
+		const FGLESSceneLightSelection &candidate = cached.selection;
+		if (cached.sourceData != lightData || candidate.normalCount != normalizedNormalCount ||
+			candidate.subtractiveCount != subtractiveCount || candidate.lightCount != sourceLightCount ||
+			!MatchesLightSelection(lightData, candidate))
+			continue;
+		gl_GLES_RecordProfileLightSelection(true);
+		*selection = candidate;
+		return true;
+	}
+
+	selection->streamOffset = SceneLightPositionStream.size() / 4;
 	if (selection->streamOffset > maxLightCount ||
 		sourceLightCount > maxLightCount - selection->streamOffset)
 	{
@@ -199,19 +236,14 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 			"native selected-light stream exceeded addressable storage; this batch was rejected");
 		return false;
 	}
-	selection->normalCount = std::min(sourceNormalCount, sourceLightCount);
-	selection->subtractiveCount = std::min(sourceSubtractiveCount, sourceLightCount);
+	selection->normalCount = normalizedNormalCount;
+	selection->subtractiveCount = subtractiveCount;
 	selection->lightCount = sourceLightCount;
 	if (selection->subtractiveCount > selection->lightCount)
 		selection->subtractiveCount = selection->lightCount;
 	if (selection->normalCount > selection->subtractiveCount)
 		selection->normalCount = selection->subtractiveCount;
-	if (MatchesLastLightSelection(lightData, selection->normalCount,
-		selection->subtractiveCount, selection->lightCount))
-	{
-		*selection = LastLightSelection;
-		return true;
-	}
+	gl_GLES_RecordProfileLightSelection(false);
 	for (unsigned int light = 0; light < selection->lightCount; ++light)
 	{
 		for (unsigned int component = 0; component < 4; ++component)
@@ -220,8 +252,9 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 			SceneLightColorStream.push_back(lightData[light * 8 + 4 + component]);
 		}
 	}
-	LastLightSelection = *selection;
-	HasLastLightSelection = true;
+	if (SceneLightSelections.size() >= MaxSceneLightSelections)
+		SceneLightSelections.erase(SceneLightSelections.begin());
+	SceneLightSelections.push_back({ lightData, *selection });
 	return true;
 }
 
@@ -262,7 +295,7 @@ void gl_GLESInternalSceneGetLightUpload(const FGLESSceneLightSelection &selectio
 void gl_GLESInternalSceneDrawLightOverflow(const FGLESSceneLightPass &pass)
 {
 	if (pass.selection.lightCount <= GLES_MAX_LIGHTS) return;
-	const GLint lightOnlyMode = glGetUniformLocation(pass.program, "u_light_only_mode");
+	const GLint lightOnlyMode = pass.lightOnlyUniform;
 	if (lightOnlyMode < 0)
 	{
 		ReportSceneLightFailure("native light-overflow shader is missing its light-only control");
@@ -274,10 +307,13 @@ void gl_GLESInternalSceneDrawLightOverflow(const FGLESSceneLightPass &pass)
 		return;
 	}
 
-	GLint depthFunction = GL_LESS;
-	GLboolean depthWrite = GL_TRUE;
-	glGetIntegerv(GL_DEPTH_FUNC, &depthFunction);
-	glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWrite);
+	GLint depthFunction = pass.depthFunction;
+	GLboolean depthWrite = pass.depthWrite ? GL_TRUE : GL_FALSE;
+	if (!pass.depthStateKnown)
+	{
+		glGetIntegerv(GL_DEPTH_FUNC, &depthFunction);
+		glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWrite);
+	}
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ONE);
 	glDepthMask(GL_FALSE);
@@ -306,8 +342,12 @@ void gl_GLESInternalSceneDrawLightOverflow(const FGLESSceneLightPass &pass)
 				projected ? pass.dynamicLightTexture : pass.checkerTexture);
 			glActiveTexture(GL_TEXTURE0);
 			glBlendEquation(equation);
-			glDrawElements(GL_TRIANGLES, pass.indexCount, GL_UNSIGNED_INT,
-				reinterpret_cast<const void *>(pass.firstIndex * sizeof(GLuint)));
+			gl_GLES_RecordProfileOverflow();
+			gl_GLES_RecordProfileDraw(false, pass.indexCount);
+			const GLenum indexType = pass.indexType != 0 ? pass.indexType : GL_UNSIGNED_INT;
+			const size_t indexStride = pass.indexStride != 0 ? pass.indexStride : sizeof(GLuint);
+			glDrawElements(GL_TRIANGLES, pass.indexCount, indexType,
+				reinterpret_cast<const void *>(pass.firstIndex * indexStride));
 			first += upload.lightCount;
 		}
 	};

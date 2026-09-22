@@ -380,6 +380,61 @@ void FDMDModel::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 }
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+struct FNativeMD2Scratch
+{
+	std::vector<float> positions;
+	std::vector<float> texcoords;
+	std::vector<float> normals;
+};
+
+void FDMDModel::BuildNativeCommandStream()
+{
+	mNativeCommandVertices.Clear();
+	mNativeCommandIndices.Clear();
+	mNativeCommandStreamValid = false;
+	const char *cursor = reinterpret_cast<const char *>(lods[0].glCommands);
+	const char *end = cursor != NULL ? cursor + lodInfo[0].numGlCommands * sizeof(int) : NULL;
+	if (cursor == NULL || end == NULL) return;
+	while (cursor + sizeof(int) <= end)
+	{
+		const int command = *reinterpret_cast<const int *>(cursor);
+		cursor += sizeof(int);
+		if (command == 0)
+		{
+			mNativeCommandStreamValid = mNativeCommandVertices.Size() > 0 &&
+				mNativeCommandIndices.Size() > 0;
+			return;
+		}
+		const bool strip = command > 0;
+		const int count = abs(command);
+		if (count < 3 || cursor + count * sizeof(FGLCommandVertex) > end) return;
+		const unsigned int firstVertex = mNativeCommandVertices.Size();
+		for (int vertex = 0; vertex < count; ++vertex)
+		{
+			const FGLCommandVertex *commandVertex =
+				reinterpret_cast<const FGLCommandVertex *>(cursor);
+			cursor += sizeof(FGLCommandVertex);
+			if (commandVertex->index < 0 || commandVertex->index >= info.numVertices)
+				return;
+			mNativeCommandVertices.Push(*commandVertex);
+		}
+		for (int vertex = 0; vertex + 2 < count; ++vertex)
+		{
+			if (strip && (vertex & 1))
+			{
+				mNativeCommandIndices.Push(firstVertex + vertex + 1);
+				mNativeCommandIndices.Push(firstVertex + vertex);
+			}
+			else
+			{
+				mNativeCommandIndices.Push(strip ? firstVertex + vertex : firstVertex);
+				mNativeCommandIndices.Push(strip ? firstVertex + vertex + 1 : firstVertex + vertex + 1);
+			}
+			mNativeCommandIndices.Push(firstVertex + vertex + 2);
+		}
+	}
+}
+
 bool FDMDModel::RenderFrameNative(FTexture *skin, int frameno, int frameno2, double inter,
 	int cm, int translation, FModelNativeCollector *collector)
 {
@@ -398,60 +453,37 @@ bool FDMDModel::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 	inter = clamp<double>(inter, 0.0, 1.0);
 	ModelFrame *firstFrame = &frames[frameno];
 	ModelFrame *secondFrame = &frames[frameno2];
-	std::vector<float> positions;
-	std::vector<float> texcoords;
-	std::vector<float> normals;
-	std::vector<unsigned int> indices;
-	char *cursor = reinterpret_cast<char *>(lods[0].glCommands);
-	if (cursor == NULL) return false;
-	while (*reinterpret_cast<int *>(cursor) != 0)
+	if (!mNativeCommandStreamValid) return false;
+	static FNativeMD2Scratch scratch;
+	std::vector<float> &positions = scratch.positions;
+	std::vector<float> &texcoords = scratch.texcoords;
+	std::vector<float> &normals = scratch.normals;
+	positions.clear();
+	texcoords.clear();
+	normals.clear();
+	positions.reserve(mNativeCommandVertices.Size() * 3);
+	texcoords.reserve(mNativeCommandVertices.Size() * 2);
+	normals.reserve(mNativeCommandVertices.Size() * 3);
+	for (unsigned int vertex = 0; vertex < mNativeCommandVertices.Size(); ++vertex)
 	{
-		const int command = *reinterpret_cast<int *>(cursor);
-		cursor += sizeof(int);
-		const bool strip = command > 0;
-		const int count = abs(command);
-		if (count < 3) return false;
-		std::vector<unsigned int> primitive;
-		primitive.reserve(count);
-		for (int vertex = 0; vertex < count; ++vertex)
-		{
-			const FGLCommandVertex *commandVertex = reinterpret_cast<const FGLCommandVertex *>(cursor);
-			cursor += sizeof(FGLCommandVertex);
-			if (commandVertex->index < 0 || commandVertex->index >= info.numVertices) return false;
-			const unsigned int index = static_cast<unsigned int>(positions.size() / 3);
-			const FModelVertex &a = firstFrame->vertices[commandVertex->index];
-			const FModelVertex &b = secondFrame->vertices[commandVertex->index];
-			const FModelVertex &normalA = firstFrame->normals[commandVertex->index];
-			const FModelVertex &normalB = secondFrame->normals[commandVertex->index];
-			positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[0] + inter * b.xyz[0]));
-			positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[1] + inter * b.xyz[1]));
-			positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[2] + inter * b.xyz[2]));
-			normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[0] + inter * normalB.xyz[0]));
-			normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[1] + inter * normalB.xyz[1]));
-			normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[2] + inter * normalB.xyz[2]));
-			texcoords.push_back(commandVertex->s);
-			texcoords.push_back(commandVertex->t);
-			primitive.push_back(index);
-		}
-		for (int vertex = 0; vertex + 2 < count; ++vertex)
-		{
-			if (strip && (vertex & 1))
-			{
-				indices.push_back(primitive[vertex + 1]);
-				indices.push_back(primitive[vertex]);
-			}
-			else
-			{
-				indices.push_back(strip ? primitive[vertex] : primitive[0]);
-				indices.push_back(strip ? primitive[vertex + 1] : primitive[vertex + 1]);
-			}
-			indices.push_back(strip ? primitive[vertex + 2] : primitive[vertex + 2]);
-		}
+		const FGLCommandVertex &commandVertex = mNativeCommandVertices[vertex];
+		const FModelVertex &a = firstFrame->vertices[commandVertex.index];
+		const FModelVertex &b = secondFrame->vertices[commandVertex.index];
+		const FModelVertex &normalA = firstFrame->normals[commandVertex.index];
+		const FModelVertex &normalB = secondFrame->normals[commandVertex.index];
+		positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[0] + inter * b.xyz[0]));
+		positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[1] + inter * b.xyz[1]));
+		positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[2] + inter * b.xyz[2]));
+		normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[0] + inter * normalB.xyz[0]));
+		normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[1] + inter * normalB.xyz[1]));
+		normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[2] + inter * normalB.xyz[2]));
+		texcoords.push_back(commandVertex.s);
+		texcoords.push_back(commandVertex.t);
 	}
-	if (indices.empty()) return false;
+	if (mNativeCommandIndices.Size() == 0) return false;
 	collector->SubmitSurface(&positions[0], &texcoords[0],
-		static_cast<unsigned int>(positions.size() / 3), &indices[0],
-		static_cast<unsigned int>(indices.size()), skin, &normals[0]);
+		static_cast<unsigned int>(positions.size() / 3), &mNativeCommandIndices[0],
+		static_cast<unsigned int>(mNativeCommandIndices.Size()), skin, &normals[0]);
 	return true;
 }
 #endif
@@ -574,6 +606,10 @@ bool FMD2Model::Load(const char * path, int, const char * buffer, int length)
 
 	lods[0].glCommands = new int[lodInfo[0].numGlCommands];
 	memcpy(lods[0].glCommands, buffer + lodInfo[0].offsetGlCommands, sizeof(int) * lodInfo[0].numGlCommands);
+
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	BuildNativeCommandStream();
+#endif
 
 	skins = new FTexture *[info.numSkins];
 

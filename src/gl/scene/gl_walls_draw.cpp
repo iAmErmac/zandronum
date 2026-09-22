@@ -287,11 +287,23 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			glseg.x2, ztop[1], glseg.y2,
 			glseg.x2, zbottom[1], glseg.y2
 		};
-		const float texcoords[8] =
+		float texcoords[8] =
 		{
 			tcs[0].u, tcs[0].v, tcs[1].u, tcs[1].v,
 			tcs[2].u, tcs[2].v, tcs[3].u, tcs[3].v
 		};
+		if (gltexture != NULL && gltexture->tex->bHasCanvas)
+		{
+			// Canvas walls use finite targets; normalize their V span before clamped sampling.
+			float minimumV = texcoords[1];
+			for (int vertex = 1; vertex < 4; ++vertex)
+				minimumV = std::min(minimumV, texcoords[vertex * 2 + 1]);
+			if (minimumV != 0.0f)
+			{
+				for (int vertex = 0; vertex < 4; ++vertex)
+					texcoords[vertex * 2 + 1] -= minimumV;
+			}
+		}
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
 		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			gltexture->BindNativeBrightmap(true) : 0;
@@ -621,14 +633,6 @@ void GLWall::Draw(int pass)
 {
 	FLightNode * node;
 	int rel;
-
-#ifdef _DEBUG
-	if (seg->linedef-lines==879)
-	{
-		int a = 0;
-	}
-#endif
-
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive() && pass != GLPASS_ALL)
 		nativeLightCounts[0] = nativeLightCounts[1] = nativeLightCounts[2] = 0;

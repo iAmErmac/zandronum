@@ -10,6 +10,10 @@
 namespace
 {
 	bool StateWarningLogged = false;
+	bool BlendStateKnown = false;
+	GLenum CachedSourceBlend = 0;
+	GLenum CachedDestinationBlend = 0;
+	GLenum CachedBlendEquation = 0;
 }
 
 void gl_GLESInternalResetState(int width, int height)
@@ -42,11 +46,18 @@ void gl_GLESInternalResetState(int width, int height)
 	glBindVertexArray(0);
 	glUseProgram(0);
 	gl_GLESInternalInvalidateProgramBinding();
+	gl_GLESInternalInvalidateStateCache();
+}
+
+void gl_GLESInternalInvalidateStateCache()
+{
+	BlendStateKnown = false;
 }
 
 void gl_GLESInternalStateContextLost()
 {
 	StateWarningLogged = false;
+	gl_GLESInternalInvalidateStateCache();
 }
 
 bool gl_GLESInternalApplyRenderState(bool resourcesAvailable, int srcBlend, int dstBlend,
@@ -57,8 +68,27 @@ bool gl_GLESInternalApplyRenderState(bool resourcesAvailable, int srcBlend, int 
 	(void)alphaThreshold;
 	(void)textureMode;
 	if (!resourcesAvailable) return false;
-	glBlendFunc(static_cast<GLenum>(srcBlend), static_cast<GLenum>(dstBlend));
-	glBlendEquation(static_cast<GLenum>(blendEquation));
+	const GLenum requestedSourceBlend = static_cast<GLenum>(srcBlend);
+	const GLenum requestedDestinationBlend = static_cast<GLenum>(dstBlend);
+	const GLenum requestedBlendEquation = static_cast<GLenum>(blendEquation);
+	const bool unchanged = BlendStateKnown &&
+		CachedSourceBlend == requestedSourceBlend &&
+		CachedDestinationBlend == requestedDestinationBlend &&
+		CachedBlendEquation == requestedBlendEquation;
+	if (unchanged)
+	{
+		gl_GLES_RecordProfileState(true);
+	}
+	else
+	{
+		glBlendFunc(requestedSourceBlend, requestedDestinationBlend);
+		glBlendEquation(requestedBlendEquation);
+		CachedSourceBlend = requestedSourceBlend;
+		CachedDestinationBlend = requestedDestinationBlend;
+		CachedBlendEquation = requestedBlendEquation;
+		BlendStateKnown = true;
+		gl_GLES_RecordProfileState(false);
+	}
 	if (alphaTest || fogEnabled || !textureEnabled)
 	{
 		if (developer && !StateWarningLogged)
@@ -67,7 +97,10 @@ bool gl_GLESInternalApplyRenderState(bool resourcesAvailable, int srcBlend, int 
 			DPrintf("Zandronum GLES state request is consumed by the native shader variants; alpha, fog, and texture flags remain submission semantics.\n");
 		}
 	}
-	return gl_GLES_CheckErrors("FRenderState::Apply") == GL_NO_ERROR;
+	// Keep the error drain out of normal render-state traffic; scene boundaries
+	// perform the regular GLES check, while developer mode retains this local
+	// diagnostic when tracing a legacy state request.
+	return !developer || gl_GLES_CheckErrors("FRenderState::Apply") == GL_NO_ERROR;
 }
 
 #endif

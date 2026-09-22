@@ -326,6 +326,13 @@ void FMD3Model::RenderFrameInterpolated(FTexture * skin, int frameno, int framen
 }
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+struct FNativeMD3Scratch
+{
+	std::vector<float> positions;
+	std::vector<float> texcoords;
+	std::vector<float> normals;
+};
+
 bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, double inter,
 	int cm, int translation, FModelNativeCollector *collector)
 {
@@ -338,6 +345,7 @@ bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 	}
 	inter = clamp<double>(inter, 0.0, 1.0);
 	bool submitted = false;
+	static FNativeMD3Scratch scratch;
 	for (int surfaceIndex = 0; surfaceIndex < numSurfaces; ++surfaceIndex)
 	{
 		MD3Surface *surface = &surfaces[surfaceIndex];
@@ -347,14 +355,34 @@ bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 		if (!surfaceSkin && surface->numSkins > 0)
 			surfaceSkin = surface->skins[0];
 		if (!surfaceSkin || surface->numVertices <= 0 || surface->numTriangles <= 0) continue;
-		std::vector<float> positions;
-		std::vector<float> texcoords;
-		std::vector<float> normals;
-		std::vector<unsigned int> indices;
+		const unsigned int nativeIndexCount = static_cast<unsigned int>(surface->numTriangles) * 3;
+		if (surface->nativeIndices.Size() != nativeIndexCount)
+		{
+			surface->nativeIndices.Clear();
+			surface->nativeIndices.Resize(nativeIndexCount);
+			for (int triangle = 0; triangle < surface->numTriangles; ++triangle)
+			{
+				for (int corner = 0; corner < 3; ++corner)
+				{
+					const int index = surface->tris[triangle].VertIndex[corner];
+					if (index < 0 || index >= surface->numVertices)
+					{
+						surface->nativeIndices.Clear();
+						return submitted;
+					}
+					surface->nativeIndices[triangle * 3 + corner] = static_cast<unsigned int>(index);
+				}
+			}
+		}
+		std::vector<float> &positions = scratch.positions;
+		std::vector<float> &texcoords = scratch.texcoords;
+		std::vector<float> &normals = scratch.normals;
+		positions.clear();
+		texcoords.clear();
+		normals.clear();
 		positions.reserve(surface->numVertices * 3);
 		texcoords.reserve(surface->numVertices * 2);
 		normals.reserve(surface->numVertices * 3);
-		indices.reserve(surface->numTriangles * 3);
 		MD3Vertex *firstFrame = surface->vertices + frameno * surface->numVertices;
 		MD3Vertex *secondFrame = surface->vertices + frameno2 * surface->numVertices;
 		for (int vertex = 0; vertex < surface->numVertices; ++vertex)
@@ -378,18 +406,9 @@ bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 			texcoords.push_back(surface->texcoords[vertex].s);
 			texcoords.push_back(surface->texcoords[vertex].t);
 		}
-		for (int triangle = 0; triangle < surface->numTriangles; ++triangle)
-		{
-			for (int corner = 0; corner < 3; ++corner)
-			{
-				const int index = surface->tris[triangle].VertIndex[corner];
-				if (index < 0 || index >= surface->numVertices) return submitted;
-				indices.push_back(static_cast<unsigned int>(index));
-			}
-		}
 		collector->SubmitSurface(&positions[0], &texcoords[0],
-			static_cast<unsigned int>(positions.size() / 3), &indices[0],
-			static_cast<unsigned int>(indices.size()), surfaceSkin, &normals[0]);
+			static_cast<unsigned int>(positions.size() / 3), &surface->nativeIndices[0],
+			static_cast<unsigned int>(surface->nativeIndices.Size()), surfaceSkin, &normals[0]);
 		submitted = true;
 	}
 	return submitted;

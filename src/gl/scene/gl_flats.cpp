@@ -193,6 +193,12 @@ extern FDynLightData lightdata;
 static unsigned int nativeFlatLightCounts[3] = { 0, 0, 0 };
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 static std::vector<GLFlat> NativeDeferredFlatTasks;
+struct FGLESFlatScratch
+{
+	std::vector<float> positions;
+	std::vector<float> texcoords;
+};
+static FGLESFlatScratch NativeFlatScratch;
 
 void gl_GLES_ClearFlatTasks()
 {
@@ -201,10 +207,9 @@ void gl_GLES_ClearFlatTasks()
 
 void gl_GLES_EmitFlatTasks()
 {
-	std::vector<GLFlat> tasks;
-	tasks.swap(NativeDeferredFlatTasks);
-	for (size_t i = 0; i < tasks.size(); ++i)
-		tasks[i].DrawSubsectors(GLPASS_ALL, false);
+	for (size_t i = 0; i < NativeDeferredFlatTasks.size(); ++i)
+		NativeDeferredFlatTasks[i].DrawSubsectors(GLPASS_ALL, false);
+	NativeDeferredFlatTasks.clear();
 }
 #endif
 
@@ -278,8 +283,10 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 	if (gl_GLES_IsActive())
 	{
 		if (sub == NULL || sub->numlines < 3) return;
-		std::vector<float> positions;
-		std::vector<float> texcoords;
+		std::vector<float> &positions = NativeFlatScratch.positions;
+		std::vector<float> &texcoords = NativeFlatScratch.texcoords;
+		positions.clear();
+		texcoords.clear();
 		positions.reserve(sub->numlines * 3);
 		texcoords.reserve(sub->numlines * 2);
 		for (unsigned int k = 0; k < sub->numlines; ++k)
@@ -503,15 +510,6 @@ void GLFlat::Draw(int pass)
 #if !defined(__ANDROID__)
 	int i;
 	int rel = getExtraLight();
-
-#ifdef _DEBUG
-	if (sector->sectornum == 2)
-	{
-		int a = 0;
-	}
-#endif
-
-
 	switch (pass)
 	{
 	case GLPASS_BASE:
@@ -764,14 +762,6 @@ void GLFlat::SetFrom3DFloor(F3DFloor *rover, bool top, bool underside)
 void GLFlat::ProcessSector(sector_t * frontsector)
 {
 	lightlist_t * light;
-
-#ifdef _DEBUG
-	if (frontsector->sectornum==0)
-	{
-		int a = 0;
-	}
-#endif
-
 	// Get the real sector for this one.
 	sector=&sectors[frontsector->sectornum];	
 	extsector_t::xfloor &x = sector->e->XFloor;
