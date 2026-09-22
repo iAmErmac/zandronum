@@ -33,6 +33,8 @@
 */
 
 
+#include <chrono>
+
 #include "r_local.h"
 #include "v_palette.h"
 #include "v_video.h"
@@ -61,6 +63,8 @@ void R_SetupPolymost();
 void R_InitRenderer();
 
 extern float LastFOV;
+
+CVAR(Bool, renderer_profile, false, CVAR_DEBUGONLY)
 
 //==========================================================================
 //
@@ -118,9 +122,24 @@ void FSoftwareRenderer::PrecacheTexture(FTexture *tex, int cache)
 
 void FSoftwareRenderer::RenderView(player_t *player)
 {
+	const bool profile = renderer_profile || developer;
+	const auto frameStart = profile ? std::chrono::steady_clock::now() :
+		std::chrono::steady_clock::time_point();
 	R_RenderActorView (player->mo);
 	// [RH] Let cameras draw onto textures that were visible this frame.
 	FCanvasTextureInfo::UpdateAll ();
+	if (profile)
+	{
+		static unsigned int profileFrame = 0;
+		++profileFrame;
+		if (profileFrame == 1 || profileFrame % 30 == 0)
+		{
+			const double milliseconds = std::chrono::duration<double, std::milli>(
+				std::chrono::steady_clock::now() - frameStart).count();
+			DPrintf("software profile: frame=%u view=%.3f ms; renderer=software\n",
+				profileFrame, milliseconds);
+		}
+	}
 }
 
 //==========================================================================

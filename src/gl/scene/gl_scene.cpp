@@ -1308,10 +1308,12 @@ void FGLRenderer::RenderView (player_t* player)
 	TThinkerIterator<ADynamicLight> it(STAT_DLIGHT);
 	GLRenderer->mLightCount = ((it.Next()) != NULL);
 
+	gl_GLES_DesktopProfileBegin();
 	sector_t * viewsector = RenderViewpoint(player->camera, NULL, FieldOfView * 360.0f / FINEANGLES, ratio, fovratio, true, true);
 	EndDrawScene(viewsector);
 
 	All.Unclock();
+	gl_GLES_DesktopProfileEnd();
 }
 
 //===========================================================================
@@ -1537,7 +1539,7 @@ void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, in
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		const unsigned int nativeTexture = gltex->BindNative(CM_DEFAULT, 0, false);
+		const unsigned int nativeTexture = gltex->BindNative(CM_DEFAULT, 0, true);
 		bool copied = false;
 		if (nativeTexture != 0 && width > 0 && height > 0)
 		{
@@ -1545,14 +1547,7 @@ void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, in
 				(float)width / height, false, false);
 			copied = gl_GLES_EndSceneToTexture(nativeTexture, width, height);
 			if (copied)
-				gl_GLES_MarkMaterialFramebufferContent(gltex, CM_DEFAULT, 0, false, true);
-		}
-		static bool cameraTargetLogWritten = false;
-		if (developer && !cameraTargetLogWritten)
-		{
-			DPrintf("Zandronum GLES camera texture target=%u size=%dx%d copied=%d.\n",
-				nativeTexture, width, height, copied ? 1 : 0);
-			cameraTargetLogWritten = true;
+				gl_GLES_MarkMaterialFramebufferContent(gltex, CM_DEFAULT, 0, true, true);
 		}
 		tex->SetUpdated();
 		return;

@@ -144,6 +144,12 @@ protected:
 	DMDLoD			lods[MAX_LODS];
 	char           *vertexUsage;   // Bitfield for each vertex.
 	bool			allowTexComp;  // Allow texture compression with this.
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	TArray<FGLCommandVertex> mNativeCommandVertices;
+	TArray<unsigned int> mNativeCommandIndices;
+	bool mNativeCommandStreamValid;
+	void BuildNativeCommandStream();
+#endif
 
 	static void RenderGLCommands(void *glCommands, unsigned int numVertices,FModelVertex * vertices);
 
@@ -155,6 +161,9 @@ public:
 		skins = NULL;
 		lods[0].glCommands = NULL;
 		info.numLODs = 0;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		mNativeCommandStreamValid = false;
+#endif
 	}
 	virtual ~FDMDModel();
 
@@ -214,6 +223,9 @@ class FMD3Model : public FModel
 		MD3Triangle * tris;
 		MD3TexCoord * texcoords;
 		MD3Vertex * vertices;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		TArray<unsigned int> nativeIndices;
+#endif
 
 		MD3Surface()
 		{
@@ -308,6 +320,13 @@ protected:
 	TArray<unsigned int> mIndices;
 	FVoxelVertexBuffer *mVBO;
 	FTexture *mPalette;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	TArray<float> mNativePositions;
+	TArray<float> mNativeTexcoords;
+	TArray<float> mNativeNormals;
+	TArray<unsigned int> mNativeIndices;
+	void BuildNativeGeometry();
+#endif
 	
 	void MakeSlabPolys(int x, int y, kvxslab_t *voxptr, FVoxelMap &check);
 	void AddFace(int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3, int x4, int y4, int z4, BYTE color, FVoxelMap &check);

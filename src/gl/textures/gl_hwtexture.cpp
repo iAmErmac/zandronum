@@ -90,7 +90,6 @@ int FHardwareTexture::GetTexDimension(int value)
 }
 
 
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 struct BoxPrecalc
 {
 	int boxStart;
@@ -222,8 +221,6 @@ static void GL_ResampleTexture (uint32_t *in, uint32_t inwidth, uint32_t inheigh
 	free(p1);
 	free(p2);
 }
-#endif
-
 //===========================================================================
 // 
 //	Loads the texture image into the hardware

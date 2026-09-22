@@ -61,6 +61,21 @@ namespace
 		size_t fallbackTargetsInUse;
 		bool allocationFailureReported;
 		FSkyGeometry sky;
+		std::vector<FSkyVertex> skyVertices;
+		std::vector<GLushort> skyIndices;
+		size_t skyVertexBufferCapacity;
+		size_t skyIndexBufferCapacity;
+		bool skyUploadKnown;
+		FMaterial *skyUploadMaterial;
+		float skyUploadXOffset;
+		float skyUploadYOffset;
+		float skyUploadCameraX;
+		float skyUploadCameraY;
+		float skyUploadCameraZ;
+		float skyUploadGlobalOffset;
+		int skyUploadDetail;
+		bool skyUploadMirrored;
+		GLsizei skyUploadIndexCount;
 	};
 
 	FPortalResources Portal = {};
@@ -87,6 +102,16 @@ namespace
 		if (Portal.sky.indexBuffer != 0) glDeleteBuffers(1, &Portal.sky.indexBuffer);
 		if (Portal.sky.vertexArray != 0) glDeleteVertexArrays(1, &Portal.sky.vertexArray);
 		Portal.sky = {};
+		Portal.skyVertexBufferCapacity = 0;
+		Portal.skyIndexBufferCapacity = 0;
+		Portal.skyUploadKnown = false;
+	}
+
+	size_t GrowBufferCapacity(size_t capacity, size_t required)
+	{
+		if (capacity == 0) capacity = 4096;
+		while (capacity < required) capacity *= 2;
+		return capacity;
 	}
 
 	bool InitializeSkyGeometry()
@@ -159,8 +184,10 @@ namespace
 		const float radius = 10000.0f;
 		const int rows = 4;
 		const int columns = 4 * std::max(gl_sky_detail > 0 ? gl_sky_detail : 1, 1);
-		std::vector<FSkyVertex> vertices;
-		std::vector<GLushort> indices;
+		std::vector<FSkyVertex> &vertices = Portal.skyVertices;
+		std::vector<GLushort> &indices = Portal.skyIndices;
+		vertices.clear();
+		indices.clear();
 		vertices.reserve((columns + rows * (columns + 1)) * 2);
 		indices.reserve((columns * 3 + rows * (columns + 1) * 2) * 2);
 		Portal.sky.upperCap = {};
@@ -278,10 +305,28 @@ namespace
 			return 0;
 		glBindVertexArray(Portal.sky.vertexArray);
 		glBindBuffer(GL_ARRAY_BUFFER, Portal.sky.vertexBuffer);
-		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(FSkyVertex), vertices.data(), GL_DYNAMIC_DRAW);
+		const size_t vertexBytes = vertices.size() * sizeof(FSkyVertex);
+		if (vertexBytes > Portal.skyVertexBufferCapacity)
+		{
+			Portal.skyVertexBufferCapacity = GrowBufferCapacity(Portal.skyVertexBufferCapacity, vertexBytes);
+			glBufferData(GL_ARRAY_BUFFER, Portal.skyVertexBufferCapacity, nullptr, GL_DYNAMIC_DRAW);
+		}
+		glBufferSubData(GL_ARRAY_BUFFER, 0, vertexBytes, vertices.data());
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Portal.sky.indexBuffer);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLushort), indices.data(), GL_DYNAMIC_DRAW);
+		const size_t indexBytes = indices.size() * sizeof(GLushort);
+		if (indexBytes > Portal.skyIndexBufferCapacity)
+		{
+			Portal.skyIndexBufferCapacity = GrowBufferCapacity(Portal.skyIndexBufferCapacity, indexBytes);
+			glBufferData(GL_ELEMENT_ARRAY_BUFFER, Portal.skyIndexBufferCapacity, nullptr, GL_DYNAMIC_DRAW);
+		}
+		glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indexBytes, indices.data());
 		glBindVertexArray(0);
+		if (gl_GLES_CheckErrors("sky geometry upload") != GL_NO_ERROR)
+		{
+			Portal.skyVertexBufferCapacity = 0;
+			Portal.skyIndexBufferCapacity = 0;
+			return 0;
+		}
 		return static_cast<GLsizei>(indices.size());
 	}
 
@@ -344,8 +389,10 @@ namespace
 			{ 128.0f, -128.0f, -128.0f }, { -128.0f, -128.0f, -128.0f },
 			{ -128.0f, -128.0f, 128.0f }, { 128.0f, -128.0f, 128.0f }
 		};
-		std::vector<FSkyVertex> vertices;
-		std::vector<GLushort> indices;
+		std::vector<FSkyVertex> &vertices = Portal.skyVertices;
+		std::vector<GLushort> &indices = Portal.skyIndices;
+		vertices.clear();
+		indices.clear();
 		vertices.reserve(24);
 		indices.reserve(36);
 		const float centerX = cameraX;
@@ -385,22 +432,69 @@ namespace
 			return;
 		glBindVertexArray(Portal.sky.vertexArray);
 		glBindBuffer(GL_ARRAY_BUFFER, Portal.sky.vertexBuffer);
-		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(FSkyVertex), vertices.data(), GL_DYNAMIC_DRAW);
+		const size_t vertexBytes = vertices.size() * sizeof(FSkyVertex);
+		if (vertexBytes > Portal.skyVertexBufferCapacity)
+		{
+			Portal.skyVertexBufferCapacity = GrowBufferCapacity(Portal.skyVertexBufferCapacity, vertexBytes);
+			glBufferData(GL_ARRAY_BUFFER, Portal.skyVertexBufferCapacity, nullptr, GL_DYNAMIC_DRAW);
+		}
+		glBufferSubData(GL_ARRAY_BUFFER, 0, vertexBytes, vertices.data());
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Portal.sky.indexBuffer);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLushort), indices.data(), GL_DYNAMIC_DRAW);
+		const size_t indexBytes = indices.size() * sizeof(GLushort);
+		if (indexBytes > Portal.skyIndexBufferCapacity)
+		{
+			Portal.skyIndexBufferCapacity = GrowBufferCapacity(Portal.skyIndexBufferCapacity, indexBytes);
+			glBufferData(GL_ELEMENT_ARRAY_BUFFER, Portal.skyIndexBufferCapacity, nullptr, GL_DYNAMIC_DRAW);
+		}
+		glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indexBytes, indices.data());
 		glBindVertexArray(0);
+		if (gl_GLES_CheckErrors("skybox geometry upload") != GL_NO_ERROR)
+		{
+			Portal.skyVertexBufferCapacity = 0;
+			Portal.skyIndexBufferCapacity = 0;
+		}
 	}
 }
 
 GLsizei gl_GLESInternalPortalUploadSkyGeometry(FMaterial *material, float xOffset,
 	float yOffset, bool mirrored, float cameraX, float cameraY, float cameraZ)
 {
-	return BuildSkyGeometry(material, xOffset, yOffset, mirrored, cameraX, cameraY, cameraZ);
+	const bool sameInput = Portal.skyUploadKnown && Portal.skyUploadMaterial == material &&
+		Portal.skyUploadXOffset == xOffset && Portal.skyUploadYOffset == yOffset &&
+		Portal.skyUploadCameraX == cameraX && Portal.skyUploadCameraY == cameraY &&
+		Portal.skyUploadCameraZ == cameraZ && Portal.skyUploadGlobalOffset == skyoffset &&
+		Portal.skyUploadDetail == gl_sky_detail && Portal.skyUploadMirrored == mirrored;
+	if (sameInput)
+	{
+		gl_GLES_RecordProfilePortalSkyUpload(true);
+		return Portal.skyUploadIndexCount;
+	}
+	const GLsizei indexCount = BuildSkyGeometry(material, xOffset, yOffset, mirrored,
+		cameraX, cameraY, cameraZ);
+	if (indexCount <= 0)
+	{
+		Portal.skyUploadKnown = false;
+		return indexCount;
+	}
+	Portal.skyUploadKnown = true;
+	Portal.skyUploadMaterial = material;
+	Portal.skyUploadXOffset = xOffset;
+	Portal.skyUploadYOffset = yOffset;
+	Portal.skyUploadCameraX = cameraX;
+	Portal.skyUploadCameraY = cameraY;
+	Portal.skyUploadCameraZ = cameraZ;
+	Portal.skyUploadGlobalOffset = skyoffset;
+	Portal.skyUploadDetail = gl_sky_detail;
+	Portal.skyUploadMirrored = mirrored;
+	Portal.skyUploadIndexCount = indexCount;
+	gl_GLES_RecordProfilePortalSkyUpload(false);
+	return indexCount;
 }
 
 void gl_GLESInternalPortalUploadSkyboxGeometry(float xOffset, bool sky2, bool fliptop,
 	float cameraX, float cameraY, float cameraZ)
 {
+	Portal.skyUploadKnown = false;
 	BuildSkyboxGeometry(xOffset, sky2, fliptop, cameraX, cameraY, cameraZ);
 }
 
@@ -493,6 +587,9 @@ void gl_GLESInternalPortalDestroy()
 void gl_GLESInternalPortalContextLost()
 {
 	Portal.sky = {};
+	Portal.skyVertexBufferCapacity = 0;
+	Portal.skyIndexBufferCapacity = 0;
+	Portal.skyUploadKnown = false;
 	Portal.compositeProgram = 0;
 	ResetUniforms();
 	for (FGLESTargetDescriptor &target : Portal.fallbackTargets)
@@ -574,7 +671,9 @@ bool gl_GLESInternalPortalComposite(const FGLESPortalComposite &config)
 	glBindTexture(GL_TEXTURE_2D, config.sourceTexture);
 	glBindSampler(0, config.sceneSampler);
 	glBindVertexArray(config.sceneVertexArray);
-	glDrawElements(GL_TRIANGLES, config.indexCount, GL_UNSIGNED_INT,
+	gl_GLES_RecordProfileDraw(false, config.indexCount);
+	const GLenum indexType = config.indexType != 0 ? config.indexType : GL_UNSIGNED_INT;
+	glDrawElements(GL_TRIANGLES, config.indexCount, indexType,
 		reinterpret_cast<const void *>(config.indexOffsetBytes));
 
 	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -582,7 +681,8 @@ bool gl_GLESInternalPortalComposite(const FGLESPortalComposite &config)
 	glDepthMask(GL_TRUE);
 	if (Portal.forceFarDepth >= 0)
 		glUniform1i(Portal.forceFarDepth, GL_TRUE);
-	glDrawElements(GL_TRIANGLES, config.indexCount, GL_UNSIGNED_INT,
+	gl_GLES_RecordProfileDraw(false, config.indexCount);
+	glDrawElements(GL_TRIANGLES, config.indexCount, indexType,
 		reinterpret_cast<const void *>(config.indexOffsetBytes));
 
 	glBindVertexArray(static_cast<GLuint>(previousVertexArray));
@@ -618,6 +718,7 @@ bool gl_GLESInternalPortalCompositeMasks(const FGLESPortalCompositeList &config)
 		composite.sceneVertexArray = config.sceneVertexArray;
 		composite.sceneSampler = config.sceneSampler;
 		composite.indexCount = mask.indexCount;
+		composite.indexType = config.indexType;
 		composite.indexOffsetBytes = mask.indexOffsetBytes;
 		composite.viewProjection = mask.viewProjection;
 		composite.targetWidth = config.targetWidth;

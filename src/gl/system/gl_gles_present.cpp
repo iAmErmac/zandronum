@@ -8,6 +8,7 @@
 
 #include "gl/system/gl_gles_context.h"
 #include "gl/system/gl_gles_dispatch.h"
+#include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_gles_shader.h"
 #include "basictypes.h"
 #include "f_wipe.h"
@@ -402,6 +403,7 @@ bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned cha
 	glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	gl_GLES_RecordProfileReadback();
 	glReadPixels(0, 0, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
 	const GLenum readbackError = gl_GLES_CheckErrors("screenshot readback");
 	glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
@@ -450,6 +452,7 @@ bool gl_GLESInternalWriteSavePic(FILE *file, const FGLESTargetDescriptor &target
 	glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
 	glBindFramebuffer(GL_FRAMEBUFFER, readFramebuffer);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	gl_GLES_RecordProfileReadback();
 	glReadPixels(0, 0, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
 	const GLenum readbackError = gl_GLES_CheckErrors("save picture readback");
 	glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
@@ -471,8 +474,10 @@ bool gl_GLESInternalWriteSavePic(FILE *file, const FGLESTargetDescriptor &target
 		}
 	}
 
-	return M_CreatePNG(file, rgb.data() + static_cast<size_t>(height - 1) * width * 3,
-		nullptr, SS_RGB, width, height, -width * 3);
+	if (!M_CreatePNG(file, rgb.data() + static_cast<size_t>(height - 1) * width * 3,
+		nullptr, SS_RGB, width, height, -width * 3))
+		return false;
+	return true;
 }
 
 #endif

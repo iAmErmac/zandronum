@@ -101,6 +101,7 @@ namespace
 		glBindTexture(GL_TEXTURE_2D, texture);
 		glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0,
 			target.renderWidth, target.renderHeight);
+		gl_GLES_RecordProfileWipeCapture();
 		glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
 		glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));

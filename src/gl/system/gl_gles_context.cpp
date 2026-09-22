@@ -1,6 +1,5 @@
 #include "gl/system/gl_gles_context.h"
 
-#include <chrono>
 #include <stdio.h>
 #include <string.h>
 
@@ -486,21 +485,8 @@ bool gl_GLES_SetHostTarget(const FGLESTargetDescriptor &target)
 		gl_GLES_Report("target", "host supplied an invalid presentation target");
 		return false;
 	}
-	const bool changed = !HostTargetReady || HostTarget.framebuffer != target.framebuffer ||
-		HostTarget.colorAttachment != target.colorAttachment ||
-		HostTarget.renderWidth != target.renderWidth || HostTarget.renderHeight != target.renderHeight ||
-		HostTarget.sampleCount != target.sampleCount ||
-		HostTarget.hostOwnsPresentation != target.hostOwnsPresentation;
 	HostTarget = target;
 	HostTargetReady = true;
-	if (changed)
-	{
-		char message[160];
-		snprintf(message, sizeof(message), "host target %dx%d, %d samples, framebuffer %u",
-			target.renderWidth, target.renderHeight, target.sampleCount,
-			static_cast<unsigned int>(target.framebuffer));
-		gl_GLES_Report("target", message);
-	}
 	return true;
 }
 
@@ -520,7 +506,7 @@ bool gl_GLES_GetHostTarget(FGLESTargetDescriptor *target)
 
 void gl_GLES_Report(const char *stage, const char *message)
 {
-	char formatted[512];
+	char formatted[2048];
 	snprintf(formatted, sizeof(formatted), "GLES %s: %s", stage != nullptr ? stage : "diagnostic",
 		message != nullptr ? message : "unknown error");
 	LogMessage(formatted);
@@ -567,18 +553,7 @@ bool gl_GLES_PresentFrame()
 		return false;
 	}
 	PresentationUnavailableReported = false;
-	const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 	const bool presented = HostCallbacks.present(HostCallbacks.userData);
-	if (HostCallbacks.log != nullptr &&
-		(LastFrame.frameNumber == 0 || (LastFrame.frameNumber % 120) == 0))
-	{
-		const std::chrono::duration<double, std::milli> elapsed =
-			std::chrono::steady_clock::now() - start;
-		char message[128];
-		snprintf(message, sizeof(message), "GLES present CPU %.3f ms (%s)", elapsed.count(),
-			presented ? "ok" : "failed");
-		LogMessage(message);
-	}
 	return presented;
 }
 

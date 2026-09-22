@@ -64,6 +64,7 @@
 #include "gl/shaders/gl_shader.h"
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_internal.h"
 #endif
 #if defined(ZANDRONUM_GLES_BACKEND)
 #include "r_renderer.h"
@@ -956,6 +957,12 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 {
 	if (translation <= 0) translation = -translation;
 	else translation = GLTranslationPalette::GetInternalTranslation(translation);
+	if (tex != NULL && !tex->bHasCanvas && !tex->bWarped)
+	{
+		const GLuint cachedTexture = gl_GLESInternalFindStaticMaterialTexture(this,
+			cm, translation, repeat, allowhires);
+		if (cachedTexture != 0) return cachedTexture;
+	}
 	int width = 0;
 	int height = 0;
 	// Sprite materials keep a one-pixel transparent border in their UV and size
@@ -963,8 +970,14 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 	const bool expand = tex->UseType == FTexture::TEX_Sprite ||
 		tex->UseType == FTexture::TEX_SkinSprite || tex->UseType == FTexture::TEX_Decal;
 	if (tex->bHasCanvas)
-		return gl_GLES_EnsureMaterialTexture(this, TextureWidth(GLUSE_TEXTURE),
-			TextureHeight(GLUSE_TEXTURE), repeat, cm, translation, allowhires);
+	{
+		const unsigned int texture = gl_GLES_EnsureMaterialTexture(this,
+			TextureWidth(GLUSE_TEXTURE), TextureHeight(GLUSE_TEXTURE), repeat,
+			cm, translation, allowhires);
+		// A visible canvas texture must be rendered again on the next frame.
+		static_cast<FCanvasTexture *>(tex)->NeedUpdate();
+		return texture;
+	}
 	const int nativeWarp = tex->bWarped && (mShaderIndex == 1 || mShaderIndex == 2) ? mShaderIndex : 0;
 	unsigned char *pixels = CreateTexBuffer(cm, translation, width, height, expand, allowhires, nativeWarp);
 	if (pixels == NULL || width <= 0 || height <= 0)

@@ -57,9 +57,15 @@ struct FGLESSceneLightPass
 	GLint positionUniform;
 	GLint colorUniform;
 	GLint countsUniform;
+	GLint lightOnlyUniform;
 	GLint projectedUniform;
+	GLint depthFunction;
+	bool depthStateKnown;
+	bool depthWrite;
 	GLsizei indexCount;
 	size_t firstIndex;
+	GLenum indexType;
+	size_t indexStride;
 	bool translucent;
 	int blendMode;
 };
@@ -68,9 +74,9 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 	size_t recordCount, FGLESSceneOrderSlot slot);
 bool gl_GLESInternalSceneCanAppend(size_t currentVertexCount, size_t currentIndexCount,
 	size_t vertexCount, size_t indexCount, const char *kind);
-void gl_GLESInternalSceneUploadGeometry(GLuint vertexArray, GLuint vertexBuffer,
+unsigned int gl_GLESInternalSceneUploadGeometry(GLuint vertexArray, GLuint vertexBuffer,
 	GLuint indexBuffer, const void *vertices, size_t vertexBytes,
-	const GLuint *indices, size_t indexCount);
+	const void *indices, size_t indexBytes);
 void gl_GLESInternalSceneInvalidateBuffers();
 void gl_GLESInternalSceneClearLights();
 bool gl_GLESInternalSceneAppendLights(const float *lightData,

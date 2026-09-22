@@ -135,7 +135,7 @@ inline T max( T a, T b) { return (((a)>(b)) ? (a) : (b)); }
 #define _access(a,b)	access(a,b)
 #endif
 
-#if defined(ZANDRONUM_GLES_BACKEND)
+#if defined(_WIN32) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/api/gl_api.h"
 #endif
 #if !defined(_WIN32) && !defined(__ANDROID__)

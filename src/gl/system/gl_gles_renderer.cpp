@@ -13,6 +13,7 @@
 #include <chrono>
 #include <algorithm>
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
 #include <vector>
 
@@ -64,6 +65,14 @@ namespace
 		GLfloat glowTopDistance, glowBottomDistance;
 	};
 
+	struct FSceneViewSnapshot
+	{
+		float viewProjection[16];
+		float cameraPosition[3];
+		bool clipPlaneEnabled;
+		float clipPlane[4];
+	};
+
 	struct FSceneBatch
 	{
 		GLsizei firstIndex;
@@ -75,6 +84,7 @@ namespace
 		bool fog;
 		bool translucent;
 		bool repeat;
+		bool cameraTexture;
 		bool palette;
 		bool flat;
 		bool hud;
@@ -100,12 +110,11 @@ namespace
 		unsigned int lightNormalCount;
 		unsigned int lightSubtractiveCount;
 		float lightPlaneNormal[3];
-		// Keep the camera that produced this batch beside its geometry. Nested
-		// portal collection must not replace the outer scene's view uniforms.
-		float viewProjection[16];
-		float cameraPosition[3];
-		bool clipPlaneEnabled;
-		float clipPlane[4];
+		// Keep the view association with each batch. Nested portal collection must
+		// not replace the outer scene's view uniforms.
+		unsigned int viewSerial;
+		unsigned int clipSerial;
+		unsigned int viewSnapshot;
 		int portalId;
 		bool portalMask;
 	};
@@ -161,6 +170,8 @@ namespace
 		PalEntry savedSkyFogColor;
 		bool savedSkyFogEnabled;
 		bool savedClipPlaneEnabled;
+		unsigned int savedViewSerial;
+		unsigned int savedClipSerial;
 		float savedClipPlane[4];
 		FNativeSkyRecord sky;
 		bool clearScreen;
@@ -182,6 +193,7 @@ namespace
 	struct FGLESResources
 	{
 		GLuint sceneProgram;
+		GLuint simpleProgram;
 		GLuint fogProgram;
 		GLuint fogMaskedProgram;
 		GLuint maskedProgram;
@@ -195,6 +207,7 @@ namespace
 		GLuint checkerTexture;
 		GLuint checkerSampler;
 		GLuint sceneSampler;
+		GLuint cameraSampler;
 		int textureFilter;
 		FGLESTargetDescriptor sceneTarget;
 		FGLESTargetDescriptor cameraTarget;
@@ -214,6 +227,7 @@ namespace
 		GLint sceneSkyFog;
 		GLint sceneMaterialFlags;
 		GLint sceneFuzzTime;
+		GLint sceneLightOnlyMode;
 		GLint sceneLightPositionRadius;
 		GLint sceneLightColor;
 		GLint sceneLightCounts;
@@ -222,6 +236,15 @@ namespace
 		GLint sceneDynamicLightTexture;
 		GLint sceneClipPlane;
 		GLint sceneClipPlaneEnabled;
+		GLint simpleTextureUniform;
+		GLint simpleViewProjection;
+		GLint simpleUseTexture;
+		GLint simpleModel;
+		GLint simpleTextureTransform;
+		GLint simpleCameraPosition;
+		GLint simpleObjectColor;
+		GLint simpleSkyDepth;
+		GLint simpleSkyFog;
 		GLint maskedTextureUniform;
 		GLint maskedBrightmapUniform;
 		GLint maskedUseBrightmap;
@@ -235,6 +258,7 @@ namespace
 		GLint maskedAlphaCutoff;
 		GLint maskedMaterialFlags;
 		GLint maskedFuzzTime;
+		GLint maskedLightOnlyMode;
 		GLint maskedLightPositionRadius;
 		GLint maskedLightColor;
 		GLint maskedLightCounts;
@@ -255,6 +279,7 @@ namespace
 		GLint paletteObjectColor;
 		GLint paletteMaterialFlags;
 		GLint paletteFuzzTime;
+		GLint paletteLightOnlyMode;
 		GLint paletteLightPositionRadius;
 		GLint paletteLightColor;
 		GLint paletteLightCounts;
@@ -275,6 +300,7 @@ namespace
 		GLint fogObjectColor;
 		GLint fogMaterialFlags;
 		GLint fogFuzzTime;
+		GLint fogLightOnlyMode;
 		GLint fogLightPositionRadius;
 		GLint fogLightColor;
 		GLint fogLightCounts;
@@ -296,6 +322,7 @@ namespace
 		GLint fogMaskedAlphaCutoff;
 		GLint fogMaskedMaterialFlags;
 		GLint fogMaskedFuzzTime;
+		GLint fogMaskedLightOnlyMode;
 		GLint fogMaskedColor;
 		GLint fogMaskedDensity;
 		GLint fogMaskedLightPositionRadius;
@@ -313,6 +340,10 @@ namespace
 		std::vector<FSceneVertex> sceneVertices;
 		// GLES 3.2 core indices keep large model surfaces in the shared stream.
 		std::vector<GLuint> sceneIndices;
+		std::vector<GLushort> sceneShortIndices;
+		GLenum sceneIndexType;
+		size_t sceneIndexStride;
+		std::vector<FSceneViewSnapshot> sceneViewSnapshots;
 		std::vector<FSceneBatch> sceneBatches;
 		std::vector<FGLESSceneOrderRecord> sceneOrderRecords;
 		std::vector<FGLESSceneOrderRecord> portalOrderRecords;
@@ -334,11 +365,14 @@ namespace
 		unsigned int sceneWallCount;
 		unsigned int sceneFlatCount;
 		unsigned int sceneSpriteCount;
+		unsigned int sceneBatchSubmissions;
 		unsigned int sceneOpaqueBatchMerges;
 		unsigned int sceneProgramBinds;
 		unsigned int sceneProgramBindSkips;
 		unsigned int sceneTextureBinds;
 		unsigned int sceneTextureBindSkips;
+		unsigned int sceneActiveTextureSets;
+		unsigned int sceneActiveTextureSkips;
 		unsigned int sceneSamplerBinds;
 		unsigned int sceneSamplerBindSkips;
 		unsigned int sceneOpaqueStateSets;
@@ -347,6 +381,7 @@ namespace
 		unsigned int sceneLightUniformUploadSkips;
 		unsigned int sceneGlowUniformUploads;
 		unsigned int sceneGlowUniformUploadSkips;
+		uint64_t sceneOrderHash;
 		float viewProjection[16];
 		float cameraX;
 		float cameraY;
@@ -356,6 +391,8 @@ namespace
 		float cameraFieldOfView;
 		float cameraAspect;
 		float cameraFovRatio;
+		unsigned int viewSerial;
+		unsigned int clipSerial;
 		bool clipPlaneEnabled;
 		float clipPlane[4];
 		bool sceneReady;
@@ -371,6 +408,75 @@ namespace
 	static bool SceneInputLogged = false;
 	static bool SkyLogged = false;
 	static std::chrono::steady_clock::time_point NativeFrameStart;
+	struct FGLESProfileSample
+	{
+		bool active;
+		std::chrono::steady_clock::time_point frameStart;
+		double collectionMilliseconds;
+		double orderingMilliseconds;
+		double uploadMilliseconds;
+		double portalSkyMilliseconds;
+		double worldMilliseconds;
+		double overlayMilliseconds;
+		double resolveMilliseconds;
+		unsigned int drawCalls;
+		unsigned int triangles;
+		unsigned int bufferReallocations;
+		unsigned int overflowPasses;
+		unsigned int materialHits;
+		unsigned int materialMisses;
+		unsigned int materialUploads;
+		unsigned int stateCalls;
+		unsigned int stateSkips;
+		unsigned int portalStateSets;
+		unsigned int portalStateSkips;
+		unsigned int portalActiveTextureSets;
+		unsigned int portalActiveTextureSkips;
+		unsigned int portalUniformSets;
+		unsigned int portalUniformSkips;
+		unsigned int portalSkyUploadBuilds;
+		unsigned int portalSkyUploadSkips;
+		unsigned int lightSelectionRequests;
+		unsigned int lightSelectionReuses;
+		unsigned int simpleShaderDraws;
+		unsigned int resolveCount;
+		unsigned int readbackCount;
+		unsigned int wipeCaptureCount;
+		unsigned int cameraTargetCreates;
+		unsigned int cameraCopies;
+		double wallCollectionMilliseconds;
+		double flatCollectionMilliseconds;
+		double spriteCollectionMilliseconds;
+		double modelCollectionMilliseconds;
+		double materialResolutionMilliseconds;
+		double lightSelectionMilliseconds;
+		double batchRecordMilliseconds;
+		double indexEmissionMilliseconds;
+		size_t vertexBytes;
+		size_t indexBytes;
+	};
+	static FGLESProfileSample Profile = {};
+	struct FScopedProfileTimer
+	{
+		double *target;
+		std::chrono::steady_clock::time_point start;
+
+		explicit FScopedProfileTimer(double &milliseconds)
+			: target(Profile.active ? &milliseconds : NULL),
+			start(Profile.active ? std::chrono::steady_clock::now() :
+				std::chrono::steady_clock::time_point())
+		{
+		}
+
+		~FScopedProfileTimer()
+		{
+			if (target != NULL)
+				*target += std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - start).count();
+		}
+	};
+	static unsigned int PendingCameraTargetCreates = 0;
+	static unsigned int PendingCameraCopies = 0;
 	static bool NativePortalCapacityLogged = false;
 	static bool FlatCollectionDeferred = false;
 	static FGLESTargetDescriptor *NativeActiveTarget = NULL;
@@ -483,6 +589,18 @@ namespace
 		return gl_GLESInternalSceneCanAppend(Resources.sceneVertices.size(),
 			Resources.sceneIndices.size(), vertexCount, indexCount, kind);
 	}
+	static GLenum NativeSceneIndexType()
+	{
+		return Resources.sceneIndexType != 0 ? Resources.sceneIndexType : GL_UNSIGNED_INT;
+	}
+	static size_t NativeSceneIndexStride()
+	{
+		return Resources.sceneIndexStride != 0 ? Resources.sceneIndexStride : sizeof(GLuint);
+	}
+	static const void *NativeSceneIndexOffset(size_t firstIndex)
+	{
+		return reinterpret_cast<const void *>(firstIndex * NativeSceneIndexStride());
+	}
 	static void ResetNativeSkyRecord(FNativeSkyRecord &record, int portalId, GLuint stencilBit)
 	{
 		record = {};
@@ -504,14 +622,51 @@ namespace
 		return &Resources.portalTargets[portalId].sky;
 	}
 
-	// The native scene is the normal path. The debug switch keeps the indexed
-	// test surface available when checking context and shader setup.
-	CVAR(Bool, gl_gles_test_pattern, false, CVAR_DEBUGONLY)
 	CVAR(Bool, gl_gles_shader_test_failure, false, CVAR_DEBUGONLY)
+	CVAR(Bool, gl_gles_profile, false, CVAR_DEBUGONLY)
+	CVAR(Bool, gl_gles_validate_order, false, CVAR_DEBUGONLY)
+
+	static double ProfileMilliseconds(std::chrono::steady_clock::time_point start)
+	{
+		return std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - start).count();
+	}
+
+	static bool ProfileSampleDue()
+	{
+		return Profile.active && (Resources.frame == 1 || Resources.frame % 30 == 0);
+	}
+
+	static const uint64_t SceneOrderHashOffset = 1469598103934665603ULL;
+	static const uint64_t SceneOrderHashPrime = 1099511628211ULL;
+
+	template<class T>
+	static void HashSceneOrderValue(const T &value)
+	{
+		const unsigned char *bytes = reinterpret_cast<const unsigned char *>(&value);
+		for (size_t index = 0; index < sizeof(value); ++index)
+		{
+			Resources.sceneOrderHash ^= bytes[index];
+			Resources.sceneOrderHash *= SceneOrderHashPrime;
+		}
+	}
+
+	static inline void ProfileDrawElements(GLenum mode, GLsizei count, GLenum type,
+		const void *indices)
+	{
+		gl_GLES_RecordProfileDraw(mode == GL_TRIANGLE_STRIP, count);
+		glDrawElements(mode, count, type, indices);
+	}
 
 	static bool IsPaletteTexture(GLuint texture)
 	{
 		return gl_GLESInternalIsPaletteTexture(texture);
+	}
+
+	static GLuint NativeSamplerForBatch(const FSceneBatch &batch)
+	{
+		if (batch.cameraTexture) return batch.repeat ? Resources.cameraSampler : Resources.sceneSampler;
+		return batch.repeat ? Resources.checkerSampler : Resources.sceneSampler;
 	}
 
 	static GLuint BindNativeProgram(GLuint fallback, const char *name)
@@ -547,6 +702,7 @@ namespace
 	{
 		gl_GLESInternalSceneInvalidateBuffers();
 		if (Resources.sceneProgram != 0) glDeleteProgram(Resources.sceneProgram);
+		if (Resources.simpleProgram != 0) glDeleteProgram(Resources.simpleProgram);
 		if (Resources.fogProgram != 0) glDeleteProgram(Resources.fogProgram);
 		if (Resources.fogMaskedProgram != 0) glDeleteProgram(Resources.fogMaskedProgram);
 		if (Resources.maskedProgram != 0) glDeleteProgram(Resources.maskedProgram);
@@ -564,9 +720,11 @@ namespace
 		gl_GLESInternalDeleteMaterialTextures();
 		if (Resources.checkerSampler != 0) glDeleteSamplers(1, &Resources.checkerSampler);
 		if (Resources.sceneSampler != 0) glDeleteSamplers(1, &Resources.sceneSampler);
+		if (Resources.cameraSampler != 0) glDeleteSamplers(1, &Resources.cameraSampler);
 		gl_GLES_DestroyRenderTarget(&Resources.sceneTarget);
 		gl_GLES_DestroyRenderTarget(&Resources.cameraTarget);
 		Resources.sceneProgram = 0;
+		Resources.simpleProgram = 0;
 		Resources.fogProgram = 0;
 		Resources.fogMaskedProgram = 0;
 		Resources.maskedProgram = 0;
@@ -580,12 +738,15 @@ namespace
 		Resources.checkerTexture = 0;
 		Resources.checkerSampler = 0;
 		Resources.sceneSampler = 0;
+		Resources.cameraSampler = 0;
 		Resources.textureFilter = -1;
 		Resources.sceneTarget = {};
 		Resources.cameraTarget = {};
 		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
 		NativeOffscreenRender = false;
+		PendingCameraTargetCreates = 0;
+		PendingCameraCopies = 0;
 		ResetNativeGlowLocations();
 		Resources.sceneTextureUniform = -1;
 		Resources.sceneBrightmapUniform = -1;
@@ -608,6 +769,15 @@ namespace
 		Resources.sceneDynamicLightTexture = -1;
 		Resources.sceneClipPlane = -1;
 		Resources.sceneClipPlaneEnabled = -1;
+		Resources.simpleTextureUniform = -1;
+		Resources.simpleViewProjection = -1;
+		Resources.simpleUseTexture = -1;
+		Resources.simpleModel = -1;
+		Resources.simpleTextureTransform = -1;
+		Resources.simpleCameraPosition = -1;
+		Resources.simpleObjectColor = -1;
+		Resources.simpleSkyDepth = -1;
+		Resources.simpleSkyFog = -1;
 		Resources.maskedTextureUniform = -1;
 		Resources.maskedBrightmapUniform = -1;
 		Resources.maskedUseBrightmap = -1;
@@ -693,6 +863,10 @@ namespace
 		Resources.sceneIndexCount = 0;
 		Resources.sceneVertices.clear();
 		Resources.sceneIndices.clear();
+		Resources.sceneShortIndices.clear();
+		Resources.sceneIndexType = GL_UNSIGNED_INT;
+		Resources.sceneIndexStride = sizeof(GLuint);
+		Resources.sceneViewSnapshots.clear();
 		Resources.sceneBatches.clear();
 		Resources.sceneOrderRecords.clear();
 		Resources.portalOrderRecords.clear();
@@ -716,6 +890,7 @@ namespace
 	{
 		gl_GLESInternalSceneInvalidateBuffers();
 		Resources.sceneProgram = 0;
+		Resources.simpleProgram = 0;
 		Resources.fogProgram = 0;
 		Resources.fogMaskedProgram = 0;
 		Resources.maskedProgram = 0;
@@ -738,6 +913,7 @@ namespace
 		gl_GLESInternalWipeContextLost();
 		Resources.checkerSampler = 0;
 		Resources.sceneSampler = 0;
+		Resources.cameraSampler = 0;
 		Resources.textureFilter = -1;
 		Resources.sceneTextureUniform = -1;
 		Resources.sceneBrightmapUniform = -1;
@@ -760,6 +936,15 @@ namespace
 		Resources.sceneDynamicLightTexture = -1;
 		Resources.sceneClipPlane = -1;
 		Resources.sceneClipPlaneEnabled = -1;
+		Resources.simpleTextureUniform = -1;
+		Resources.simpleViewProjection = -1;
+		Resources.simpleUseTexture = -1;
+		Resources.simpleModel = -1;
+		Resources.simpleTextureTransform = -1;
+		Resources.simpleCameraPosition = -1;
+		Resources.simpleObjectColor = -1;
+		Resources.simpleSkyDepth = -1;
+		Resources.simpleSkyFog = -1;
 		Resources.maskedTextureUniform = -1;
 		Resources.maskedBrightmapUniform = -1;
 		Resources.maskedUseBrightmap = -1;
@@ -845,6 +1030,10 @@ namespace
 		Resources.sceneIndexCount = 0;
 		Resources.sceneVertices.clear();
 		Resources.sceneIndices.clear();
+		Resources.sceneShortIndices.clear();
+		Resources.sceneIndexType = GL_UNSIGNED_INT;
+		Resources.sceneIndexStride = sizeof(GLuint);
+		Resources.sceneViewSnapshots.clear();
 		Resources.sceneBatches.clear();
 		Resources.sceneOrderRecords.clear();
 		Resources.portalOrderRecords.clear();
@@ -902,12 +1091,17 @@ namespace
 		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glGenSamplers(1, &Resources.cameraSampler);
+		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
+		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		CheckError("sampler setup");
 	}
 
 	static void ConfigureNativeSamplers()
 	{
-		if (Resources.checkerSampler == 0 || Resources.sceneSampler == 0) return;
+		if (Resources.checkerSampler == 0 || Resources.sceneSampler == 0 || Resources.cameraSampler == 0) return;
 		int filter = gl_texture_filter;
 		if (filter < 0 || filter >= 6) filter = 0;
 		if (Resources.textureFilter == filter) return;
@@ -916,6 +1110,8 @@ namespace
 		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_MAG_FILTER, settings.magfilter);
 		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MIN_FILTER, settings.minfilter);
 		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MAG_FILTER, settings.magfilter);
+		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MIN_FILTER, settings.minfilter);
+		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MAG_FILTER, settings.magfilter);
 		Resources.textureFilter = filter;
 		CheckError("native texture filter setup");
 	}
@@ -1042,6 +1238,7 @@ namespace
 		Resources.viewContract.viewIndex = 0;
 		Resources.viewContract.inactiveViewIndex = 1;
 		Resources.viewContract.active = true;
+		++Resources.viewSerial;
 	}
 
 	static unsigned int AddSceneVertex(const FSceneVertex &vertex)
@@ -1054,6 +1251,7 @@ namespace
 	static void CopyNativeLightData(FSceneBatch &batch, const float *lightData,
 		const unsigned int *lightCounts)
 	{
+		FScopedProfileTimer timer(Profile.lightSelectionMilliseconds);
 		if (lightData == NULL || lightCounts == NULL)
 		{
 			batch.lightOffset = 0;
@@ -1091,7 +1289,8 @@ namespace
 
 	static void DrawNativeLightOverflow(const FSceneBatch &batch, GLuint dynamicLightTexture,
 		GLuint program, GLint lightPositionRadius, GLint lightColor, GLint lightCounts,
-		GLint projectedLights, GLsizei indexCount, size_t firstIndex)
+		GLint projectedLights, GLsizei indexCount, size_t firstIndex,
+		GLint depthFunction = -1, bool depthWriteKnown = false, bool depthWrite = true)
 	{
 		FGLESSceneLightPass pass = {};
 		pass.selection.streamOffset = batch.lightOffset;
@@ -1105,9 +1304,20 @@ namespace
 		pass.positionUniform = lightPositionRadius;
 		pass.colorUniform = lightColor;
 		pass.countsUniform = lightCounts;
+		pass.lightOnlyUniform = -1;
+		if (program == Resources.sceneProgram) pass.lightOnlyUniform = Resources.sceneLightOnlyMode;
+		else if (program == Resources.maskedProgram) pass.lightOnlyUniform = Resources.maskedLightOnlyMode;
+		else if (program == Resources.paletteProgram) pass.lightOnlyUniform = Resources.paletteLightOnlyMode;
+		else if (program == Resources.fogProgram) pass.lightOnlyUniform = Resources.fogLightOnlyMode;
+		else if (program == Resources.fogMaskedProgram) pass.lightOnlyUniform = Resources.fogMaskedLightOnlyMode;
 		pass.projectedUniform = projectedLights;
+		pass.depthFunction = depthFunction;
+		pass.depthStateKnown = depthWriteKnown && depthFunction >= 0;
+		pass.depthWrite = depthWrite;
 		pass.indexCount = indexCount;
 		pass.firstIndex = firstIndex;
+		pass.indexType = NativeSceneIndexType();
+		pass.indexStride = NativeSceneIndexStride();
 		pass.translucent = batch.translucent;
 		pass.blendMode = static_cast<int>(batch.blendMode);
 		gl_GLESInternalSceneDrawLightOverflow(pass);
@@ -1132,14 +1342,41 @@ namespace
 		batch.lightPlaneNormal[2] = nz / length;
 	}
 
+	static const FSceneViewSnapshot &BatchView(const FSceneBatch &batch)
+	{
+		return Resources.sceneViewSnapshots[batch.viewSnapshot];
+	}
+
+	static unsigned int CreateSceneViewSnapshot()
+	{
+		FSceneViewSnapshot snapshot = {};
+		memcpy(snapshot.viewProjection, Resources.viewProjection, sizeof(snapshot.viewProjection));
+		snapshot.cameraPosition[0] = Resources.cameraX;
+		snapshot.cameraPosition[1] = Resources.cameraY;
+		snapshot.cameraPosition[2] = Resources.cameraZ;
+		snapshot.clipPlaneEnabled = Resources.clipPlaneEnabled;
+		memcpy(snapshot.clipPlane, Resources.clipPlane, sizeof(snapshot.clipPlane));
+		Resources.sceneViewSnapshots.push_back(snapshot);
+		return static_cast<unsigned int>(Resources.sceneViewSnapshots.size() - 1);
+	}
+
 	static void CaptureBatchView(FSceneBatch &batch)
 	{
-		memcpy(batch.viewProjection, Resources.viewProjection, sizeof(batch.viewProjection));
-		batch.cameraPosition[0] = Resources.cameraX;
-		batch.cameraPosition[1] = Resources.cameraY;
-		batch.cameraPosition[2] = Resources.cameraZ;
-		batch.clipPlaneEnabled = Resources.clipPlaneEnabled;
-		memcpy(batch.clipPlane, Resources.clipPlane, sizeof(batch.clipPlane));
+		batch.viewSerial = Resources.viewSerial;
+		batch.clipSerial = Resources.clipSerial;
+		if (!Resources.sceneBatches.empty())
+		{
+			const FSceneBatch &previous = Resources.sceneBatches.back();
+			if (previous.viewSerial == batch.viewSerial && previous.clipSerial == batch.clipSerial &&
+				previous.viewSnapshot < Resources.sceneViewSnapshots.size())
+			{
+				batch.viewSnapshot = previous.viewSnapshot;
+			}
+			else
+				batch.viewSnapshot = CreateSceneViewSnapshot();
+		}
+		else
+			batch.viewSnapshot = CreateSceneViewSnapshot();
 		batch.portalId = NativePortalCaptureStack.empty() ? -1 :
 			static_cast<int>(NativePortalCaptureStack.back());
 		batch.wipeOverlay = NativeWipeOverlayCollecting;
@@ -1154,6 +1391,8 @@ namespace
 
 	static bool CanMergeOpaqueBatches(const FSceneBatch &previous, const FSceneBatch &batch)
 	{
+		const FSceneViewSnapshot &previousView = BatchView(previous);
+		const FSceneViewSnapshot &batchView = BatchView(batch);
 		// Keep every order-sensitive path as its own command. Consecutive opaque
 		// world quads sharing the exact selected-light payload are safe to submit together.
 		return !previous.translucent && !batch.translucent &&
@@ -1166,6 +1405,7 @@ namespace
 			previous.texture == batch.texture && previous.brightmap == batch.brightmap &&
 			previous.brightmapDesaturation == batch.brightmapDesaturation &&
 			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.cameraTexture == batch.cameraTexture &&
 			previous.repeat == batch.repeat && previous.palette == batch.palette &&
 			previous.materialFlags == batch.materialFlags && previous.blendMode == batch.blendMode &&
 			previous.customBlend == batch.customBlend && previous.sourceBlend == batch.sourceBlend &&
@@ -1177,25 +1417,64 @@ namespace
 				previous.lightSubtractiveCount == batch.lightSubtractiveCount &&
 				previous.lightCount == batch.lightCount &&
 				memcmp(previous.lightPlaneNormal, batch.lightPlaneNormal, sizeof(batch.lightPlaneNormal)) == 0)) &&
-			previous.clipPlaneEnabled == batch.clipPlaneEnabled &&
+			previousView.clipPlaneEnabled == batchView.clipPlaneEnabled &&
 			memcmp(previous.fogColor, batch.fogColor, sizeof(batch.fogColor)) == 0 &&
 			previous.fogDensity == batch.fogDensity &&
 			memcmp(previous.glowTopColor, batch.glowTopColor, sizeof(batch.glowTopColor)) == 0 &&
 			memcmp(previous.glowBottomColor, batch.glowBottomColor, sizeof(batch.glowBottomColor)) == 0 &&
-			memcmp(previous.viewProjection, batch.viewProjection, sizeof(batch.viewProjection)) == 0 &&
-			memcmp(previous.cameraPosition, batch.cameraPosition, sizeof(batch.cameraPosition)) == 0 &&
-			memcmp(previous.clipPlane, batch.clipPlane, sizeof(batch.clipPlane)) == 0;
+			previous.viewSerial == batch.viewSerial &&
+			previous.clipSerial == batch.clipSerial;
+	}
+
+	static void RecordSceneBatchSubmission(const FSceneBatch &batch)
+	{
+		if (!Profile.active && !gl_gles_validate_order) return;
+		++Resources.sceneBatchSubmissions;
+		HashSceneOrderValue(batch.firstIndex);
+		HashSceneOrderValue(batch.indexCount);
+		HashSceneOrderValue(batch.texture);
+		HashSceneOrderValue(batch.brightmap);
+		HashSceneOrderValue(batch.masked);
+		HashSceneOrderValue(batch.fog);
+		HashSceneOrderValue(batch.translucent);
+		HashSceneOrderValue(batch.flat);
+		HashSceneOrderValue(batch.hud);
+		HashSceneOrderValue(batch.wipeOverlay);
+		HashSceneOrderValue(batch.model);
+		HashSceneOrderValue(batch.skyMask);
+		HashSceneOrderValue(batch.flood);
+		HashSceneOrderValue(batch.portalId);
+		HashSceneOrderValue(batch.portalMask);
+		HashSceneOrderValue(batch.materialFlags);
+		HashSceneOrderValue(batch.blendMode);
+		HashSceneOrderValue(batch.customBlend);
+		HashSceneOrderValue(batch.sourceBlend);
+		HashSceneOrderValue(batch.destinationBlend);
+		HashSceneOrderValue(batch.alphaCutoff);
+		HashSceneOrderValue(batch.lightOffset);
+		HashSceneOrderValue(batch.lightCount);
+		HashSceneOrderValue(batch.lightNormalCount);
+		HashSceneOrderValue(batch.lightSubtractiveCount);
+		HashSceneOrderValue(BatchView(batch).clipPlaneEnabled);
+	}
+
+	static void PushNativeSceneBatch(const FSceneBatch &batch)
+	{
+		FScopedProfileTimer timer(Profile.batchRecordMilliseconds);
+		Resources.sceneBatches.push_back(batch);
 	}
 
 	static void AppendOpaqueBatch(FSceneBatch &batch)
 	{
-		if (!Resources.sceneBatches.empty() && CanMergeOpaqueBatches(Resources.sceneBatches.back(), batch))
+		RecordSceneBatchSubmission(batch);
+		if (!gl_gles_validate_order && !Resources.sceneBatches.empty() &&
+			CanMergeOpaqueBatches(Resources.sceneBatches.back(), batch))
 		{
 			Resources.sceneBatches.back().indexCount += batch.indexCount;
 			++Resources.sceneOpaqueBatchMerges;
 			return;
 		}
-		Resources.sceneBatches.push_back(batch);
+		PushNativeSceneBatch(batch);
 	}
 
 	static void AddSceneQuad(const FSceneVertex &a, const FSceneVertex &b,
@@ -1209,20 +1488,27 @@ namespace
 	{
 		if (!CanAppendSceneGeometry(4, 6, "quad")) return;
 		const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
-		Resources.sceneVertices.push_back(a);
-		Resources.sceneVertices.push_back(b);
-		Resources.sceneVertices.push_back(c);
-		Resources.sceneVertices.push_back(d);
+		Resources.sceneVertices.resize(Resources.sceneVertices.size() + 4);
+		FSceneVertex *vertexData = Resources.sceneVertices.data() + first;
+		vertexData[0] = a;
+		vertexData[1] = b;
+		vertexData[2] = c;
+		vertexData[3] = d;
 		const unsigned int second = first + 1;
 		const unsigned int third = first + 2;
 		const unsigned int fourth = first + 3;
 		const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
-		Resources.sceneIndices.push_back(first);
-		Resources.sceneIndices.push_back(second);
-		Resources.sceneIndices.push_back(third);
-		Resources.sceneIndices.push_back(third);
-		Resources.sceneIndices.push_back(fourth);
-		Resources.sceneIndices.push_back(first);
+		Resources.sceneIndices.resize(Resources.sceneIndices.size() + 6);
+		GLuint *indexData = Resources.sceneIndices.data() + firstIndex;
+		{
+			FScopedProfileTimer timer(Profile.indexEmissionMilliseconds);
+			indexData[0] = first;
+			indexData[1] = second;
+			indexData[2] = third;
+			indexData[3] = third;
+			indexData[4] = fourth;
+			indexData[5] = first;
+		}
 		const float centerX = (a.x + b.x + c.x + d.x) * 0.25f;
 		const float centerY = (a.y + b.y + c.y + d.y) * 0.25f;
 		const float centerZ = (a.z + b.z + c.z + d.z) * 0.25f;
@@ -1240,7 +1526,9 @@ namespace
 		batch.fog = fog;
 		batch.translucent = translucent || blendMode != GLES_BLEND_OPAQUE;
 		batch.repeat = repeat;
-		batch.palette = IsPaletteTexture(texture);
+		const unsigned int textureFlags = gl_GLESInternalGetMaterialFlags(texture);
+		batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
+		batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
 		batch.materialFlags = materialFlags;
 		batch.blendMode = blendMode;
 		batch.customBlend = customBlend;
@@ -1248,7 +1536,8 @@ namespace
 		batch.destinationBlend = destinationBlend;
 		batch.alphaCutoff = alphaCutoff;
 		batch.hud = hud;
-		CopyNativeLightData(batch, lightData, lightCounts);
+		if (lightData != NULL && lightCounts != NULL)
+			CopyNativeLightData(batch, lightData, lightCounts);
 		if (batch.lightCount > 0)
 			SetLightPlaneNormal(batch, a, b, c);
 		batch.sortDepth = dx * dx + dy * dy + dz * dz;
@@ -1280,11 +1569,14 @@ namespace
 		if (!batch.wipeOverlay || Resources.sceneBatches.size() < 2) return;
 
 		FSceneBatch &previous = Resources.sceneBatches[Resources.sceneBatches.size() - 2];
+		const FSceneViewSnapshot &previousView = BatchView(previous);
+		const FSceneViewSnapshot &batchView = BatchView(batch);
 		const bool compatible = previous.hud && previous.wipeOverlay &&
 			previous.firstIndex + previous.indexCount == batch.firstIndex &&
 			previous.texture == batch.texture && previous.brightmap == batch.brightmap &&
 			previous.brightmapDesaturation == batch.brightmapDesaturation &&
 			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.cameraTexture == batch.cameraTexture &&
 			previous.translucent == batch.translucent && previous.repeat == batch.repeat &&
 			previous.palette == batch.palette && previous.model == batch.model &&
 			previous.cullBackFaces == batch.cullBackFaces &&
@@ -1292,10 +1584,9 @@ namespace
 			previous.customBlend == batch.customBlend && previous.sourceBlend == batch.sourceBlend &&
 			previous.destinationBlend == batch.destinationBlend && previous.alphaCutoff == batch.alphaCutoff &&
 			previous.blendMode == batch.blendMode && previous.portalId == batch.portalId &&
-			previous.clipPlaneEnabled == batch.clipPlaneEnabled &&
-			memcmp(previous.viewProjection, batch.viewProjection, sizeof(batch.viewProjection)) == 0 &&
-			memcmp(previous.cameraPosition, batch.cameraPosition, sizeof(batch.cameraPosition)) == 0 &&
-			memcmp(previous.clipPlane, batch.clipPlane, sizeof(batch.clipPlane)) == 0;
+			previousView.clipPlaneEnabled == batchView.clipPlaneEnabled &&
+			previous.viewSerial == batch.viewSerial &&
+			previous.clipSerial == batch.clipSerial;
 		if (compatible)
 		{
 			previous.indexCount += batch.indexCount;
@@ -1323,15 +1614,63 @@ namespace
 		return (batch.materialFlags & GLES_MATERIAL_DECAL) != 0;
 	}
 
+	static bool CanUseNativeSimpleProgram(const FSceneBatch &batch)
+	{
+		return Resources.simpleProgram != 0 && !batch.fog && !batch.masked && !batch.palette &&
+			!batch.translucent && !batch.hud && !batch.model && !batch.flood &&
+			!batch.skyMask && !batch.portalMask && !batch.wipeOverlay && batch.portalId < 0 &&
+			batch.materialFlags == 0 && batch.brightmap == 0 && batch.lightCount == 0 &&
+			!BatchView(batch).clipPlaneEnabled && !batch.customBlend && batch.blendMode == GLES_BLEND_OPAQUE &&
+			batch.glowTopColor[3] <= 0.0f && batch.glowBottomColor[3] <= 0.0f;
+	}
+
 	static void UploadSceneGeometry()
 	{
 		Resources.sceneIndexCount = static_cast<GLsizei>(Resources.sceneIndices.size());
 		Resources.sceneReady = Resources.sceneIndexCount > 0;
 		if (!Resources.sceneReady) return;
-		gl_GLESInternalSceneUploadGeometry(Resources.sceneVertexArray,
+		Resources.sceneIndexType = GL_UNSIGNED_INT;
+		Resources.sceneIndexStride = sizeof(GLuint);
+		const void *indexData = Resources.sceneIndices.data();
+		size_t indexBytes = Resources.sceneIndices.size() * sizeof(GLuint);
+		if (Resources.sceneVertices.size() <= 65536u)
+		{
+			bool fitsShort = true;
+			Resources.sceneShortIndices.resize(Resources.sceneIndices.size());
+			for (size_t index = 0; index < Resources.sceneIndices.size(); ++index)
+			{
+				if (Resources.sceneIndices[index] > 0xffffu)
+				{
+					fitsShort = false;
+					break;
+				}
+				Resources.sceneShortIndices[index] = static_cast<GLushort>(Resources.sceneIndices[index]);
+			}
+			if (fitsShort)
+			{
+				Resources.sceneIndexType = GL_UNSIGNED_SHORT;
+				Resources.sceneIndexStride = sizeof(GLushort);
+				indexData = Resources.sceneShortIndices.data();
+				indexBytes = Resources.sceneShortIndices.size() * sizeof(GLushort);
+			}
+			else
+				Resources.sceneShortIndices.clear();
+		}
+		else
+			Resources.sceneShortIndices.clear();
+		const auto uploadStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
+		const unsigned int reallocations = gl_GLESInternalSceneUploadGeometry(Resources.sceneVertexArray,
 			Resources.sceneVertexBuffer, Resources.sceneIndexBuffer,
 			&Resources.sceneVertices[0], Resources.sceneVertices.size() * sizeof(FSceneVertex),
-			Resources.sceneIndices.data(), Resources.sceneIndices.size());
+			indexData, indexBytes);
+		if (Profile.active)
+		{
+			Profile.bufferReallocations += reallocations;
+			Profile.uploadMilliseconds += ProfileMilliseconds(uploadStart);
+			Profile.vertexBytes = Resources.sceneVertices.size() * sizeof(FSceneVertex);
+			Profile.indexBytes = indexBytes;
+		}
 	}
 
 	static void AddSkyMaskCaps(FNativeSkyRecord &sky)
@@ -1377,7 +1716,8 @@ namespace
 			batch.indexCount = 6;
 			batch.skyMask = true;
 			batch.portalId = sky.portalId;
-			Resources.sceneBatches.push_back(batch);
+			RecordSceneBatchSubmission(batch);
+			PushNativeSceneBatch(batch);
 			sky.maskBatches.push_back(Resources.sceneBatches.size() - 1);
 		}
 		sky.capsAdded = true;
@@ -1436,6 +1776,15 @@ namespace
 			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
 			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
+		static const char *simpleFragmentSource =
+			"#version 320 es\n"
+			"precision highp float;\n"
+			"in vec2 v_uv;\n"
+			"in vec4 v_color;\n"
+			"layout(location = 0) out vec4 frag_color;\n"
+			"uniform sampler2D u_texture;\n"
+			"uniform bool u_use_texture;\n"
+			"void main() { vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); frag_color = vec4(texel.rgb * clamp(v_color.rgb, vec3(0.0), vec3(1.4)), texel.a * v_color.a); }\n";
 		static const char *maskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1565,6 +1914,7 @@ namespace
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
 			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
 		Resources.sceneProgram = LinkProgram(sceneVertexSource, sceneFragmentSource, "opaque scene");
+		Resources.simpleProgram = LinkProgram(sceneVertexSource, simpleFragmentSource, "simple opaque scene");
 		Resources.maskedProgram = LinkProgram(sceneVertexSource, maskedFragmentSource, "masked scene");
 		Resources.fogProgram = LinkProgram(sceneVertexSource, fogFragmentSource, "fogged scene");
 		Resources.fogMaskedProgram = LinkProgram(sceneVertexSource, fogMaskedFragmentSource, "fogged masked scene");
@@ -1586,6 +1936,7 @@ namespace
 		Resources.sceneSkyFog = glGetUniformLocation(Resources.sceneProgram, "u_sky_fog");
 		Resources.sceneMaterialFlags = glGetUniformLocation(Resources.sceneProgram, "u_material_flags");
 		Resources.sceneFuzzTime = glGetUniformLocation(Resources.sceneProgram, "u_fuzz_time");
+		Resources.sceneLightOnlyMode = glGetUniformLocation(Resources.sceneProgram, "u_light_only_mode");
 		Resources.sceneLightPositionRadius = glGetUniformLocation(Resources.sceneProgram, "u_light_position_radius[0]");
 		Resources.sceneLightColor = glGetUniformLocation(Resources.sceneProgram, "u_light_color[0]");
 		Resources.sceneLightCounts = glGetUniformLocation(Resources.sceneProgram, "u_light_counts");
@@ -1594,6 +1945,15 @@ namespace
 		Resources.sceneDynamicLightTexture = glGetUniformLocation(Resources.sceneProgram, "u_dynamic_light_texture");
 		Resources.sceneClipPlane = glGetUniformLocation(Resources.sceneProgram, "u_clip_plane");
 		Resources.sceneClipPlaneEnabled = glGetUniformLocation(Resources.sceneProgram, "u_clip_plane_enabled");
+		Resources.simpleTextureUniform = glGetUniformLocation(Resources.simpleProgram, "u_texture");
+		Resources.simpleViewProjection = glGetUniformLocation(Resources.simpleProgram, "u_view_projection");
+		Resources.simpleUseTexture = glGetUniformLocation(Resources.simpleProgram, "u_use_texture");
+		Resources.simpleModel = glGetUniformLocation(Resources.simpleProgram, "u_model");
+		Resources.simpleTextureTransform = glGetUniformLocation(Resources.simpleProgram, "u_texture_transform");
+		Resources.simpleCameraPosition = glGetUniformLocation(Resources.simpleProgram, "u_camera_position");
+		Resources.simpleObjectColor = glGetUniformLocation(Resources.simpleProgram, "u_object_color");
+		Resources.simpleSkyDepth = glGetUniformLocation(Resources.simpleProgram, "u_sky_depth");
+		Resources.simpleSkyFog = glGetUniformLocation(Resources.simpleProgram, "u_sky_fog");
 		Resources.maskedTextureUniform = glGetUniformLocation(Resources.maskedProgram, "u_texture");
 		Resources.maskedBrightmapUniform = glGetUniformLocation(Resources.maskedProgram, "u_brightmap");
 		Resources.maskedUseBrightmap = glGetUniformLocation(Resources.maskedProgram, "u_use_brightmap");
@@ -1607,6 +1967,7 @@ namespace
 		Resources.maskedAlphaCutoff = glGetUniformLocation(Resources.maskedProgram, "u_alpha_cutoff");
 		Resources.maskedMaterialFlags = glGetUniformLocation(Resources.maskedProgram, "u_material_flags");
 		Resources.maskedFuzzTime = glGetUniformLocation(Resources.maskedProgram, "u_fuzz_time");
+		Resources.maskedLightOnlyMode = glGetUniformLocation(Resources.maskedProgram, "u_light_only_mode");
 		Resources.maskedLightPositionRadius = glGetUniformLocation(Resources.maskedProgram, "u_light_position_radius[0]");
 		Resources.maskedLightColor = glGetUniformLocation(Resources.maskedProgram, "u_light_color[0]");
 		Resources.maskedLightCounts = glGetUniformLocation(Resources.maskedProgram, "u_light_counts");
@@ -1627,6 +1988,7 @@ namespace
 		Resources.paletteObjectColor = glGetUniformLocation(Resources.paletteProgram, "u_object_color");
 		Resources.paletteMaterialFlags = glGetUniformLocation(Resources.paletteProgram, "u_material_flags");
 		Resources.paletteFuzzTime = glGetUniformLocation(Resources.paletteProgram, "u_fuzz_time");
+		Resources.paletteLightOnlyMode = glGetUniformLocation(Resources.paletteProgram, "u_light_only_mode");
 		Resources.paletteLightPositionRadius = glGetUniformLocation(Resources.paletteProgram, "u_light_position_radius[0]");
 		Resources.paletteLightColor = glGetUniformLocation(Resources.paletteProgram, "u_light_color[0]");
 		Resources.paletteLightCounts = glGetUniformLocation(Resources.paletteProgram, "u_light_counts");
@@ -1647,6 +2009,7 @@ namespace
 		Resources.fogObjectColor = glGetUniformLocation(Resources.fogProgram, "u_object_color");
 		Resources.fogMaterialFlags = glGetUniformLocation(Resources.fogProgram, "u_material_flags");
 		Resources.fogFuzzTime = glGetUniformLocation(Resources.fogProgram, "u_fuzz_time");
+		Resources.fogLightOnlyMode = glGetUniformLocation(Resources.fogProgram, "u_light_only_mode");
 		Resources.fogColor = glGetUniformLocation(Resources.fogProgram, "u_fog_color");
 		Resources.fogDensity = glGetUniformLocation(Resources.fogProgram, "u_fog_density");
 		Resources.fogLightPositionRadius = glGetUniformLocation(Resources.fogProgram, "u_light_position_radius[0]");
@@ -1670,6 +2033,7 @@ namespace
 		Resources.fogMaskedAlphaCutoff = glGetUniformLocation(Resources.fogMaskedProgram, "u_alpha_cutoff");
 		Resources.fogMaskedMaterialFlags = glGetUniformLocation(Resources.fogMaskedProgram, "u_material_flags");
 		Resources.fogMaskedFuzzTime = glGetUniformLocation(Resources.fogMaskedProgram, "u_fuzz_time");
+		Resources.fogMaskedLightOnlyMode = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_only_mode");
 		Resources.fogMaskedColor = glGetUniformLocation(Resources.fogMaskedProgram, "u_fog_color");
 		Resources.fogMaskedDensity = glGetUniformLocation(Resources.fogMaskedProgram, "u_fog_density");
 		Resources.fogMaskedLightPositionRadius = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_position_radius[0]");
@@ -1760,12 +2124,18 @@ unsigned int gl_GLES_GetShaderProgram(const char *name)
 {
 	if (name == NULL || !Resources.ready) return 0;
 	if (strcmp(name, "gles/opaque") == 0) return Resources.sceneProgram;
+	if (strcmp(name, "gles/simple-opaque") == 0) return Resources.simpleProgram;
 	if (strcmp(name, "gles/masked") == 0) return Resources.maskedProgram;
 	if (strcmp(name, "gles/fog") == 0) return Resources.fogProgram;
 	if (strcmp(name, "gles/fog-masked") == 0) return Resources.fogMaskedProgram;
 	if (strcmp(name, "gles/palette") == 0) return Resources.paletteProgram;
 	if (strcmp(name, "gles/present") == 0) return gl_GLESInternalPresentGetProgram();
 	return 0;
+}
+
+bool gl_GLES_IsProfileEnabled()
+{
+	return gl_gles_profile || developer;
 }
 
 void gl_GLES_UseProgram(unsigned int handle)
@@ -1847,8 +2217,18 @@ void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	float cameraYaw, float cameraPitch, float cameraRoll, float fieldOfView, float aspect, float fovRatio)
 {
 	if (!gl_GLES_CanUseResources()) return;
-	if (developer)
+	Profile = {};
+	Profile.active = gl_gles_profile || developer;
+	Profile.cameraTargetCreates = PendingCameraTargetCreates;
+	Profile.cameraCopies = PendingCameraCopies;
+	PendingCameraTargetCreates = 0;
+	PendingCameraCopies = 0;
+	gl_GLESInternalInvalidateStateCache();
+	if (developer || Profile.active)
+	{
 		NativeFrameStart = std::chrono::steady_clock::now();
+		Profile.frameStart = NativeFrameStart;
+	}
 	if (developer && !SceneInputLogged)
 	{
 		SceneInputLogged = true;
@@ -1876,9 +2256,13 @@ void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	BuildViewProjection(cameraX, cameraY, cameraZ, cameraYaw, cameraPitch, cameraRoll, fieldOfView, aspect, fovRatio);
 	Resources.sceneVertices.clear();
 	Resources.sceneIndices.clear();
+	Resources.sceneShortIndices.clear();
+	Resources.sceneIndexType = GL_UNSIGNED_INT;
+	Resources.sceneIndexStride = sizeof(GLuint);
 	gl_GLESInternalSceneClearLights();
 	Resources.sceneIndexCount = 0;
 	Resources.sceneReady = false;
+	Resources.sceneViewSnapshots.clear();
 	Resources.sceneBatches.clear();
 	Resources.portalTargets.clear();
 	NativePortalCaptureStack.clear();
@@ -1888,11 +2272,15 @@ void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	Resources.sceneWallCount = 0;
 	Resources.sceneFlatCount = 0;
 	Resources.sceneSpriteCount = 0;
+	Resources.sceneBatchSubmissions = 0;
+	Resources.sceneOrderHash = SceneOrderHashOffset;
 	Resources.sceneOpaqueBatchMerges = 0;
 	Resources.sceneProgramBinds = 0;
 	Resources.sceneProgramBindSkips = 0;
 	Resources.sceneTextureBinds = 0;
 	Resources.sceneTextureBindSkips = 0;
+	Resources.sceneActiveTextureSets = 0;
+	Resources.sceneActiveTextureSkips = 0;
 	Resources.sceneSamplerBinds = 0;
 	Resources.sceneSamplerBindSkips = 0;
 	Resources.sceneOpaqueStateSets = 0;
@@ -1925,6 +2313,10 @@ void gl_GLES_ClearScene()
 	FlatCollectionDeferred = false;
 	Resources.sceneVertices.clear();
 	Resources.sceneIndices.clear();
+	Resources.sceneShortIndices.clear();
+	Resources.sceneIndexType = GL_UNSIGNED_INT;
+	Resources.sceneIndexStride = sizeof(GLuint);
+	Resources.sceneViewSnapshots.clear();
 	Resources.sceneBatches.clear();
 	gl_GLESInternalSceneClearLights();
 	Resources.portalTargets.clear();
@@ -1937,11 +2329,15 @@ void gl_GLES_ClearScene()
 	Resources.sceneWallCount = 0;
 	Resources.sceneFlatCount = 0;
 	Resources.sceneSpriteCount = 0;
+	Resources.sceneBatchSubmissions = 0;
+	Resources.sceneOrderHash = SceneOrderHashOffset;
 	Resources.sceneOpaqueBatchMerges = 0;
 	Resources.sceneProgramBinds = 0;
 	Resources.sceneProgramBindSkips = 0;
 	Resources.sceneTextureBinds = 0;
 	Resources.sceneTextureBindSkips = 0;
+	Resources.sceneActiveTextureSets = 0;
+	Resources.sceneActiveTextureSkips = 0;
 	Resources.sceneSamplerBinds = 0;
 	Resources.sceneSamplerBindSkips = 0;
 	Resources.sceneOpaqueStateSets = 0;
@@ -2084,12 +2480,14 @@ void gl_GLES_AddSkyMask(const float *positions)
 	batch.firstIndex = firstIndex;
 	batch.indexCount = static_cast<GLsizei>(Resources.sceneIndices.size()) - firstIndex;
 	batch.skyMask = true;
-	Resources.sceneBatches.push_back(batch);
+	RecordSceneBatchSubmission(batch);
+	PushNativeSceneBatch(batch);
 	sky->maskBatches.push_back(Resources.sceneBatches.size() - 1);
 	if (!sky->viewValid)
 	{
-		memcpy(sky->viewProjection, batch.viewProjection, sizeof(sky->viewProjection));
-		memcpy(sky->cameraPosition, batch.cameraPosition, sizeof(sky->cameraPosition));
+		const FSceneViewSnapshot &view = BatchView(batch);
+		memcpy(sky->viewProjection, view.viewProjection, sizeof(sky->viewProjection));
+		memcpy(sky->cameraPosition, view.cameraPosition, sizeof(sky->cameraPosition));
 		sky->viewValid = true;
 	}
 	// The source portal adds caps when its owning wall list has multiple lines.
@@ -2107,6 +2505,7 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	const float *topGlowColor, const float *bottomGlowColor, const float *glowDistances)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL) return;
+	FScopedProfileTimer timer(Profile.wallCollectionMilliseconds);
 	++Resources.sceneWallCount;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
@@ -2187,6 +2586,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
+	FScopedProfileTimer timer(Profile.flatCollectionMilliseconds);
 	++Resources.sceneFlatCount;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
@@ -2209,6 +2609,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 		Resources.sceneVertices.push_back(vertex);
 		if (i >= 2)
 		{
+			FScopedProfileTimer indexTimer(Profile.indexEmissionMilliseconds);
 			Resources.sceneIndices.push_back(first);
 			Resources.sceneIndices.push_back(first + i - 1);
 			Resources.sceneIndices.push_back(first + i);
@@ -2244,7 +2645,9 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 		batch.fog = fog;
 		batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 		batch.repeat = repeat;
-		batch.palette = IsPaletteTexture(texture);
+		const unsigned int textureFlags = gl_GLESInternalGetMaterialFlags(texture);
+		batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
+		batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
 		batch.flat = true;
 		batch.materialFlags = materialFlags;
 		batch.blendMode = blendMode;
@@ -2342,7 +2745,8 @@ void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositio
 		batch.fogColor[2] = ClampUnit(fogColor[2]);
 	}
 	batch.fogDensity = std::max(0.0f, fogDensity);
-	Resources.sceneBatches.push_back(batch);
+	RecordSceneBatchSubmission(batch);
+	PushNativeSceneBatch(batch);
 }
 
 void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
@@ -2391,7 +2795,8 @@ void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
 	batch.blendMode = blendMode;
 	batch.materialFlags = materialFlags;
 	batch.sortDepth = 0.0f;
-	Resources.sceneBatches.push_back(batch);
+	RecordSceneBatchSubmission(batch);
+	PushNativeSceneBatch(batch);
 }
 
 void gl_GLES_AddSprite(const float *positions, const float *texcoords,
@@ -2400,8 +2805,10 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	unsigned int brightmap, int brightmapDesaturation, bool customBlend,
 	int sourceBlend, int destinationBlend, float alphaCutoff)
 {
-	if (gl_GLES_CanUseResources()) ++Resources.sceneSpriteCount;
-	if (!gl_GLES_CanUseResources() || positions == NULL) return;
+	const bool resourcesReady = gl_GLES_CanUseResources();
+	if (resourcesReady) ++Resources.sceneSpriteCount;
+	if (!resourcesReady || positions == NULL) return;
+	FScopedProfileTimer timer(Profile.spriteCollectionMilliseconds);
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
 	FSceneVertex vertices[4];
@@ -2434,6 +2841,7 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || indices == NULL ||
 		vertexCount == 0 || indexCount < 3 || (indexCount % 3) != 0) return;
+	FScopedProfileTimer timer(Profile.modelCollectionMilliseconds);
 	const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
 	if (!CanAppendSceneGeometry(vertexCount, indexCount, "model surface")) return;
 	for (unsigned int index = 0; index < indexCount; ++index)
@@ -2458,8 +2866,11 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 		Resources.sceneVertices.push_back(value);
 	}
 	const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
-	for (unsigned int index = 0; index < indexCount; ++index)
-		Resources.sceneIndices.push_back(first + indices[index]);
+	{
+		FScopedProfileTimer indexTimer(Profile.indexEmissionMilliseconds);
+		for (unsigned int index = 0; index < indexCount; ++index)
+			Resources.sceneIndices.push_back(first + indices[index]);
+	}
 	float centerX = 0.0f;
 	float centerY = 0.0f;
 	float centerZ = 0.0f;
@@ -2487,7 +2898,9 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	batch.fog = fog;
 	batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 	batch.repeat = false;
-	batch.palette = IsPaletteTexture(texture);
+	const unsigned int textureFlags = gl_GLESInternalGetMaterialFlags(texture);
+	batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
+	batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
 	batch.model = true;
 	batch.cullBackFaces = cullBackFaces;
 	batch.materialFlags = materialFlags;
@@ -2504,7 +2917,8 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 		batch.fogColor[2] = ClampUnit(fogColor[2]);
 	}
 	batch.fogDensity = std::max(0.0f, fogDensity);
-	Resources.sceneBatches.push_back(batch);
+	RecordSceneBatchSubmission(batch);
+	PushNativeSceneBatch(batch);
 }
 
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
@@ -2556,6 +2970,12 @@ void gl_GLES_AddScreenQuad(const float *color, float alpha,
 void gl_GLES_EndScene()
 {
 	if (!gl_GLES_CanUseResources()) return;
+	if (Profile.active)
+	{
+		const auto now = std::chrono::steady_clock::now();
+		Profile.collectionMilliseconds = std::chrono::duration<double, std::milli>(
+			now - Profile.frameStart).count();
+	}
 	if (Resources.skyMaterial != NULL && Resources.outerSky.capEligible)
 		AddSkyMaskCaps(Resources.outerSky);
 	if (developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
@@ -2588,14 +3008,161 @@ void gl_GLES_EndScene()
 		DPrintf("Zandronum GLES scene kinds: %u translucent, %u HUD, %u portal, %u masked.\n",
 			translucentCount, hudCount, portalCount, maskedCount);
 	}
+	gl_GLESInternalInvalidateStateCache();
+}
+
+struct FNativeTextureBindingCache
+{
+	GLuint textures[3];
+	GLuint samplers[3];
+	bool known[3];
+	unsigned int activeUnit;
+	bool activeUnitKnown;
+};
+
+struct FNativeRenderStateCache
+{
+	bool blendEnabledKnown;
+	bool blendEnabled;
+	bool blendFunctionKnown;
+	GLenum sourceBlend;
+	GLenum destinationBlend;
+	bool blendEquationKnown;
+	GLenum blendEquation;
+	bool depthKnown;
+	bool depthEnabled;
+	GLenum depthFunction;
+	bool depthWrite;
+	bool cullKnown;
+	bool cullEnabled;
+	GLenum frontFace;
+	GLuint staticUniformProgram;
+	bool staticUniformsKnown;
+};
+
+static void InvalidateNativeBlendState(FNativeRenderStateCache &cache)
+{
+	cache.blendEnabledKnown = false;
+	cache.blendFunctionKnown = false;
+	cache.blendEquationKnown = false;
+}
+
+static void ApplyNativeBlendState(FNativeRenderStateCache &cache, bool enabled,
+	GLenum sourceBlend, GLenum destinationBlend, GLenum equation)
+{
+	bool changed = false;
+	if (!cache.blendEnabledKnown || cache.blendEnabled != enabled)
+	{
+		if (enabled) glEnable(GL_BLEND);
+		else glDisable(GL_BLEND);
+		cache.blendEnabled = enabled;
+		cache.blendEnabledKnown = true;
+		changed = true;
+	}
+	if (enabled && (!cache.blendFunctionKnown || cache.sourceBlend != sourceBlend ||
+		cache.destinationBlend != destinationBlend))
+	{
+		glBlendFunc(sourceBlend, destinationBlend);
+		cache.sourceBlend = sourceBlend;
+		cache.destinationBlend = destinationBlend;
+		cache.blendFunctionKnown = true;
+		changed = true;
+	}
+	if (!cache.blendEquationKnown || cache.blendEquation != equation)
+	{
+		glBlendEquation(equation);
+		cache.blendEquation = equation;
+		cache.blendEquationKnown = true;
+		changed = true;
+	}
+	gl_GLES_RecordProfilePortalState(!changed);
+}
+
+static void ApplyNativeDepthState(FNativeRenderStateCache &cache, bool enabled,
+	GLenum depthFunction, bool depthWrite)
+{
+	const bool changed = !cache.depthKnown || cache.depthEnabled != enabled ||
+		(enabled && cache.depthFunction != depthFunction) || cache.depthWrite != depthWrite;
+	if (changed)
+	{
+		if (!cache.depthKnown || cache.depthEnabled != enabled)
+		{
+			if (enabled) glEnable(GL_DEPTH_TEST);
+			else glDisable(GL_DEPTH_TEST);
+		}
+		if (enabled && (!cache.depthKnown || cache.depthFunction != depthFunction))
+			glDepthFunc(depthFunction);
+		if (!cache.depthKnown || cache.depthWrite != depthWrite)
+			glDepthMask(depthWrite ? GL_TRUE : GL_FALSE);
+		cache.depthEnabled = enabled;
+		cache.depthFunction = depthFunction;
+		cache.depthWrite = depthWrite;
+		cache.depthKnown = true;
+	}
+	gl_GLES_RecordProfilePortalState(!changed);
+}
+
+static void ApplyNativeCullState(FNativeRenderStateCache &cache, bool enabled,
+	GLenum frontFace)
+{
+	const bool changed = !cache.cullKnown || cache.cullEnabled != enabled ||
+		(enabled && cache.frontFace != frontFace);
+	if (changed)
+	{
+		if (!cache.cullKnown || cache.cullEnabled != enabled)
+		{
+			if (enabled) glEnable(GL_CULL_FACE);
+			else glDisable(GL_CULL_FACE);
+		}
+		if (enabled && (!cache.cullKnown || cache.frontFace != frontFace))
+		{
+			glFrontFace(frontFace);
+			cache.frontFace = frontFace;
+		}
+		cache.cullEnabled = enabled;
+		cache.cullKnown = true;
+	}
+	gl_GLES_RecordProfilePortalState(!changed);
+}
+
+static void BindNativePortalTexture(FNativeTextureBindingCache &cache, unsigned int unit,
+	GLuint texture, GLuint sampler)
+{
+	if (!cache.activeUnitKnown || cache.activeUnit != unit)
+	{
+		glActiveTexture(GL_TEXTURE0 + unit);
+		cache.activeUnit = unit;
+		cache.activeUnitKnown = true;
+		if (Profile.active) ++Profile.portalActiveTextureSets;
+	}
+	else if (Profile.active)
+	{
+		++Profile.portalActiveTextureSkips;
+	}
+	if (!cache.known[unit] || cache.textures[unit] != texture)
+		glBindTexture(GL_TEXTURE_2D, texture);
+	if (!cache.known[unit] || cache.samplers[unit] != sampler)
+		glBindSampler(unit, sampler);
+	cache.textures[unit] = texture;
+	cache.samplers[unit] = sampler;
+	cache.known[unit] = true;
+}
+
+static void RecordNativePortalUniform(bool skipped)
+{
+	if (!Profile.active) return;
+	if (skipped) ++Profile.portalUniformSkips;
+	else ++Profile.portalUniformSets;
 }
 
 static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightTexture,
-	GLuint stencilBit)
+	GLuint stencilBit, FNativeTextureBindingCache &textureCache,
+	FNativeRenderStateCache &stateCache)
 {
 	if (batch.firstIndex < 0 || batch.indexCount <= 0 ||
 		static_cast<size_t>(batch.firstIndex) + static_cast<size_t>(batch.indexCount) > Resources.sceneIndices.size())
 		return;
+	const FSceneViewSnapshot &view = BatchView(batch);
 	if (batch.flood && (batch.floodWallFirstIndex < 0 ||
 		static_cast<size_t>(batch.floodWallFirstIndex) + 6 > Resources.sceneIndices.size()))
 		return;
@@ -2606,57 +3173,53 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 	}
-	if (batch.hud)
-	{
-		glDisable(GL_DEPTH_TEST);
-		glDisable(GL_CULL_FACE);
-		glDepthMask(GL_FALSE);
-	}
-	else if (batch.model)
-	{
-		glEnable(GL_DEPTH_TEST);
-		glDepthFunc(GL_LEQUAL);
-		glDisable(GL_CULL_FACE);
-		if (batch.cullBackFaces)
-		{
-			glEnable(GL_CULL_FACE);
-			glFrontFace(GL_CW);
-		}
-	}
-	else
-	{
-		glEnable(GL_DEPTH_TEST);
-		glDepthFunc((batch.materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0 ? GL_LEQUAL : GL_LESS);
-		glDisable(GL_CULL_FACE);
-	}
+	const bool depthEnabled = !batch.hud;
+	const GLenum depthFunction = batch.model ? GL_LEQUAL :
+		((batch.materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0 ? GL_LEQUAL : GL_LESS);
+	const bool cullEnabled = batch.model && batch.cullBackFaces;
 	if (batch.translucent)
 	{
-		glEnable(GL_BLEND);
-		glDepthMask(GL_FALSE);
 		GLenum equation = GL_FUNC_ADD;
 		if (batch.blendMode == GLES_BLEND_SUBTRACT) equation = GL_FUNC_SUBTRACT;
 		else if (batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT) equation = GL_FUNC_REVERSE_SUBTRACT;
-		glBlendEquation(equation);
 		const bool additive = batch.blendMode == GLES_BLEND_ADD ||
 			batch.blendMode == GLES_BLEND_SUBTRACT || batch.blendMode == GLES_BLEND_REVERSE_SUBTRACT;
-		if (batch.customBlend) glBlendFunc(batch.sourceBlend, batch.destinationBlend);
-		else if (batch.blendMode == GLES_BLEND_FUZZ) glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
-		else if (batch.blendMode == GLES_BLEND_MULTIPLY) glBlendFunc(GL_DST_COLOR, GL_ZERO);
-		else glBlendFunc(GL_SRC_ALPHA, additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+		GLenum sourceBlend = GL_SRC_ALPHA;
+		GLenum destinationBlend = additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA;
+		if (batch.customBlend)
+		{
+			sourceBlend = batch.sourceBlend;
+			destinationBlend = batch.destinationBlend;
+		}
+		else if (batch.blendMode == GLES_BLEND_FUZZ)
+		{
+			sourceBlend = GL_DST_COLOR;
+			destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
+		}
+		else if (batch.blendMode == GLES_BLEND_MULTIPLY)
+		{
+			sourceBlend = GL_DST_COLOR;
+			destinationBlend = GL_ZERO;
+		}
+		ApplyNativeBlendState(stateCache, true, sourceBlend, destinationBlend, equation);
 	}
 	else
 	{
-		glDisable(GL_BLEND);
-		glDepthMask(batch.hud || batch.flood || IsNativeDecal(batch) ? GL_FALSE : GL_TRUE);
-		glBlendEquation(GL_FUNC_ADD);
+		ApplyNativeBlendState(stateCache, false, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD);
 	}
+	ApplyNativeDepthState(stateCache, depthEnabled, depthFunction,
+		batch.translucent || batch.hud || batch.flood || IsNativeDecal(batch) ? false : true);
+	ApplyNativeCullState(stateCache, cullEnabled, GL_CW);
 	const GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
 		(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram));
 	const char *programName = batch.fog ? (batch.masked ? "gles/portal-fog-masked" : "gles/portal-fog") :
 		(batch.masked ? "gles/portal-masked" : (batch.palette ? "gles/portal-palette" : "gles/portal-opaque"));
 	BindNativeProgram(program, programName);
 	SetNativeGlowUniforms(program, batch);
-	if (program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
+	const bool setStaticUniforms = !stateCache.staticUniformsKnown ||
+		stateCache.staticUniformProgram != program;
+	RecordNativePortalUniform(!setStaticUniforms);
+	if (setStaticUniforms && program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
 		glUniform1i(Resources.sceneSkyDepth, 0);
 	GLint viewProjection = Resources.sceneViewProjection;
 	GLint textureUniform = Resources.sceneTextureUniform;
@@ -2790,16 +3353,16 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		0.0f, 0.0f, 0.0f, 1.0f
 	};
 	if (viewProjection >= 0) glUniformMatrix4fv(viewProjection, 1, GL_FALSE,
-		batch.hud ? identity : batch.viewProjection);
-	if (model >= 0) glUniformMatrix4fv(model, 1, GL_FALSE, identity);
-	if (textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
-	if (cameraPosition >= 0) glUniform3f(cameraPosition, batch.hud ? 0.0f : batch.cameraPosition[0],
-		batch.hud ? 0.0f : batch.cameraPosition[1], batch.hud ? 0.0f : batch.cameraPosition[2]);
-	if (objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		batch.hud ? identity : view.viewProjection);
+	if (setStaticUniforms && model >= 0) glUniformMatrix4fv(model, 1, GL_FALSE, identity);
+	if (setStaticUniforms && textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
+	if (cameraPosition >= 0) glUniform3f(cameraPosition, batch.hud ? 0.0f : view.cameraPosition[0],
+		batch.hud ? 0.0f : view.cameraPosition[1], batch.hud ? 0.0f : view.cameraPosition[2]);
+	if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 	if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags));
-	if (fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
-	if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, batch.clipPlane);
-	if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, batch.clipPlaneEnabled ? 1 : 0);
+	if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
+	if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, view.clipPlane);
+	if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, view.clipPlaneEnabled ? 1 : 0);
 	if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ||
 		(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f :
 		(batch.alphaCutoff > 0.0f ? batch.alphaCutoff : 0.5f));
@@ -2822,27 +3385,34 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	const bool projected = dynamicLightTexture != 0 && lightCount > 0 &&
 		(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
 	if (projectedLights >= 0) glUniform1i(projectedLights, projected ? 1 : 0);
-	if (dynamicLightSampler >= 0) glUniform1i(dynamicLightSampler, 2);
-	if (textureUniform >= 0) glUniform1i(textureUniform, 0);
-	if (brightmapUniform >= 0) glUniform1i(brightmapUniform, 1);
+	if (setStaticUniforms && dynamicLightSampler >= 0) glUniform1i(dynamicLightSampler, 2);
+	if (setStaticUniforms && textureUniform >= 0) glUniform1i(textureUniform, 0);
+	if (setStaticUniforms && brightmapUniform >= 0) glUniform1i(brightmapUniform, 1);
 	if (useBrightmap >= 0) glUniform1i(useBrightmap, batch.brightmap != 0 ? 1 : 0);
 	if (brightmapDesaturation >= 0) glUniform1i(brightmapDesaturation, batch.brightmapDesaturation);
 	if (useTexture >= 0) glUniform1i(useTexture, batch.texture != 0 ? 1 : 0);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, batch.texture != 0 ? batch.texture : Resources.checkerTexture);
-	glBindSampler(0, batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_2D, batch.brightmap != 0 ? batch.brightmap : Resources.checkerTexture);
-	glBindSampler(1, batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
-	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, projected ? dynamicLightTexture : Resources.checkerTexture);
-	glBindSampler(2, Resources.sceneSampler);
-	glActiveTexture(GL_TEXTURE0);
+	BindNativePortalTexture(textureCache, 0,
+		batch.texture != 0 ? batch.texture : Resources.checkerTexture,
+		NativeSamplerForBatch(batch));
+	BindNativePortalTexture(textureCache, 1,
+		batch.brightmap != 0 ? batch.brightmap : Resources.checkerTexture,
+		NativeSamplerForBatch(batch));
+	BindNativePortalTexture(textureCache, 2,
+		projected ? dynamicLightTexture : Resources.checkerTexture,
+		Resources.sceneSampler);
+	BindNativePortalTexture(textureCache, 0, textureCache.textures[0], textureCache.samplers[0]);
 	SetNativeDecalDepthBias(batch, true);
-	glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_INT,
-		reinterpret_cast<const void *>(batch.firstIndex * sizeof(GLuint)));
+	ProfileDrawElements(GL_TRIANGLES, batch.indexCount, NativeSceneIndexType(),
+		NativeSceneIndexOffset(batch.firstIndex));
+	stateCache.staticUniformProgram = program;
+	stateCache.staticUniformsKnown = true;
 	DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
 		lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex);
+	if (batch.lightCount > GLES_MAX_LIGHTS)
+	{
+		textureCache.known[2] = false;
+		InvalidateNativeBlendState(stateCache);
+	}
 	SetNativeDecalDepthBias(batch, false);
 }
 
@@ -2858,10 +3428,12 @@ static void DrawNativeWipeOverlay(const FGLESTargetDescriptor &target)
 	glDisable(GL_STENCIL_TEST);
 	glDisable(GL_CULL_FACE);
 	glBindVertexArray(Resources.sceneVertexArray);
+	FNativeTextureBindingCache textureCache = {};
+	FNativeRenderStateCache stateCache = {};
 	for (size_t i = 0; i < Resources.sceneBatches.size(); ++i)
 	{
 		const FSceneBatch &batch = Resources.sceneBatches[i];
-		if (batch.wipeOverlay) DrawNativePortalBatch(batch, 0, 0);
+		if (batch.wipeOverlay) DrawNativePortalBatch(batch, 0, 0, textureCache, stateCache);
 	}
 	glBindVertexArray(0);
 	glDisable(GL_BLEND);
@@ -2878,6 +3450,7 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 	if (batch.firstIndex < 0 || batch.indexCount <= 0 ||
 		static_cast<size_t>(batch.firstIndex) + static_cast<size_t>(batch.indexCount) > Resources.sceneIndices.size())
 		return false;
+	const FSceneViewSnapshot &view = BatchView(batch);
 	BindNativeProgram(Resources.sceneProgram, "gles/portal-mask");
 	static const GLfloat identity[16] =
 	{
@@ -2887,11 +3460,11 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 		0.0f, 0.0f, 0.0f, 1.0f
 	};
 	if (Resources.sceneViewProjection >= 0)
-		glUniformMatrix4fv(Resources.sceneViewProjection, 1, GL_FALSE, batch.viewProjection);
+		glUniformMatrix4fv(Resources.sceneViewProjection, 1, GL_FALSE, view.viewProjection);
 	if (Resources.sceneModel >= 0) glUniformMatrix4fv(Resources.sceneModel, 1, GL_FALSE, identity);
 	if (Resources.sceneTextureTransform >= 0) glUniform4f(Resources.sceneTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 	if (Resources.sceneCameraPosition >= 0)
-		glUniform3f(Resources.sceneCameraPosition, batch.cameraPosition[0], batch.cameraPosition[1], batch.cameraPosition[2]);
+		glUniform3f(Resources.sceneCameraPosition, view.cameraPosition[0], view.cameraPosition[1], view.cameraPosition[2]);
 	if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 	if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 0);
 	if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
@@ -2914,8 +3487,8 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 			glStencilFunc(GL_ALWAYS, stencilBit, stencilBit);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 	}
-	glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_INT,
-		reinterpret_cast<const void *>(batch.firstIndex * sizeof(GLuint)));
+	ProfileDrawElements(GL_TRIANGLES, batch.indexCount, NativeSceneIndexType(),
+		NativeSceneIndexOffset(batch.firstIndex));
 	return true;
 }
 
@@ -2952,7 +3525,7 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		const FGLESSkyPrimitiveRange range = gl_GLESInternalPortalSkyboxFace(face);
-		glDrawElements(GL_TRIANGLES, range.indexCount, GL_UNSIGNED_SHORT,
+		ProfileDrawElements(GL_TRIANGLES, range.indexCount, GL_UNSIGNED_SHORT,
 			reinterpret_cast<const void *>(range.firstIndex * sizeof(GLushort)));
 		drawn = true;
 	}
@@ -3040,13 +3613,13 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 				glUniform4f(Resources.sceneObjectColor, target.skyUpperCapColor.r / 255.0f,
 					target.skyUpperCapColor.g / 255.0f, target.skyUpperCapColor.b / 255.0f, 1.0f);
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		}
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 		if (caps)
 		{
@@ -3055,13 +3628,13 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 				glUniform4f(Resources.sceneObjectColor, target.skyLowerCapColor.r / 255.0f,
 					target.skyLowerCapColor.g / 255.0f, target.skyLowerCapColor.b / 255.0f, 1.0f);
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		}
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 		return true;
 	};
@@ -3082,16 +3655,16 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 				target.skyFogColor.g / 255.0f, target.skyFogColor.b / 255.0f, skyfog / 255.0f);
 		glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 		if (target.sky.capEligible)
-			glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 		if (target.sky.capEligible)
-			glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		for (int row = 0; row < 4; ++row)
-			glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 	}
 	if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
@@ -3149,13 +3722,15 @@ static bool CompositeNativePortalFallback(const FNativePortalTarget &target,
 		const size_t batchIndex = target.maskBatches[maskIndex];
 		if (batchIndex >= Resources.sceneBatches.size()) continue;
 		const FSceneBatch &mask = Resources.sceneBatches[batchIndex];
+		const FSceneViewSnapshot &view = BatchView(mask);
 		masks.push_back({ mask.indexCount,
-			static_cast<size_t>(mask.firstIndex) * sizeof(GLuint), mask.viewProjection });
+			static_cast<size_t>(mask.firstIndex) * NativeSceneIndexStride(), view.viewProjection });
 	}
 	FGLESPortalCompositeList composite = {};
 	composite.sourceTexture = sourceTexture;
 	composite.sceneVertexArray = Resources.sceneVertexArray;
 	composite.sceneSampler = Resources.sceneSampler;
+	composite.indexType = NativeSceneIndexType();
 	composite.masks = masks.data();
 	composite.maskCount = masks.size();
 	composite.targetWidth = parentSurface->renderWidth;
@@ -3378,13 +3953,20 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 			record.sortDepth = batch.sortDepth;
 			orderRecords.push_back(record);
 		}
+		const auto orderingStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
 		const FGLESSceneDrawOrderView drawOrder = gl_GLESInternalSceneSortBatches(
 			orderRecords.data(), orderRecords.size(), GLES_SCENE_ORDER_PORTAL);
-		glStencilMask(0x00);
-		glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
-		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
-		{
-			DrawNativePortalBatch(Resources.sceneBatches[drawOrder.indices[orderIndex]], dynamicLightTexture, stencilBit);
+		if (Profile.active)
+			Profile.orderingMilliseconds += ProfileMilliseconds(orderingStart);
+	glStencilMask(0x00);
+	glStencilFunc(GL_EQUAL, stencilBit, stencilBit);
+	FNativeTextureBindingCache textureCache = {};
+	FNativeRenderStateCache stateCache = {};
+	for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
+	{
+		DrawNativePortalBatch(Resources.sceneBatches[drawOrder.indices[orderIndex]], dynamicLightTexture,
+			stencilBit, textureCache, stateCache);
 			++drawnBatches;
 		}
 		++drawnTargets;
@@ -3396,6 +3978,7 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 			glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, targetSurface->resolveFramebuffer);
 			GLubyte center[4] = {};
+			gl_GLES_RecordProfileReadback();
 			glReadPixels(targetSurface->renderWidth / 2, targetSurface->renderHeight / 2,
 				1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
 			const GLenum readError = glGetError();
@@ -3472,6 +4055,8 @@ unsigned int gl_GLES_BeginPortalCapture()
 	target.savedSkyFogColor = Resources.skyFogColor;
 	target.savedSkyFogEnabled = Resources.skyFogEnabled;
 	target.savedClipPlaneEnabled = Resources.clipPlaneEnabled;
+	target.savedViewSerial = Resources.viewSerial;
+	target.savedClipSerial = Resources.clipSerial;
 	memcpy(target.savedClipPlane, Resources.clipPlane, sizeof(target.savedClipPlane));
 	Resources.portalTargets.push_back(target);
 	NativePortalCaptureStack.push_back(target.id);
@@ -3518,7 +4103,8 @@ void gl_GLES_AddPortalMask(unsigned int portalId, const float *positions)
 	batch.indexCount = 6;
 	batch.portalId = static_cast<int>(portalId);
 	batch.portalMask = true;
-	Resources.sceneBatches.push_back(batch);
+	RecordSceneBatchSubmission(batch);
+	PushNativeSceneBatch(batch);
 	FNativePortalTarget &target = Resources.portalTargets[portalId];
 	target.maskBatches.push_back(Resources.sceneBatches.size() - 1);
 	// All masks precede the target scene batches in the shared stream.
@@ -3552,6 +4138,7 @@ void gl_GLES_SetPortalClipPlane(float a, float b, float c, float d)
 	Resources.clipPlane[2] = c;
 	Resources.clipPlane[3] = d;
 	Resources.clipPlaneEnabled = true;
+	++Resources.clipSerial;
 }
 
 void gl_GLES_EndPortalCapture(unsigned int portalId)
@@ -3584,8 +4171,9 @@ void gl_GLES_EndPortalCapture(unsigned int portalId)
 			const FSceneBatch &batch = Resources.sceneBatches[batchIndex];
 			if (batch.portalId == static_cast<int>(portalId) && !batch.portalMask)
 			{
-				memcpy(target.sky.viewProjection, batch.viewProjection, sizeof(target.sky.viewProjection));
-				memcpy(target.sky.cameraPosition, batch.cameraPosition, sizeof(target.sky.cameraPosition));
+				const FSceneViewSnapshot &view = BatchView(batch);
+				memcpy(target.sky.viewProjection, view.viewProjection, sizeof(target.sky.viewProjection));
+				memcpy(target.sky.cameraPosition, view.cameraPosition, sizeof(target.sky.cameraPosition));
 				target.sky.viewValid = true;
 				break;
 			}
@@ -3618,6 +4206,8 @@ void gl_GLES_EndPortalCapture(unsigned int portalId)
 	Resources.skyFogColor = target.savedSkyFogColor;
 	Resources.skyFogEnabled = target.savedSkyFogEnabled;
 	Resources.clipPlaneEnabled = target.savedClipPlaneEnabled;
+	Resources.viewSerial = target.savedViewSerial;
+	Resources.clipSerial = target.savedClipSerial;
 	memcpy(Resources.clipPlane, target.savedClipPlane, sizeof(Resources.clipPlane));
 }
 
@@ -3626,6 +4216,7 @@ unsigned int gl_GLES_BindMaterial(const void *key, const unsigned char *pixels,
 {
 	if (!gl_GLES_CanUseResources() || key == NULL || pixels == NULL || width <= 0 || height <= 0)
 		return 0;
+	FScopedProfileTimer timer(Profile.materialResolutionMilliseconds);
 	ConfigureNativeSamplers();
 	return gl_GLESInternalBindMaterial(true, key, pixels, width, height, repeat,
 		colormap, translation, allowhires, colormap != CM_DEFAULT || translation != 0);
@@ -3636,12 +4227,14 @@ unsigned int gl_GLES_EnsureMaterialTexture(const void *key, int width, int heigh
 {
 	if (!gl_GLES_CanUseResources() || key == NULL || width <= 0 || height <= 0)
 		return 0;
+	FScopedProfileTimer timer(Profile.materialResolutionMilliseconds);
 	const GLuint texture = gl_GLESInternalFindMaterialTexture(key, colormap, translation,
 		repeat, allowhires, width, height);
 	if (texture != 0) return texture;
 	std::vector<unsigned char> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4, 0);
-	return gl_GLES_BindMaterial(key, pixels.data(), width, height, repeat,
-		colormap, translation, allowhires);
+	ConfigureNativeSamplers();
+	return gl_GLESInternalBindMaterial(true, key, pixels.data(), width, height, repeat,
+		colormap, translation, allowhires, colormap != CM_DEFAULT || translation != 0);
 }
 
 void gl_GLES_MarkMaterialFramebufferContent(const void *key, int colormap,
@@ -3677,7 +4270,8 @@ void gl_GLES_OnContextLost()
 	gl_GLES_ShutdownContext(true);
 	CapabilitiesReady = false;
 	memset(&Capabilities, 0, sizeof(Capabilities));
-	Printf("Zandronum GLES context lost; native resource names invalidated.\n");
+	if (developer)
+		DPrintf("Zandronum GLES context lost; native resource names invalidated.\n");
 }
 
 bool gl_GLES_OnContextRestored(int width, int height)
@@ -3695,7 +4289,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		if (!BootstrapPauseLogged)
 		{
 			BootstrapPauseLogged = true;
-		Printf("GLES rendering paused while the host surface is unavailable.\n");
+		if (developer)
+			DPrintf("GLES rendering paused while the host surface is unavailable.\n");
 		}
 		return;
 	}
@@ -3871,13 +4466,13 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				if (Resources.sceneObjectColor >= 0)
 					glUniform4f(Resources.sceneObjectColor, Resources.skyUpperCapColor.r / 255.0f,
 						Resources.skyUpperCapColor.g / 255.0f, Resources.skyUpperCapColor.b / 255.0f, 1.0f);
-				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			}
 			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 			if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 			if (caps)
 			{
@@ -3885,13 +4480,13 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				if (Resources.sceneObjectColor >= 0)
 					glUniform4f(Resources.sceneObjectColor, Resources.skyLowerCapColor.r / 255.0f,
 						Resources.skyLowerCapColor.g / 255.0f, Resources.skyLowerCapColor.b / 255.0f, 1.0f);
-				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			}
 			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
 			if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 			return true;
 		};
@@ -3913,16 +4508,16 @@ void gl_GLES_RenderBootstrap(int width, int height)
 					Resources.skyFogColor.g / 255.0f, Resources.skyFogColor.b / 255.0f, skyfog / 255.0f);
 			glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 			if (Resources.outerSky.capEligible)
-				glDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			for (int row = 0; row < 4; ++row)
-				glDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
+				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 			if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
 		}
@@ -3936,7 +4531,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		glDisable(GL_STENCIL_TEST);
 		skyDrawn = firstLayerDrawn;
 	};
-	const bool renderScene = Resources.sceneReady && !gl_gles_test_pattern;
+	const bool renderScene = Resources.sceneReady;
 	GLuint dynamicLightTexture = 0;
 	if (!gl_dynlight_shader && gl_lights && GLRenderer != NULL && GLRenderer->gllight != NULL)
 	{
@@ -3948,8 +4543,12 @@ void gl_GLES_RenderBootstrap(int width, int height)
 	if (renderScene && renderSky && Resources.skyMaterial != NULL)
 	{
 		// The desktop sky portal is composed before opaque world geometry.
+		const auto portalSkyStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
 		drawSkyMask();
 		drawSky();
+		if (Profile.active)
+			Profile.portalSkyMilliseconds += ProfileMilliseconds(portalSkyStart);
 	}
 	if (renderScene)
 	{
@@ -3967,14 +4566,27 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			orderRecords[i].translucent = batch.translucent || IsNativeDecal(batch);
 			orderRecords[i].sortDepth = batch.sortDepth;
 		}
+		const auto orderingStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
 		const FGLESSceneDrawOrderView drawOrder = gl_GLESInternalSceneSortBatches(
 			orderRecords.data(), orderRecords.size(), GLES_SCENE_ORDER_VIEW);
+		if (Profile.active)
+			Profile.orderingMilliseconds += ProfileMilliseconds(orderingStart);
 		GLuint boundTextures[3] = { 0, 0, 0 };
 		GLuint boundSamplers[3] = { 0, 0, 0 };
 		bool textureKnown[3] = { false, false, false };
+		unsigned int activeTextureUnit = 0;
+		bool activeTextureKnown = false;
 		auto bindOpaqueTexture = [&](unsigned int unit, GLuint texture, GLuint sampler)
 		{
-			glActiveTexture(GL_TEXTURE0 + unit);
+			if (!activeTextureKnown || activeTextureUnit != unit)
+			{
+				glActiveTexture(GL_TEXTURE0 + unit);
+				activeTextureUnit = unit;
+				activeTextureKnown = true;
+				++Resources.sceneActiveTextureSets;
+			}
+			else ++Resources.sceneActiveTextureSkips;
 			if (!textureKnown[unit] || boundTextures[unit] != texture)
 			{
 				glBindTexture(GL_TEXTURE_2D, texture);
@@ -4049,9 +4661,12 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		};
 		GLuint opaqueStaticUniformProgram = 0;
 		bool opaqueStaticUniformsKnown = false;
+		const auto worldStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
 		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[drawOrder.indices[orderIndex]];
+			const FSceneViewSnapshot &view = BatchView(batch);
 			// Opaque world geometry establishes depth before portal targets and
 			// translucent/HUD batches are composited.
 			if (batch.skyMask || batch.portalMask || batch.portalId >= 0 || batch.translucent || batch.hud ||
@@ -4109,8 +4724,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 				glBindSampler(0, Resources.sceneSampler);
 				textureKnown[0] = false;
-				glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT,
-					reinterpret_cast<const void *>(batch.floodWallFirstIndex * sizeof(GLuint)));
+		ProfileDrawElements(GL_TRIANGLES, 6, NativeSceneIndexType(),
+			NativeSceneIndexOffset(batch.floodWallFirstIndex));
 				glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 				glStencilMask(0x00);
 				// The flood plane may only fill its projected gap. Bit 0 is the
@@ -4182,16 +4797,28 @@ void gl_GLES_RenderBootstrap(int width, int height)
 					glBlendEquation(GL_FUNC_ADD);
 				}
 			}
-			const GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
-				(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram));
-			const char *programName = batch.fog ? (batch.masked ? "gles/fog-masked" : "gles/fog") :
-				(batch.masked ? "gles/masked" : (batch.palette ? "gles/palette" : "gles/opaque"));
+			const bool simpleOpaque = CanUseNativeSimpleProgram(batch);
+			const GLuint program = simpleOpaque ? Resources.simpleProgram :
+				(batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
+				(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram)));
+			const char *programName = simpleOpaque ? "gles/simple-opaque" :
+				(batch.fog ? (batch.masked ? "gles/fog-masked" : "gles/fog") :
+				(batch.masked ? "gles/masked" : (batch.palette ? "gles/palette" : "gles/opaque")));
 			BindNativeProgram(program, programName);
+			if (Profile.active && simpleOpaque) ++Profile.simpleShaderDraws;
 			SetNativeGlowUniforms(program, batch);
 			const bool setStaticUniforms = !opaqueStaticUniformsKnown ||
 				opaqueStaticUniformProgram != program;
-			if (setStaticUniforms && program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
-				glUniform1i(Resources.sceneSkyDepth, 0);
+			if (setStaticUniforms)
+			{
+				if (program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
+					glUniform1i(Resources.sceneSkyDepth, 0);
+				else if (program == Resources.simpleProgram)
+				{
+					if (Resources.simpleSkyDepth >= 0) glUniform1i(Resources.simpleSkyDepth, 0);
+					if (Resources.simpleSkyFog >= 0) glUniform1i(Resources.simpleSkyFog, 0);
+				}
+			}
 			GLint viewProjection = Resources.sceneViewProjection;
 			GLint textureUniform = Resources.sceneTextureUniform;
 			GLint brightmapUniform = Resources.sceneBrightmapUniform;
@@ -4215,7 +4842,30 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			GLint dynamicLightSampler = Resources.sceneDynamicLightTexture;
 			GLint clipPlaneUniform = Resources.sceneClipPlane;
 			GLint clipPlaneEnabledUniform = Resources.sceneClipPlaneEnabled;
-			if (batch.fog)
+			if (simpleOpaque)
+			{
+				viewProjection = Resources.simpleViewProjection;
+				textureUniform = Resources.simpleTextureUniform;
+				brightmapUniform = -1;
+				useBrightmap = -1;
+				brightmapDesaturation = -1;
+				useTexture = Resources.simpleUseTexture;
+				model = Resources.simpleModel;
+				textureTransform = Resources.simpleTextureTransform;
+				cameraPosition = Resources.simpleCameraPosition;
+				objectColor = Resources.simpleObjectColor;
+				materialFlags = -1;
+				fuzzTime = -1;
+				lightPositionRadius = -1;
+				lightColor = -1;
+				lightCounts = -1;
+				lightPlaneNormal = -1;
+				projectedLights = -1;
+				dynamicLightSampler = -1;
+				clipPlaneUniform = -1;
+				clipPlaneEnabledUniform = -1;
+			}
+			else if (batch.fog)
 			{
 				if (batch.masked)
 				{
@@ -4328,17 +4978,17 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				0.0f, 0.0f, 0.0f, 1.0f
 			};
 			if (viewProjection >= 0)
-				glUniformMatrix4fv(viewProjection, 1, GL_FALSE, batch.hud ? identity : batch.viewProjection);
+				glUniformMatrix4fv(viewProjection, 1, GL_FALSE, batch.hud ? identity : view.viewProjection);
 			if (setStaticUniforms && model >= 0) glUniformMatrix4fv(model, 1, GL_FALSE, identity);
 			if (setStaticUniforms && textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 			if (cameraPosition >= 0)
-				glUniform3f(cameraPosition, batch.hud ? 0.0f : batch.cameraPosition[0],
-					batch.hud ? 0.0f : batch.cameraPosition[1], batch.hud ? 0.0f : batch.cameraPosition[2]);
+				glUniform3f(cameraPosition, batch.hud ? 0.0f : view.cameraPosition[0],
+					batch.hud ? 0.0f : view.cameraPosition[1], batch.hud ? 0.0f : view.cameraPosition[2]);
 			if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags));
 			if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
-			if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, batch.clipPlane);
-			if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, batch.clipPlaneEnabled ? 1 : 0);
+			if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, view.clipPlane);
+			if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, view.clipPlaneEnabled ? 1 : 0);
 			if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ||
 				(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f :
 				(batch.alphaCutoff > 0.0f ? batch.alphaCutoff : 0.5f));
@@ -4364,17 +5014,25 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glUniform1i(brightmapDesaturation, batch.brightmapDesaturation);
 			if (useTexture >= 0) glUniform1i(useTexture, batch.texture != 0 ? 1 : 0);
 			bindOpaqueTexture(0, batch.texture != 0 ? batch.texture : Resources.checkerTexture,
-				batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
+				NativeSamplerForBatch(batch));
 			bindOpaqueTexture(1, batch.brightmap != 0 ? batch.brightmap : Resources.checkerTexture,
-				batch.repeat ? Resources.checkerSampler : Resources.sceneSampler);
+				NativeSamplerForBatch(batch));
 			bindOpaqueTexture(2, useProjectedLights ? dynamicLightTexture : Resources.checkerTexture,
 				Resources.sceneSampler);
-			glActiveTexture(GL_TEXTURE0);
+			if (!activeTextureKnown || activeTextureUnit != 0)
+			{
+				glActiveTexture(GL_TEXTURE0);
+				activeTextureUnit = 0;
+				activeTextureKnown = true;
+				++Resources.sceneActiveTextureSets;
+			}
+			else ++Resources.sceneActiveTextureSkips;
 			SetNativeDecalDepthBias(batch, true);
-			glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_INT,
-				reinterpret_cast<const void *>(batch.firstIndex * sizeof(GLuint)));
+			ProfileDrawElements(GL_TRIANGLES, batch.indexCount, NativeSceneIndexType(),
+				NativeSceneIndexOffset(batch.firstIndex));
 			DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
-				lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex);
+				lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex,
+				batch.flood || batch.model ? GL_LEQUAL : GL_LESS, true, !batch.flood);
 			if (batch.lightCount > GLES_MAX_LIGHTS)
 				lightUniformStateKnown = false;
 			SetNativeDecalDepthBias(batch, false);
@@ -4387,8 +5045,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glEnable(GL_DEPTH_TEST);
 				glDepthFunc(GL_LEQUAL);
 				glDepthMask(GL_TRUE);
-				glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT,
-					reinterpret_cast<const void *>(batch.floodWallFirstIndex * sizeof(GLuint)));
+				ProfileDrawElements(GL_TRIANGLES, 6, NativeSceneIndexType(),
+					NativeSceneIndexOffset(batch.floodWallFirstIndex));
 				glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 				glStencilMask(0xff);
 				glStencilFunc(GL_ALWAYS, 0, 0xff);
@@ -4399,16 +5057,26 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			opaqueStaticUniformProgram = program;
 			opaqueStaticUniformsKnown = batch.lightCount <= GLES_MAX_LIGHTS;
 		}
+		if (Profile.active)
+			Profile.worldMilliseconds += ProfileMilliseconds(worldStart);
 		drawSkyMask();
 		drawSky();
+		const auto portalSkyStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
 		DrawNativePortalTargets(dynamicLightTexture);
+		if (Profile.active)
+			Profile.portalSkyMilliseconds += ProfileMilliseconds(portalSkyStart);
 		// Portal targets must be complete before the outer HUD is drawn.  Reuse
 		// the same batch path so blending and shader selection stay consistent.
 		glDisable(GL_STENCIL_TEST);
 		glStencilMask(0xff);
 		glDepthMask(GL_FALSE);
 		glBindVertexArray(Resources.sceneVertexArray);
-		bool hudViewportReady = NativeOffscreenRender;
+	bool hudViewportReady = NativeOffscreenRender;
+	FNativeTextureBindingCache overlayTextureCache = {};
+	FNativeRenderStateCache overlayStateCache = {};
+		const auto overlayStart = Profile.active ? std::chrono::steady_clock::now() :
+			std::chrono::steady_clock::time_point();
 		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[drawOrder.indices[orderIndex]];
@@ -4420,8 +5088,10 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				SetNativeFullViewport(activeTarget->renderWidth, activeTarget->renderHeight);
 				hudViewportReady = true;
 			}
-			DrawNativePortalBatch(batch, dynamicLightTexture, 0);
+			DrawNativePortalBatch(batch, dynamicLightTexture, 0, overlayTextureCache, overlayStateCache);
 		}
+		if (Profile.active)
+			Profile.overlayMilliseconds += ProfileMilliseconds(overlayStart);
 		glBindVertexArray(0);
 		glDisable(GL_BLEND);
 		glDisable(GL_CULL_FACE);
@@ -4448,10 +5118,11 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
 		glBindSampler(0, Resources.checkerSampler);
 		glBindVertexArray(Resources.vertexArray);
-		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(0));
-		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(6 * sizeof(GLushort)));
+		ProfileDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(0));
+		ProfileDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(6 * sizeof(GLushort)));
 	}
-	CheckError(renderScene ? "world scene draw" : "bootstrap draw");
+	if (gl_GLES_IsProfileEnabled())
+		CheckError(renderScene ? "world scene draw" : "bootstrap draw");
 	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
 		DPrintf("Zandronum GLES scene programs: %u binds, %u redundant binds skipped.\n",
 			Resources.sceneProgramBinds, Resources.sceneProgramBindSkips);
@@ -4468,8 +5139,12 @@ void gl_GLES_RenderBootstrap(int width, int height)
 	if (renderScene && developer && (Resources.frame == 0 || (Resources.frame % 120) == 0))
 		DPrintf("Zandronum GLES scene glow: %u uniform uploads, %u redundant uploads skipped.\n",
 			Resources.sceneGlowUniformUploads, Resources.sceneGlowUniformUploadSkips);
+	const auto resolveStart = Profile.active ? std::chrono::steady_clock::now() :
+		std::chrono::steady_clock::time_point();
 	if (!gl_GLES_ResolveRenderTarget(activeTarget))
 		I_FatalError("Zandronum GLES scene resolve failed.");
+	if (Profile.active)
+		Profile.resolveMilliseconds += ProfileMilliseconds(resolveStart);
 	if (!NativeOffscreenRender && !gl_GLESInternalWipeCaptureEndFrame(Resources.sceneTarget))
 		I_FatalError("Zandronum GLES wipe end capture failed.");
 	if (NativeOffscreenRender)
@@ -4505,20 +5180,144 @@ void gl_GLES_RenderBootstrap(int width, int height)
 void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilliseconds,
 	bool presented, int configuredLimit, int capFPS, int displayLimit, int effectiveLimit)
 {
-	if (!developer || NativeFrameStart.time_since_epoch().count() == 0 || Resources.frame == 0 ||
-		(Resources.frame != 1 && (Resources.frame % 120) != 0))
+	const bool developerSample = developer && NativeFrameStart.time_since_epoch().count() != 0 &&
+		(Resources.frame == 1 || (Resources.frame % 120) == 0);
+	const bool profileSample = ProfileSampleDue();
+	if ((!developerSample && !profileSample) || NativeFrameStart.time_since_epoch().count() == 0)
 		return;
 	const std::chrono::duration<double, std::milli> totalElapsed =
 		std::chrono::steady_clock::now() - NativeFrameStart;
 	const double totalMilliseconds = totalElapsed.count();
 	const double renderMilliseconds = MAX(0.0, totalMilliseconds - waitMilliseconds - presentMilliseconds);
-	char message[320];
-	snprintf(message, sizeof(message),
-		"cpu=%.3f ms wait=%.3f ms present=%.3f ms total=%.3f ms limit=%d cap=%d "
-		"display=%d effective=%d (%s)", renderMilliseconds, waitMilliseconds,
-		presentMilliseconds, totalMilliseconds, configuredLimit, capFPS, displayLimit,
-		effectiveLimit, presented ? "ok" : "failed");
-	gl_GLES_Report("frame timing", message);
+	if (developerSample)
+	{
+		char message[320];
+		snprintf(message, sizeof(message),
+			"cpu=%.3f ms wait=%.3f ms present=%.3f ms total=%.3f ms limit=%d cap=%d "
+			"display=%d effective=%d (%s)", renderMilliseconds, waitMilliseconds,
+			presentMilliseconds, totalMilliseconds, configuredLimit, capFPS, displayLimit,
+			effectiveLimit, presented ? "ok" : "failed");
+		gl_GLES_Report("frame timing", message);
+	}
+	if (profileSample)
+	{
+		char message[2048];
+		snprintf(message, sizeof(message),
+			"frame=%u collect=%.3f order=%.3f upload=%.3f world=%.3f portal_sky=%.3f "
+			"overlay=%.3f resolve=%.3f present=%.3f cpu=%.3f total=%.3f ms; "
+			"collect_parts=wall:%.3f flat:%.3f sprite:%.3f model:%.3f material:%.3f "
+			"lights:%.3f batches:%.3f indices:%.3f; "
+			"draws=%u tris=%u vertices=%u indices=%u submitted=%u batches=%u simple_draws=%u merges=%u "
+			"walls=%u flats=%u sprites=%u order_hash=%016llx "
+			"portal_targets=%u camera=%u/%u realloc=%u bytes=%zu/%zu index_type=%u resolves=%u readbacks=%u wipes=%u; "
+			"binds=%u/%u tex=%u/%u active_tex=%u/%u samp=%u/%u sky_upload=%u/%u "
+			"state=%u/%u bridge=%u/%u portal_state=%u/%u portal_tex=%u/%u portal_uniform=%u/%u "
+			"lights=%u/%u light_select=%u/%u overflow=%u glow=%u/%u "
+			"material=%u/%u uploads=%u; presented=%s",
+			Resources.frame, Profile.collectionMilliseconds, Profile.orderingMilliseconds,
+			Profile.uploadMilliseconds, Profile.worldMilliseconds, Profile.portalSkyMilliseconds,
+			Profile.overlayMilliseconds, Profile.resolveMilliseconds, presentMilliseconds,
+			renderMilliseconds, totalMilliseconds,
+			Profile.wallCollectionMilliseconds, Profile.flatCollectionMilliseconds,
+			Profile.spriteCollectionMilliseconds, Profile.modelCollectionMilliseconds,
+			Profile.materialResolutionMilliseconds, Profile.lightSelectionMilliseconds,
+			Profile.batchRecordMilliseconds, Profile.indexEmissionMilliseconds,
+			Profile.drawCalls, Profile.triangles,
+			static_cast<unsigned int>(Resources.sceneVertices.size()),
+			static_cast<unsigned int>(Resources.sceneIndices.size()),
+			Resources.sceneBatchSubmissions, static_cast<unsigned int>(Resources.sceneBatches.size()),
+			Profile.simpleShaderDraws, Resources.sceneOpaqueBatchMerges,
+			Resources.sceneWallCount, Resources.sceneFlatCount, Resources.sceneSpriteCount,
+			static_cast<unsigned long long>(Resources.sceneOrderHash),
+			static_cast<unsigned int>(Resources.portalTargets.size()), Profile.cameraTargetCreates,
+			Profile.cameraCopies, Profile.bufferReallocations,
+			Profile.vertexBytes, Profile.indexBytes,
+			NativeSceneIndexType() == GL_UNSIGNED_SHORT ? 16u : 32u,
+			Profile.resolveCount, Profile.readbackCount, Profile.wipeCaptureCount,
+			Resources.sceneProgramBinds, Resources.sceneProgramBindSkips,
+			Resources.sceneTextureBinds, Resources.sceneTextureBindSkips,
+			Resources.sceneActiveTextureSets, Resources.sceneActiveTextureSkips,
+			Resources.sceneSamplerBinds, Resources.sceneSamplerBindSkips,
+			Profile.portalSkyUploadBuilds, Profile.portalSkyUploadSkips,
+			Resources.sceneOpaqueStateSets, Resources.sceneOpaqueStateSkips,
+			Profile.stateCalls, Profile.stateSkips,
+			Profile.portalStateSets, Profile.portalStateSkips,
+			Profile.portalActiveTextureSets, Profile.portalActiveTextureSkips,
+			Profile.portalUniformSets, Profile.portalUniformSkips,
+			Resources.sceneLightUniformUploads, Resources.sceneLightUniformUploadSkips,
+			Profile.lightSelectionRequests, Profile.lightSelectionReuses,
+			Profile.overflowPasses,
+			Resources.sceneGlowUniformUploads, Resources.sceneGlowUniformUploadSkips,
+			Profile.materialHits, Profile.materialMisses, Profile.materialUploads,
+			presented ? "ok" : "failed");
+		gl_GLES_Report("profile", message);
+	}
+}
+
+void gl_GLES_RecordProfileDraw(bool triangleStrip, int indexCount)
+{
+	if (!Profile.active || indexCount <= 0) return;
+	++Profile.drawCalls;
+	if (triangleStrip)
+		Profile.triangles += indexCount > 2 ? static_cast<unsigned int>(indexCount - 2) : 0;
+	else
+		Profile.triangles += static_cast<unsigned int>(indexCount / 3);
+}
+
+void gl_GLES_RecordProfileOverflow()
+{
+	if (Profile.active) ++Profile.overflowPasses;
+}
+
+void gl_GLES_RecordProfileState(bool skipped)
+{
+	if (!Profile.active) return;
+	if (skipped) ++Profile.stateSkips;
+	else ++Profile.stateCalls;
+}
+
+void gl_GLES_RecordProfilePortalState(bool skipped)
+{
+	if (!Profile.active) return;
+	if (skipped) ++Profile.portalStateSkips;
+	else ++Profile.portalStateSets;
+}
+
+void gl_GLES_RecordProfilePortalSkyUpload(bool skipped)
+{
+	if (!Profile.active) return;
+	if (skipped) ++Profile.portalSkyUploadSkips;
+	else ++Profile.portalSkyUploadBuilds;
+}
+
+void gl_GLES_RecordProfileMaterial(bool hit, bool upload)
+{
+	if (!Profile.active) return;
+	if (hit) ++Profile.materialHits;
+	else ++Profile.materialMisses;
+	if (upload) ++Profile.materialUploads;
+}
+
+void gl_GLES_RecordProfileLightSelection(bool reused)
+{
+	if (!Profile.active) return;
+	++Profile.lightSelectionRequests;
+	if (reused) ++Profile.lightSelectionReuses;
+}
+
+void gl_GLES_RecordProfileResolve()
+{
+	if (Profile.active) ++Profile.resolveCount;
+}
+
+void gl_GLES_RecordProfileReadback()
+{
+	if (Profile.active) ++Profile.readbackCount;
+}
+
+void gl_GLES_RecordProfileWipeCapture()
+{
+	if (Profile.active) ++Profile.wipeCaptureCount;
 }
 
 bool gl_GLES_EndSceneToTexture(unsigned int targetTexture, int width, int height)
@@ -4530,6 +5329,7 @@ bool gl_GLES_EndSceneToTexture(unsigned int targetTexture, int width, int height
 	{
 		if (!gl_GLES_CreateRenderTarget(&Resources.cameraTarget, width, height, 1))
 			return false;
+		++PendingCameraTargetCreates;
 	}
 
 	GLint previousDrawFramebuffer = 0;
@@ -4550,24 +5350,10 @@ bool gl_GLES_EndSceneToTexture(unsigned int targetTexture, int width, int height
 	gl_GLES_RenderBootstrap(width, height);
 	NativeOffscreenRender = false;
 	NativeActiveTarget = NULL;
-	static bool cameraTargetPixelLogWritten = false;
-	if (developer && !cameraTargetPixelLogWritten)
-	{
-		GLint previousRead = 0;
-		glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, Resources.cameraTarget.resolveFramebuffer);
-		GLubyte center[4] = {};
-		glReadPixels(width / 2, height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
-		const GLenum readError = glGetError();
-		DPrintf("Zandronum GLES camera target batches=%u center=%u,%u,%u,%u read=%s.\n",
-			static_cast<unsigned int>(Resources.sceneBatches.size()), center[0], center[1], center[2], center[3],
-			readError == GL_NO_ERROR ? "ok" : "failed");
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
-		cameraTargetPixelLogWritten = true;
-	}
 
 	const bool copied = gl_GLESInternalCopyTargetToTexture(Resources.cameraTarget,
 		static_cast<GLuint>(targetTexture));
+	if (copied) ++PendingCameraCopies;
 	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
 	glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 	glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
@@ -4641,7 +5427,7 @@ const FGLESNativeCapabilities &gl_GLES_GetCapabilities()
 
 void gl_GLES_PrintStartupLog()
 {
-	if (!CapabilitiesReady) return;
+	if (!CapabilitiesReady || !gl_GLES_IsProfileEnabled()) return;
 	Printf("GL_VENDOR: %s\n", Capabilities.vendor);
 	Printf("GL_RENDERER: %s\n", Capabilities.renderer);
 	Printf("GL_VERSION: %s\n", Capabilities.version);

@@ -91,6 +91,12 @@ extern TDeletingArray<FVoxelDef *> VoxelDefs;
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 float gl_RollAgainstAngleHelper(const AActor *actor);
 
+struct FGLESModelScratch
+{
+	std::vector<float> worldPositions;
+	std::vector<float> worldNormals;
+};
+
 class FGLESModelCollector : public FModelNativeCollector
 {
 	GLSprite *Sprite;
@@ -115,9 +121,12 @@ public:
 		const unsigned int brightmap = gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			material->BindNativeBrightmap(false) : 0;
 		if (texture == 0) return;
-		std::vector<float> worldPositions(vertexCount * 3);
-		std::vector<float> worldNormals;
+		static FGLESModelScratch scratch;
+		std::vector<float> &worldPositions = scratch.worldPositions;
+		std::vector<float> &worldNormals = scratch.worldNormals;
+		worldPositions.resize(vertexCount * 3);
 		if (normals != NULL) worldNormals.resize(vertexCount * 3);
+		else worldNormals.clear();
 		for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
 		{
 			float modelPosition[3] =
@@ -361,7 +370,6 @@ class DeletingModelArray : public TArray<FModel *>
 {
 public:
 
-#if 1
 	~DeletingModelArray()
 	{
 		for(unsigned i=0;i<Size();i++)
@@ -370,7 +378,6 @@ public:
 		}
 
 	}
-#endif
 };
 
 DeletingModelArray Models;
@@ -1176,21 +1183,6 @@ void gl_RenderModel(GLSprite * spr, int cm)
 	glRotatef(-smf->rolloffset, 1, 0, 0);
 		
 	if (gl.shadermodel >= 4) glActiveTexture(GL_TEXTURE0);
-
-#if 0
-	if (gl_light_models)
-	{
-		// The normal transform matrix only contains the inverse rotations and scalings but not the translations
-		NormalTransform.MakeIdentity();
-
-		NormalTransform.Scale(1.f/scaleFactorX, 1.f/scaleFactorZ, 1.f/scaleFactorY);
-		if( smf->flags & MDL_ROTATING ) NormalTransform.Rotate(smf->xrotate, smf->yrotate, smf->zrotate, -rotateOffset);
-		if (pitch != 0) NormalTransform.Rotate(0,0,1,-pitch);
-		if (angle != 0) NormalTransform.Rotate(0,1,0, angle);
-
-		gl_RenderFrameModels( smf, spr->actor->state, spr->actor->tics, RUNTIME_TYPE(spr->actor), cm, &ModelToWorld, &NormalTransform, translation );
-	}
-#endif
 
 	gl_RenderFrameModels( smf, spr->actor->state, spr->actor->tics, RUNTIME_TYPE(spr->actor), cm, NULL, translation );
 
