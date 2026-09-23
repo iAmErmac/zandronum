@@ -83,7 +83,7 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 	fixed_t			scalex;
 	fixed_t			texturemid;// 4:3		16:9		16:10			17:10			5:4
 	static fixed_t xratio[] = {FRACUNIT, FRACUNIT*3/4, FRACUNIT*5/6, FRACUNIT*40/51,
-		FRACUNIT, FRACUNIT*4/7};
+		FRACUNIT, FRACUNIT*40/51, FRACUNIT*4/7};
 	
 	// [BB] In the HUD model step we just render the model and break out.
 #if !defined(__ANDROID__)
@@ -440,6 +440,7 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 	
 	for (i=0, psp=player->psprites; i<=ps_flash; i++,psp++)
 	{
+		const TVector2<fixed_t> interpolatedPos = psp->HandleInterpolation(ofsx, ofsy);
 		if (psp->state) 
 		{
 			FColormap cmc = cm;
@@ -474,7 +475,7 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 				((vis.RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
 				((vis.RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0);
 			#endif
-			DrawPSprite (player,psp,psp->sx+ofsx, psp->sy+ofsy, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags,
+			DrawPSprite (player,psp,interpolatedPos.X, interpolatedPos.Y, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags,
 				vis.RenderStyle.AsDWORD);
 		}
 	}

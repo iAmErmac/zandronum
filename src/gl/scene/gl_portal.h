@@ -237,6 +237,9 @@ protected:
 	virtual bool IsSky() { return true; }
 	virtual bool NeedDepthBuffer() { return false; }
 	virtual const char *GetName();
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	virtual bool SupportsNativeCapture() const { return true; }
+	#endif
 
 public:
 

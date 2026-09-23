@@ -90,6 +90,11 @@ struct pspdef_t
 	int			sprite;
 	int			frame;
 	bool		processPending; // true: waiting for periodic processing on this tick
+	int			oldTick;
+	fixed_t		oldSX, oldSY;
+	fixed_t		nowSX, nowSY;
+
+	TVector2<fixed_t> HandleInterpolation (fixed_t bobSX, fixed_t bobSY);
 };
 
 class FArchive;

@@ -1700,7 +1700,8 @@ CUSTOM_CVAR (Int, vid_aspect, 0, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
 // 2: 16:10
 // 3: 17:10
 // 4: 5:4
-// 5: 21:9
+// 5: 17:10 (redundant, never returned)
+// 6: 21:9
 int ActiveFakeRatio(int width, int height)
 {
 	int fakeratio = -1;
@@ -1715,10 +1716,6 @@ int ActiveFakeRatio(int width, int height)
 		else if (fakeratio == 5)
 		{
 			fakeratio = 3;
-		}
-		else if (fakeratio == 6)
-		{
-			fakeratio = 5;
 		}
 	}
 	if (vid_nowidescreen)
@@ -1741,7 +1738,7 @@ int CheckRatio (int width, int height, int *trueratio)
 
 	static std::pair<float, int> ratioTypes[] =
 	{
-		{ 21 / 9.0f, 5 },
+		{ 21 / 9.0f, 6 },
 		{ 16 / 9.0f, 1 },
 		{ 17 / 10.0f, 3 },
 		{ 16 / 10.0f, 2 },
@@ -1780,13 +1777,14 @@ int CheckRatio (int width, int height, int *trueratio)
 //     base_width = 240 * x / y
 //     multiplier = 320 / base_width
 //     base_height = 200 * multiplier
-const int BaseRatioSizes[6][4] =
+const int BaseRatioSizes[7][4] =
 {
 	{  960, 600, 0,                   48 },			//  4:3   320,      200,      multiplied by three
 	{ 1280, 450, 0,                   48*3/4 },		// 16:9   426.6667, 150,      multiplied by three
 	{ 1152, 500, 0,                   48*5/6 },		// 16:10  386,      166.6667, multiplied by three
 	{ 1224, 471, 0,                   48*40/51 },	// 17:10  408,		156.8627, multiplied by three
 	{  960, 640, (int)(6.5*FRACUNIT), 48*15/16 },	//  5:4   320,      213.3333, multiplied by three
+	{ 1224, 471, 0,                   48*40/51 },	// 17:10  408,      156.8627, multiplied by three (redundant)
 	{ 1707, 338, 0,                   48*9/16 }		// 21:9   568.8889, 337.5,    multiplied by three
 };
 

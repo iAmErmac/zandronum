@@ -1206,9 +1206,9 @@ void FGLRenderer::RenderView (player_t* player)
 		mLightCount = ((it.Next()) != NULL);
 		#define RMUL (1.6f/1.333333f)
 		static float ratios[] = { RMUL*1.333333f, RMUL*1.777777f, RMUL*1.6f,
-			RMUL*1.7f, RMUL*1.25f, RMUL*2.333333f };
+			RMUL*1.7f, RMUL*1.25f, RMUL*1.7f, RMUL*2.333333f };
 		const float ratio = ratios[WidescreenRatio];
-		const float fovratio = (WidescreenRatio & 4) ? ratio : 1.6f;
+		const float fovratio = Is54Aspect(WidescreenRatio) ? ratio : 1.6f;
 		const float fov = FieldOfView * 360.0f / FINEANGLES;
 		sector_t *viewsector = RenderViewpoint(player->camera, NULL, fov, ratio, fovratio, true, true);
 		#undef RMUL
@@ -1288,12 +1288,12 @@ void FGLRenderer::RenderView (player_t* player)
 	// I stopped using BaseRatioSizes here because the information there wasn't well presented.
 	#define RMUL (1.6f/1.333333f)
 	//							4:3				16:9		16:10		17:10		5:4
-	static float ratios[]={RMUL*1.333333f, RMUL*1.777777f, RMUL*1.6f, RMUL*1.7f, RMUL*1.25f, RMUL*2.333333f};
+	static float ratios[]={RMUL*1.333333f, RMUL*1.777777f, RMUL*1.6f, RMUL*1.7f, RMUL*1.25f, RMUL*1.7f, RMUL*2.333333f};
 
 	// now render the main view
 	float fovratio;
 	float ratio = ratios[WidescreenRatio];
-	if (!(WidescreenRatio&4))
+	if (!Is54Aspect(WidescreenRatio))
 	{
 		fovratio = 1.6f;
 	}
