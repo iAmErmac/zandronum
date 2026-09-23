@@ -2039,16 +2039,16 @@ class CommandAspectRatio : public SBarInfoCommandFlowControl
 			ASPECTRATIO_16_10 = 2,
 			ASPECTRATIO_17_10 = 3,
 			ASPECTRATIO_5_4 = 4,
-			ASPECTRATIO_21_9 = 5
+			ASPECTRATIO_21_9 = 6
 		};
 		// Since the number of aspect ratios may change at any time, we should
 		// track what aspect ratios the statusbar supports and use the widest
 		// or tallest available ratio.
-		static Ratio	ratioMap[6];
+		static Ratio	ratioMap[7];
 
 		Ratio			ratio;
 };
-CommandAspectRatio::Ratio CommandAspectRatio::ratioMap[6] = {ASPECTRATIO_4_3,ASPECTRATIO_16_9,ASPECTRATIO_16_10,ASPECTRATIO_16_10,ASPECTRATIO_5_4,ASPECTRATIO_16_9};
+CommandAspectRatio::Ratio CommandAspectRatio::ratioMap[7] = {ASPECTRATIO_4_3,ASPECTRATIO_16_9,ASPECTRATIO_16_10,ASPECTRATIO_16_10,ASPECTRATIO_5_4,ASPECTRATIO_16_9,ASPECTRATIO_16_9};
 
 ////////////////////////////////////////////////////////////////////////////////
 

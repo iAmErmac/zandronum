@@ -596,8 +596,9 @@ void GLPortal::EndFrame()
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 bool GLPortal::RenderNative()
 {
-	if (!gl_GLES_IsActive() || !SupportsNativeCapture() || lines.Size() == 0)
+	if (!gl_GLES_IsActive() || lines.Size() == 0)
 		return false;
+	const bool nativeCapture = SupportsNativeCapture();
 	const fixed_t savedViewX = viewx;
 	const fixed_t savedViewY = viewy;
 	const fixed_t savedViewZ = viewz;
@@ -618,6 +619,19 @@ bool GLPortal::RenderNative()
 			line.glseg.x2, line.zbottom[1], line.glseg.y2
 		};
 		gl_GLES_AddPortalMask(portalId, positions);
+	}
+	if (!nativeCapture)
+	{
+		// Preserve the aperture with a deterministic black fallback when a new
+		// portal type has no native content collector yet.
+		if (!gl_GLES_ClearPortalCapture())
+		{
+			gl_GLES_Report("portal", "unsupported native portal fallback could not clear its aperture");
+			gl_GLES_EndPortalCapture(portalId);
+			return false;
+		}
+		gl_GLES_EndPortalCapture(portalId);
+		return true;
 	}
 	// Keep recursive visibility data separate from the enclosing scene.
 	// The active owner is needed by BSP and actor clipping while the target is collected.
