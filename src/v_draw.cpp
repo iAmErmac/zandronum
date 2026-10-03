@@ -776,6 +776,7 @@ void DCanvas::VirtualToRealCoords(double &x, double &y, double &w, double &h,
 	double vwidth, double vheight, bool vbottom, bool handleaspect) const
 {
 	int myratio = handleaspect ? CheckRatio (Width, Height) : 0;
+	if (myratio == 6) myratio = 2;
 	double right = x + w;
 	double bottom = y + h;
 
@@ -843,6 +844,7 @@ void DCanvas::VirtualToRealCoordsInt(int &x, int &y, int &w, int &h,
 void DCanvas::FillBorder (FTexture *img)
 {
 	int myratio = CheckRatio (Width, Height);
+	if (myratio == 6) myratio = 2;
 	if (myratio == 0)
 	{ // This is a 4:3 display, so no border to show
 		return;

@@ -11,10 +11,12 @@
 #include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_gles_shader.h"
 #include "basictypes.h"
+#include "templates.h"
 #include "f_wipe.h"
 #include "m_png.h"
 
 #include <vector>
+#include <math.h>
 
 namespace
 {
@@ -32,9 +34,12 @@ namespace
 		GLint wipeProgress;
 		GLint wipeType;
 		GLint wipeActive;
-		GLint gamma;
-		GLint brightness;
-		GLint contrast;
+		GLint correctionSampler;
+		GLint deferColorCorrection;
+		GLuint correctionTexture;
+		float gamma;
+		float brightness;
+		float contrast;
 		GLint fillColor;
 	};
 
@@ -59,11 +64,11 @@ namespace
 		"uniform float u_wipe_progress;\n"
 		"uniform int u_wipe_type;\n"
 		"uniform bool u_wipe_active;\n"
-		"uniform float u_gamma;\n"
-		"uniform float u_brightness;\n"
-		"uniform float u_contrast;\n"
-		"vec4 wipe_color() { vec4 wipeCurrent; vec4 wipeStart; vec4 wipeEnd; float wipeProgress; float wipeColumn; vec4 wipePacked; float wipeFall; float wipeFallUv; float wipeBurn; wipeCurrent = texture(u_texture, v_uv); wipeStart = texture(u_wipe_start, v_uv); wipeEnd = texture(u_wipe_end, v_uv); wipeProgress = clamp(u_wipe_progress, 0.0, 1.0); if (!u_wipe_active) return wipeCurrent; if (u_wipe_type == 1) { wipeColumn = floor(clamp(v_uv.x, 0.0, 0.999999) * 320.0); wipePacked = texture(u_wipe_mask, vec2((wipeColumn + 0.5) / 320.0, 0.5)); wipeFall = (floor(wipePacked.r * 255.0 + 0.5) + floor(wipePacked.g * 255.0 + 0.5) * 256.0) / 65535.0 * 200.0; wipeFallUv = wipeFall / 200.0; if (v_uv.y <= 1.0 - wipeFallUv) return texture(u_wipe_start, vec2(v_uv.x, clamp(v_uv.y + wipeFallUv, 0.0, 1.0))); return wipeEnd; } if (u_wipe_type == 2) { wipeBurn = texture(u_wipe_mask, v_uv).r; return mix(wipeStart, wipeEnd, wipeBurn); } return mix(wipeStart, wipeEnd, wipeProgress); }\n"
-		"void main() { vec4 color = wipe_color(); color.rgb = max((color.rgb - 0.5) * u_contrast + 0.5 + u_brightness * 0.5, vec3(0.0)); color.rgb = pow(color.rgb, vec3(1.0 / max(u_gamma, 0.1))); frag_color = vec4(color.rgb, 1.0); }\n";
+		"uniform sampler2D u_correction;\n"
+		"uniform bool u_defer_correction;\n"
+		"vec4 wipe_color() { vec4 wipeCurrent; vec4 wipeStart; vec4 wipeEnd; float wipeProgress; float wipeColumn; highp ivec2 wipeSize; highp int wipePixel; vec4 wipePacked; float wipeFall; float wipeFallUv; float wipeBurn; wipeCurrent = texture(u_texture, v_uv); wipeStart = texture(u_wipe_start, v_uv); wipeEnd = texture(u_wipe_end, v_uv); wipeProgress = clamp(u_wipe_progress, 0.0, 1.0); if (!u_wipe_active) return wipeCurrent; if (u_wipe_type == 1) { wipeSize = textureSize(u_wipe_start, 0); wipePixel = int(floor(clamp(v_uv.x, 0.0, 0.999999) * float(wipeSize.x))); wipeColumn = float(((wipePixel + 1) * 320 + wipeSize.x - 1) / wipeSize.x - 1); wipePacked = texture(u_wipe_mask, vec2((wipeColumn + 0.5) / 320.0, 0.5)); wipeFall = (floor(wipePacked.r * 255.0 + 0.5) + floor(wipePacked.g * 255.0 + 0.5) * 256.0) / 65535.0; wipeFallUv = floor(wipeFall * float(wipeSize.y) + 0.5) / float(wipeSize.y); if (v_uv.y <= 1.0 - wipeFallUv) return texture(u_wipe_start, vec2(v_uv.x, clamp(v_uv.y + wipeFallUv, 0.0, 1.0))); return wipeEnd; } if (u_wipe_type == 2) { wipeBurn = texture(u_wipe_mask, v_uv).r; return mix(wipeStart, wipeEnd, wipeBurn); } return mix(wipeStart, wipeEnd, wipeProgress); }\n"
+		"float correct_color(float value) { return texture(u_correction, vec2((clamp(value, 0.0, 1.0) * 255.0 + 0.5) / 256.0, 0.5)).r; }\n"
+		"void main() { vec4 color = wipe_color(); if (u_defer_correction) { frag_color = vec4(color.rgb, 1.0); return; } frag_color = vec4(correct_color(color.r), correct_color(color.g), correct_color(color.b), 1.0); }\n";
 
 	static const char *FillVertexSource =
 		"#version 320 es\n"
@@ -87,10 +92,51 @@ namespace
 		Presenter.wipeProgress = -1;
 		Presenter.wipeType = -1;
 		Presenter.wipeActive = -1;
-		Presenter.gamma = -1;
-		Presenter.brightness = -1;
-		Presenter.contrast = -1;
+		Presenter.correctionSampler = -1;
+		Presenter.deferColorCorrection = -1;
 		Presenter.fillColor = -1;
+	}
+
+	static bool UpdateColorCorrection(const FGLESPresentConfig &config)
+	{
+		const float gamma = clamp<float>(config.gamma, 0.1f, 4.f);
+		const float brightness = clamp<float>(config.brightness, -0.8f, 0.8f);
+		const float contrast = clamp<float>(config.contrast, 0.1f, 3.f);
+		if (Presenter.correctionTexture != 0 && Presenter.gamma == gamma &&
+			Presenter.brightness == brightness && Presenter.contrast == contrast)
+			return true;
+		unsigned char pixels[256 * 4];
+		const double invgamma = 1 / gamma;
+		const double norm = pow(255., invgamma - 1);
+		for (int i = 0; i < 256; ++i)
+		{
+			double value = i * contrast - (contrast - 1) * 127;
+			if (gamma != 1) value = pow(value, invgamma) / norm;
+			value += brightness * 128;
+			const unsigned char corrected = value >= 0 ? static_cast<unsigned char>(clamp<double>(value, 0, 255) + 0.5) : 0;
+			pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = corrected;
+			pixels[i * 4 + 3] = 255;
+		}
+		const bool allocate = Presenter.correctionTexture == 0;
+		if (allocate) glGenTextures(1, &Presenter.correctionTexture);
+		glActiveTexture(GL_TEXTURE0 + 4);
+		glBindTexture(GL_TEXTURE_2D, Presenter.correctionTexture);
+		if (allocate)
+		{
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+		}
+		else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glActiveTexture(GL_TEXTURE0);
+		if (gl_GLES_CheckErrors("color correction upload") != GL_NO_ERROR) return false;
+		Presenter.gamma = gamma;
+		Presenter.brightness = brightness;
+		Presenter.contrast = contrast;
+		return true;
 	}
 }
 
@@ -114,9 +160,8 @@ bool gl_GLESInternalPresentInitialize()
 	Presenter.wipeProgress = glGetUniformLocation(Presenter.program, "u_wipe_progress");
 	Presenter.wipeType = glGetUniformLocation(Presenter.program, "u_wipe_type");
 	Presenter.wipeActive = glGetUniformLocation(Presenter.program, "u_wipe_active");
-	Presenter.gamma = glGetUniformLocation(Presenter.program, "u_gamma");
-	Presenter.brightness = glGetUniformLocation(Presenter.program, "u_brightness");
-	Presenter.contrast = glGetUniformLocation(Presenter.program, "u_contrast");
+	Presenter.correctionSampler = glGetUniformLocation(Presenter.program, "u_correction");
+	Presenter.deferColorCorrection = glGetUniformLocation(Presenter.program, "u_defer_correction");
 	Presenter.fillProgram = gl_GLES_LinkProgram(FillVertexSource, FillFragmentSource,
 		"portal termination fill", log, sizeof(log));
 	if (Presenter.fillProgram == 0)
@@ -137,6 +182,8 @@ bool gl_GLESInternalPresentInitialize()
 
 void gl_GLESInternalPresentDestroy()
 {
+	if (Presenter.correctionTexture != 0) glDeleteTextures(1, &Presenter.correctionTexture);
+	Presenter.correctionTexture = 0;
 	if (Presenter.vertexArray != 0) glDeleteVertexArrays(1, &Presenter.vertexArray);
 	if (Presenter.program != 0) glDeleteProgram(Presenter.program);
 	if (Presenter.fillProgram != 0) glDeleteProgram(Presenter.fillProgram);
@@ -148,6 +195,7 @@ void gl_GLESInternalPresentDestroy()
 
 void gl_GLESInternalPresentContextLost()
 {
+	Presenter.correctionTexture = 0;
 	Presenter.vertexArray = 0;
 	Presenter.program = 0;
 	Presenter.fillProgram = 0;
@@ -163,10 +211,12 @@ bool gl_GLESInternalPresent(const FGLESPresentConfig &config)
 {
 	if (Presenter.program == 0 || Presenter.vertexArray == 0 ||
 		config.target.colorAttachment == 0 || config.target.renderWidth <= 0 ||
-		config.target.renderHeight <= 0 || !config.presentationTarget.hostOwnsPresentation ||
+		config.target.renderHeight <= 0 ||
+		(!config.presentationTarget.hostOwnsPresentation && config.presentationTarget.framebuffer == 0) ||
 		config.presentationTarget.renderWidth <= 0 || config.presentationTarget.renderHeight <= 0)
 		return false;
 
+	if (!config.deferColorCorrection && !UpdateColorCorrection(config)) return false;
 	gl_GLESInternalResetState(config.stateWidth, config.stateHeight);
 	glBindFramebuffer(GL_FRAMEBUFFER, config.presentationTarget.framebuffer);
 	glViewport(0, 0, config.presentationTarget.renderWidth, config.presentationTarget.renderHeight);
@@ -189,9 +239,11 @@ bool gl_GLESInternalPresent(const FGLESPresentConfig &config)
 		glUniform1f(Presenter.wipeProgress, wipe.progress);
 	if (Presenter.wipeType >= 0) glUniform1i(Presenter.wipeType, wipe.type);
 	if (Presenter.wipeActive >= 0) glUniform1i(Presenter.wipeActive, wipeReady ? 1 : 0);
-	if (Presenter.gamma >= 0) glUniform1f(Presenter.gamma, config.gamma);
-	if (Presenter.brightness >= 0) glUniform1f(Presenter.brightness, config.brightness);
-	if (Presenter.contrast >= 0) glUniform1f(Presenter.contrast, config.contrast);
+	if (Presenter.correctionSampler >= 0) glUniform1i(Presenter.correctionSampler, 4);
+	if (Presenter.deferColorCorrection >= 0) glUniform1i(Presenter.deferColorCorrection, config.deferColorCorrection ? 1 : 0);
+	glActiveTexture(GL_TEXTURE0 + 4);
+	glBindTexture(GL_TEXTURE_2D, Presenter.correctionTexture);
+	glBindSampler(4, 0);
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, config.target.colorAttachment);
 	glBindSampler(0, config.sceneSampler);
@@ -208,6 +260,9 @@ bool gl_GLESInternalPresent(const FGLESPresentConfig &config)
 	glBindVertexArray(Presenter.vertexArray);
 gl_GLES_GetProcTable().DrawArrays(GL_TRIANGLES, 0, 3);
 	glBindVertexArray(0);
+	glActiveTexture(GL_TEXTURE0 + 4);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glBindSampler(4, 0);
 	glActiveTexture(GL_TEXTURE1);
 	glBindSampler(1, 0);
 	glActiveTexture(GL_TEXTURE2);
@@ -380,10 +435,11 @@ bool gl_GLESInternalCopyTargetToTexture(const FGLESTargetDescriptor &target, GLu
 }
 
 bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned char *rgba,
-	int width, int height)
+	int width, int height, int sourceBottom, int sourceHeight)
 {
 	if (rgba == nullptr || width <= 0 || height <= 0 ||
-		target.renderWidth <= 0 || target.renderHeight <= 0)
+		target.renderWidth <= 0 || sourceBottom < 0 || sourceHeight <= 0 ||
+		sourceBottom > target.renderHeight || sourceHeight > target.renderHeight - sourceBottom)
 		return false;
 	const GLuint readFramebuffer = target.resolveFramebuffer != 0 ?
 		target.resolveFramebuffer : target.framebuffer;
@@ -391,7 +447,6 @@ bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned cha
 		return false;
 
 	const int sourceWidth = target.renderWidth;
-	const int sourceHeight = target.renderHeight;
 	std::vector<unsigned char> source(static_cast<size_t>(sourceWidth) * sourceHeight * 4);
 	GLint previousDrawFramebuffer = 0;
 	GLint previousReadFramebuffer = 0;
@@ -402,7 +457,7 @@ bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned cha
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	gl_GLES_RecordProfileReadback();
-	glReadPixels(0, 0, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
+	glReadPixels(0, sourceBottom, sourceWidth, sourceHeight, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
 	const GLenum readbackError = gl_GLES_CheckErrors("screenshot readback");
 	glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));

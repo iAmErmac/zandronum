@@ -135,7 +135,7 @@ OpenGLFrameBuffer::OpenGLFrameBuffer(void *hMonitor, int width, int height, int 
 		gl_GenerateGlobalBrightmapFromColormap();
 		needsetgamma = true;
 		swapped = false;
-		Accel2D = false;
+		Accel2D = true;
 		SetVSync(vid_vsync);
 		return;
 	}
@@ -285,8 +285,6 @@ void OpenGLFrameBuffer::Update()
 		nativeUpdateInProgress = true;
 		// Status-bar and message drawing appends to the native batch after the view.
 		DrawRateStuff();
-		if (GetTrueHeight() != GetHeight() && GLRenderer != NULL)
-			GLRenderer->ClearBorders();
 		gl_GLES_EndScene();
 		Swap();
 		swapped = false;
@@ -546,10 +544,10 @@ FNativePalette *OpenGLFrameBuffer::CreatePalette(FRemapTable *remap)
 bool OpenGLFrameBuffer::Begin2D(bool)
 {
 #if defined(__ANDROID__)
-	return false;
+	return true;
 #else
 #if defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive()) return false;
+	if (gl_GLES_IsActive()) return true;
 #endif
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
@@ -626,13 +624,6 @@ void OpenGLFrameBuffer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 //==========================================================================
 void OpenGLFrameBuffer::Dim(PalEntry color)
 {
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive())
-	{
-		DCanvas::Dim(color);
-		return;
-	}
-	#endif
 	// Unlike in the software renderer the color is being ignored here because
 	// view blending only affects the actual view with the GL renderer.
 	Super::Dim(0);
@@ -705,7 +696,7 @@ void OpenGLFrameBuffer::GetScreenshotBuffer(const BYTE *&buffer, int &pitch, ESS
 	if (gl_GLES_IsActive())
 	{
 		BYTE *rgba = new BYTE[w * h * 4];
-		if (!gl_GLES_ReadScreenshot(rgba, w, h))
+		if (!gl_GLES_ReadScreenshot(rgba, w, h, GetTrueHeight()))
 		{
 			delete [] rgba;
 			delete [] ScreenshotBuffer;

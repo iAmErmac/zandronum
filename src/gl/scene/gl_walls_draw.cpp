@@ -278,7 +278,8 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			tcs[2].u, tcs[2].v, tcs[3].u, tcs[3].v
 		};
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
-		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() &&
+			gl_fixedcolormap == CM_DEFAULT && !(flags & GLWF_FOGGY) ?
 			gltexture->BindNativeBrightmap(true) : 0;
 		EGLESBlendMode blendMode =
 			(color2 == NULL && alpha < 0.999f) ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;

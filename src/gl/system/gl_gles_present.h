@@ -16,6 +16,7 @@ struct FGLESPresentConfig
 	float gamma;
 	float brightness;
 	float contrast;
+	bool deferColorCorrection;
 };
 
 struct FGLESViewArea
@@ -49,7 +50,7 @@ void gl_GLESInternalPublishFrameContract(uint64_t frameNumber, double timeSecond
 	const FGLESTargetDescriptor &target, const FGLESViewDescriptor &view, bool viewValid);
 bool gl_GLESInternalCopyTargetToTexture(const FGLESTargetDescriptor &target, GLuint texture);
 bool gl_GLESInternalReadTarget(const FGLESTargetDescriptor &target, unsigned char *rgba,
-	int width, int height);
+	int width, int height, int sourceBottom, int sourceHeight);
 bool gl_GLESInternalWriteSavePic(FILE *file, const FGLESTargetDescriptor &target,
 	int width, int height);
 

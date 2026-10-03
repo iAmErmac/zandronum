@@ -184,7 +184,7 @@ void GLWall::PutWall(bool translucent)
 			}
 		}
 		else if (type != RENDERWALL_SKYBOX && type != RENDERWALL_MIRROR &&
-			type != RENDERWALL_SECTORSTACK && type != RENDERWALL_PLANEMIRROR)
+			type != RENDERWALL_SECTORSTACK && type != RENDERWALL_PLANEMIRROR && type != RENDERWALL_HORIZON)
 		{
 			// Unsupported portal types keep their source surface until a native
 			// target path is available for that specific portal.

@@ -238,12 +238,11 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 	bool use_mipmapping = TexFilter[gl_texture_filter].mipmapping;
 
 #if defined(__ANDROID__)
-	// Native GLES uses one sized RGBA format until compressed asset uploads are audited.
-	texformat = GL_RGBA8;
+	texformat = gl_GLES_GetTextureFormat(alphatexture || forcenocompression || buffer == NULL);
 #elif defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		texformat = GL_RGBA8;
+		texformat = gl_GLES_GetTextureFormat(alphatexture || forcenocompression || buffer == NULL);
 	}
 	else
 	{
@@ -317,14 +316,7 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
             buffer=(unsigned char *)scaledbuffer;
 		}
 	}
-#if defined(__ANDROID__)
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
-#elif defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive())
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
-	else
-		glTexImage2D(GL_TEXTURE_2D, 0, texformat, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
-#elif defined(__MOBILE__)
+#if defined(__MOBILE__) && !defined(__ANDROID__) && !defined(ZANDRONUM_GLES_BACKEND)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 #else
 	glTexImage2D(GL_TEXTURE_2D, 0, texformat, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);

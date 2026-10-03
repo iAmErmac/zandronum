@@ -235,22 +235,38 @@ void GLSprite::Draw(int pass)
 		const unsigned int brightmap = allowBrightmap && Colormap.colormap < CM_FIRSTSPECIALCOLORMAP &&
 			gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			gltexture->BindNativeBrightmap(false) : 0;
-		const float positions[12] =
+		float positions[12] =
 		{
 			x1, z1, y1,
 			x2, z1, y2,
 			x2, z2, y2,
 			x1, z2, y1
 		};
-		// Convert Zandronum's padded sprite range to the exact native upload dimensions.
-		float nativeU1 = 0.0f, nativeV1 = 0.0f, nativeU2 = 1.0f, nativeV2 = 1.0f;
+		const bool drawWithXYBillboard = (particle && gl_billboard_particles) ||
+			(!(actor && actor->renderflags & RF_FORCEYBILLBOARD) &&
+			 (gl_billboard_mode == 1 || (actor && actor->renderflags & RF_FORCEXYBILLBOARD)));
+		if (drawWithXYBillboard)
+		{
+			const float xcenter = (x1 + x2) * 0.5f;
+			const float ycenter = (y1 + y2) * 0.5f;
+			const float zcenter = (z1 + z2) * 0.5f;
+			const float angleRad = DEG2RAD(270.0f - float(GLRenderer->mAngles.Yaw));
+			Matrix3x4 rotation;
+			rotation.MakeIdentity();
+			rotation.Translate(xcenter, zcenter, ycenter);
+			rotation.Rotate(-sin(angleRad), 0, cos(angleRad), -GLRenderer->mAngles.Pitch);
+			rotation.Translate(-xcenter, -zcenter, -ycenter);
+			for (int i = 0; i < 4; ++i)
+				rotation.MultiplyVector(&positions[i * 3], &positions[i * 3]);
+		}
+		float nativeLeft = ul, nativeRight = ur, nativeTop = vt, nativeBottom = vb;
 		if (gltexture != NULL)
-			gltexture->GetNativeSpriteCoords(&nativeU1, &nativeV1, &nativeU2, &nativeV2);
-		const bool mirrored = ul < ur;
-		const float nativeLeft = mirrored ? nativeU1 : nativeU2;
-		const float nativeRight = mirrored ? nativeU2 : nativeU1;
-		const float texcoords[8] = { nativeLeft, nativeV1, nativeRight, nativeV1,
-			nativeRight, nativeV2, nativeLeft, nativeV2 };
+		{
+			gltexture->RemapNativeTexCoords(&nativeLeft, &nativeTop);
+			gltexture->RemapNativeTexCoords(&nativeRight, &nativeBottom);
+		}
+		const float texcoords[8] = { nativeLeft, nativeTop, nativeRight, nativeTop,
+			nativeRight, nativeBottom, nativeLeft, nativeBottom };
 		int textureMode = 0;
 		int sourceBlend = GL_SRC_ALPHA;
 		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;

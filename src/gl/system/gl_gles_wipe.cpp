@@ -36,14 +36,15 @@ namespace
 		bool endReady;
 		bool endCapturePending;
 		bool active;
+		bool finished;
 		int type;
 		int maskWidth;
 		int maskHeight;
+		int renderHeight;
 		unsigned int lastTime;
-		double animationTicks;
-		double burnTickRemainder;
+		unsigned int animationMilliseconds;
 		int simulatedTicks;
-		double meltY[MeltWidth];
+		int meltY[MeltWidth];
 		BYTE burnArray[BurnWidth * (BurnHeight + 5)];
 		int burnDensity;
 		int burnTime;
@@ -141,9 +142,15 @@ namespace
 		Wipe.maskPixels.resize(static_cast<size_t>(Wipe.maskWidth) * Wipe.maskHeight * 4);
 		for (int x = 0; x < FGLESWipe::MeltWidth; ++x)
 		{
-			const double y = std::max(0.0, std::min(static_cast<double>(FGLESWipe::MeltHeight), Wipe.meltY[x]));
+			const int current = Wipe.meltY[x];
+			const int next = current < 0 ? current + 1 :
+				std::min(current + (current < 16 ? current + 1 : 8), static_cast<int>(FGLESWipe::MeltHeight));
+			const double fraction = (Wipe.animationMilliseconds % 25) / 25.0;
+			const int currentPixels = std::max(0, current * Wipe.renderHeight / FGLESWipe::MeltHeight);
+			const int nextPixels = std::max(0, next * Wipe.renderHeight / FGLESWipe::MeltHeight);
+			const double y = currentPixels + (nextPixels - currentPixels) * fraction;
 			const unsigned int encoded = static_cast<unsigned int>(
-				std::floor(y * 65535.0 / FGLESWipe::MeltHeight + 0.5));
+				std::floor(y * 65535.0 / Wipe.renderHeight + 0.5));
 			const size_t offset = static_cast<size_t>(x) * 4;
 			Wipe.maskPixels[offset + 0] = static_cast<BYTE>(encoded & 0xff);
 			Wipe.maskPixels[offset + 1] = static_cast<BYTE>(encoded >> 8);
@@ -170,12 +177,13 @@ namespace
 		}
 	}
 
-	void Initialize(int type)
+	void Initialize(int type, int renderHeight)
 	{
 		Wipe.type = type;
+		Wipe.renderHeight = renderHeight;
 		Wipe.lastTime = I_MSTime();
-		Wipe.animationTicks = 0.0;
-		Wipe.burnTickRemainder = 0.0;
+		Wipe.animationMilliseconds = 0;
+		Wipe.finished = false;
 		Wipe.simulatedTicks = 0;
 		Wipe.maskWidth = 0;
 		Wipe.maskHeight = 0;
@@ -185,8 +193,8 @@ namespace
 			Wipe.meltY[0] = -(M_Random() & 15);
 			for (int i = 1; i < FGLESWipe::MeltWidth; ++i)
 			{
-				const double offset = (M_Random() % 3) - 1.0;
-				Wipe.meltY[i] = std::max(-15.0, std::min(0.0, Wipe.meltY[i - 1] + offset));
+				const int offset = (M_Random() % 3) - 1;
+				Wipe.meltY[i] = std::max(-15, std::min(0, Wipe.meltY[i - 1] + offset));
 			}
 			BuildMeltMask();
 		}
@@ -199,71 +207,56 @@ namespace
 		}
 	}
 
-	bool Advance(double ticks)
+	bool Advance(unsigned int elapsed)
 	{
-		if (ticks <= 0.0) return false;
-		Wipe.animationTicks += ticks;
-		Wipe.simulatedTicks = static_cast<int>(std::floor(Wipe.animationTicks));
+		if (Wipe.finished || elapsed == 0) return Wipe.finished;
+		const int previousTicks = Wipe.simulatedTicks;
+		Wipe.animationMilliseconds += elapsed;
+		Wipe.simulatedTicks = Wipe.animationMilliseconds / 25;
+		const int wholeTicks = Wipe.simulatedTicks - previousTicks;
 		if (Wipe.type == wipe_Fade)
-			return Wipe.animationTicks >= 32.0;
+		{
+			Wipe.finished = Wipe.simulatedTicks >= 32;
+			return Wipe.finished;
+		}
 
 		if (Wipe.type == wipe_Melt)
 		{
-			bool done = false;
-			while (ticks > 0.0)
+			for (int tick = 0; tick < wholeTicks && !Wipe.finished; ++tick)
 			{
-				const double step = std::min(ticks, 1.0);
-				done = true;
+				Wipe.finished = true;
 				for (int i = 0; i < FGLESWipe::MeltWidth; ++i)
 				{
-					if (Wipe.meltY[i] < FGLESWipe::MeltHeight)
+					int &y = Wipe.meltY[i];
+					if (y < 0)
 					{
-						if (step < 1.0)
-						{
-							if (Wipe.meltY[i] < 0.0)
-								Wipe.meltY[i] += step;
-							else if (Wipe.meltY[i] < 16.0)
-								Wipe.meltY[i] += (Wipe.meltY[i] + 1.0) * step;
-							else
-								Wipe.meltY[i] = std::min(Wipe.meltY[i] + 8.0 * step,
-									static_cast<double>(FGLESWipe::MeltHeight));
-						}
-						else if (Wipe.meltY[i] < 0.0)
-							Wipe.meltY[i] += 1.0;
-						else if (Wipe.meltY[i] < 16.0)
-							Wipe.meltY[i] += Wipe.meltY[i] + 1.0;
-						else
-							Wipe.meltY[i] = std::min(Wipe.meltY[i] + 8.0,
-								static_cast<double>(FGLESWipe::MeltHeight));
-						done = false;
+						++y;
+						Wipe.finished = false;
+					}
+					else if (y < FGLESWipe::MeltHeight)
+					{
+						y = std::min(y + (y < 16 ? y + 1 : 8), static_cast<int>(FGLESWipe::MeltHeight));
+						Wipe.finished = false;
 					}
 				}
-				ticks -= 1.0;
 			}
 			BuildMeltMask();
-			return done;
+			return Wipe.finished;
 		}
 
-		Wipe.burnTickRemainder += ticks;
-		const int wholeTicks = static_cast<int>(std::floor(Wipe.burnTickRemainder));
-		Wipe.burnTickRemainder -= wholeTicks;
-		bool done = false;
-		int remainingTicks = wholeTicks;
-		while (remainingTicks-- > 0)
+		for (int tick = 0; tick < wholeTicks && !Wipe.finished; ++tick)
 		{
-			Wipe.burnTime++;
-			done = false;
-			int subTicks = 2;
-			while (!done && subTicks-- > 0)
+			++Wipe.burnTime;
+			for (int subTick = 0; subTick < 2 && !Wipe.finished; ++subTick)
 			{
 				Wipe.burnDensity = wipe_CalcBurn(Wipe.burnArray,
 					FGLESWipe::BurnWidth, FGLESWipe::BurnHeight, Wipe.burnDensity);
-				done = Wipe.burnDensity < 0;
+				Wipe.finished = Wipe.burnDensity < 0;
 			}
+			if (Wipe.burnTime > 40) Wipe.finished = true;
 		}
 		if (wholeTicks > 0) BuildBurnMask();
-		if (Wipe.type == wipe_Burn && Wipe.burnTime > 40) done = true;
-		return done;
+		return Wipe.finished;
 	}
 
 	void Abort()
@@ -280,11 +273,11 @@ namespace
 
 bool gl_GLESInternalWipeStart(int type, const FGLESTargetDescriptor &target)
 {
-	if (!gl_GLES_CanUseResources() ||
+	if (!gl_GLES_CanUseResources() || target.renderWidth <= 0 || target.renderHeight <= 0 ||
 		(type != wipe_Melt && type != wipe_Burn && type != wipe_Fade))
 		return false;
 	Abort();
-	Initialize(type);
+	Initialize(type, target.renderHeight);
 	if (!BuildTexture(Wipe.startTexture, target.renderWidth, target.renderHeight) ||
 		!CaptureTexture(target, Wipe.startTexture))
 	{
@@ -310,8 +303,8 @@ void gl_GLESInternalWipeEnd()
 	Wipe.endCapturePending = true;
 	Wipe.endReady = false;
 	Wipe.lastTime = I_MSTime();
-	Wipe.animationTicks = 0.0;
-	Wipe.burnTickRemainder = 0.0;
+	Wipe.animationMilliseconds = 0;
+	Wipe.finished = false;
 	Wipe.simulatedTicks = 0;
 }
 
@@ -321,7 +314,7 @@ bool gl_GLESInternalWipeDo(int)
 	const unsigned int now = I_MSTime();
 	const unsigned int elapsed = std::min(now - Wipe.lastTime, 1000u);
 	Wipe.lastTime = now;
-	const bool done = Advance(elapsed * 40.0 / 1000.0);
+	const bool done = Advance(elapsed);
 	if (elapsed > 0 && Wipe.type != wipe_Fade && !UploadMask())
 		I_FatalError("Zandronum GLES wipe mask upload failed.");
 	return done && Wipe.endReady;
@@ -365,7 +358,7 @@ FGLESWipeBindings gl_GLESInternalWipeGetBindings()
 	bindings.maskTexture = Wipe.maskTexture;
 	bindings.type = Wipe.type;
 	bindings.simulatedTicks = Wipe.simulatedTicks;
-	bindings.progress = static_cast<float>(std::max(0.0, std::min(1.0, Wipe.animationTicks / 32.0)));
+	bindings.progress = static_cast<float>(std::max(0.0, std::min(1.0, Wipe.animationMilliseconds / 800.0)));
 	bindings.active = Wipe.active;
 	bindings.startReady = Wipe.startReady;
 	bindings.endReady = Wipe.endReady;

@@ -1446,7 +1446,7 @@ void V_CalcCleanFacs (int designwidth, int designheight, int realwidth, int real
 	int cx1, cy1, cx2, cy2;
 
 	ratio = CheckRatio(realwidth, realheight);
-	if (ratio & 4)
+	if (Is54Aspect(ratio))
 	{
 		cwidth = realwidth;
 		cheight = realheight * BaseRatioSizes[ratio][3] / 48;

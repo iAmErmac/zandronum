@@ -329,11 +329,11 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 		gl_GetLightColor(lightlevel, getExtraLight(), &Colormap, color + 0, color + 1, color + 2);
 		float fogColor[3];
 		float fogDensity;
-		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap,
-			renderstyle == STYLE_Add, fogColor, &fogDensity);
+		gl_GetFogParameters(lightlevel, &Colormap, false, fogColor, &fogDensity);
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
 		if (gltexture != NULL && texture == 0) return;
-		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() &&
+			gl_fixedcolormap == CM_DEFAULT && !foggy ?
 			gltexture->BindNativeBrightmap(true) : 0;
 		const EGLESBlendMode blendMode = renderstyle == STYLE_Add ? GLES_BLEND_ADD :
 			(alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
@@ -610,9 +610,6 @@ inline void GLFlat::PutFlat(bool fog)
 	{
 		if (plane.texture == skyflatnum)
 		{
-			if (developer)
-				DPrintf("GLES flat skipped sky texture in sector %d (%s).\n",
-					sector != NULL ? sector->sectornum : -1, ceiling ? "ceiling" : "floor");
 			return;
 		}
 		if (gl_fixedcolormap) Colormap.GetFixedColormap();
@@ -622,6 +619,8 @@ inline void GLFlat::PutFlat(bool fog)
 			gl_drawinfo->drawlists[list].AddFlat(this);
 			return;
 		}
+		if (gltexture != NULL)
+			foggy = !gl_fixedcolormap && (gl_CheckFog(&Colormap, lightlevel) || (level.flags & LEVEL_HASFADETABLE));
 		if (gl_GLES_IsFlatCollectionDeferred())
 		{
 			NativeDeferredFlatTasks.push_back(*this);

@@ -38,7 +38,7 @@ GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, i
 	bool repeat, bool allowhires);
 GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	const unsigned char *pixels, int width, int height, bool repeat, int colormap,
-	int translation, bool allowhires, bool palette, bool noFilter = false);
+	int translation, bool allowhires, bool palette, bool noFilter = false, bool noCompression = false);
 enum
 {
 	GLES_TEXTURE_FLAG_PALETTE = 1u << 0,

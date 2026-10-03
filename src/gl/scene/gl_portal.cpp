@@ -1164,43 +1164,23 @@ void GLHorizonPortal::DrawContents()
 			return;
 		}
 
-		SetNativePortalView(false, false);
+		SetNativePortalView(!!(MirrorFlag&1), !!(PlaneMirrorFlag&1));
 		float color[3];
-		if (gltexture->tex->isFullbright())
-		{
-			color[0] = color[1] = color[2] = 1.0f;
-		}
-		else
-		{
-			gl_GetLightColor(origin->lightlevel, getExtraLight(), &origin->colormap,
-				color + 0, color + 1, color + 2);
-		}
+		const bool fullbright = gltexture->tex->isFullbright();
+		const int lightlevel = fullbright ? 255 : origin->lightlevel;
+		const int rellight = fullbright ? 0 : getExtraLight();
+		gl_GetLightColor(lightlevel, rellight, fullbright ? NULL : &origin->colormap,
+			color + 0, color + 1, color + 2);
 		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
 		float fogDensity = 0.0f;
-		if (!gl_fixedcolormap && (gl_CheckFog(&origin->colormap, origin->lightlevel) ||
-			(::level.flags & LEVEL_HASFADETABLE)))
-		{
-			PalEntry fog = origin->colormap.FadeColor;
-			if (::level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(origin->lightlevel, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, origin->colormap.colormap);
-			}
-			fogColor[0] = fog.r / 255.0f;
-			fogColor[1] = fog.g / 255.0f;
-			fogColor[2] = fog.b / 255.0f;
-		}
+		const bool fog = gl_GetFogParameters(lightlevel, &origin->colormap, false, fogColor, &fogDensity);
+		const FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rellight, &origin->colormap);
 
 		const float vx = FIXED2FLOAT(viewx);
 		const float vy = FIXED2FLOAT(viewy);
 		const float vz = FIXED2FLOAT(viewz);
 		const float z = FIXED2FLOAT(sp->texheight);
-		const float extent = 32767.0f;
+		const float extent = 32768.0f;
 		const float textureWidth = gltexture->TextureWidth(GLUSE_TEXTURE) > 0 ?
 			static_cast<float>(gltexture->TextureWidth(GLUSE_TEXTURE)) : 1.0f;
 		const float textureHeight = gltexture->TextureHeight(GLUSE_TEXTURE) > 0 ?
@@ -1213,39 +1193,44 @@ void GLHorizonPortal::DrawContents()
 		const float angle = -static_cast<float>(sp->angle) * 6.28318530718f / 4294967296.0f;
 		const float cosine = cosf(angle);
 		const float sine = sinf(angle);
-		const float planePositions[12] =
+		auto transformTexcoords = [&](const float *raw, float *transformed)
 		{
-			vx - extent, z, vy - extent,
-			vx - extent, z, vy + extent,
-			vx + extent, z, vy + extent,
-			vx + extent, z, vy - extent
+			for (int vertex = 0; vertex < 4; ++vertex)
+			{
+				const float rawU = raw[vertex * 2];
+				const float rawV = raw[vertex * 2 + 1];
+				const float rotatedU = cosine * rawU - sine * rawV;
+				const float rotatedV = sine * rawU + cosine * rawV;
+				transformed[vertex * 2] = uScale * (uOffset + (64.0f / textureWidth) * rotatedU);
+				transformed[vertex * 2 + 1] = vScale * (vOffset + (64.0f / textureHeight) * rotatedV);
+			}
 		};
-		float planeTexcoords[8];
-		for (int vertex = 0; vertex < 4; ++vertex)
-		{
-			const float x = planePositions[vertex * 3 + 0];
-			const float y = planePositions[vertex * 3 + 2];
-			const float rawU = x / 64.0f;
-			const float rawV = -y / 64.0f;
-			const float rotatedU = cosine * rawU - sine * rawV;
-			const float rotatedV = sine * rawU + cosine * rawV;
-			planeTexcoords[vertex * 2 + 0] = uScale *
-				(uOffset + (64.0f / textureWidth) * rotatedU);
-			planeTexcoords[vertex * 2 + 1] = vScale *
-				(vOffset + (64.0f / textureHeight) * rotatedV);
-		}
 		const unsigned int texture = gltexture->BindNative(origin->colormap.colormap, 0, true);
-		gl_GLES_AddFlat(planePositions, planeTexcoords, 4, color, 1.0f, texture,
-			gltexture->isMasked(), fogDensity > 0.0f, true, fogColor, fogDensity,
-			GLES_BLEND_OPAQUE);
+		for (float x = vx - extent; x < vx + extent; x += 4096.0f)
+		{
+			for (float y = vy - extent; y < vy + extent; y += 4096.0f)
+			{
+				const float positions[12] = { x, z, y, x + 4096.0f, z, y,
+					x + 4096.0f, z, y + 4096.0f, x, z, y + 4096.0f };
+				const float raw[8] = { x / 64.0f, -y / 64.0f,
+					x / 64.0f + 64.0f, -y / 64.0f,
+					x / 64.0f + 64.0f, -y / 64.0f - 64.0f,
+					x / 64.0f, -y / 64.0f - 64.0f };
+				float texcoords[8];
+				transformTexcoords(raw, texcoords);
+				gl_GLES_AddFlat(positions, texcoords, 4, color, 1.0f, texture,
+					false, fog, true, fogColor, fogDensity,
+					GLES_BLEND_OPAQUE, 0, NULL, NULL, 0, 0, &lighting);
+			}
+		}
 
 		// Close the same finite-plane gap that the desktop horizon pass fills at
 		// the edge of its far boundary.
 		const float distance = z - vz;
 		if (fabsf(distance) > 0.0001f)
 		{
-			const float wallTexcoords[8] = { 0.0f, 0.0f, 0.0f, distance,
-				1.0f, distance, 1.0f, 0.0f };
+			const float edgeU[4][2] = { {512.0f, 512.0f}, {512.0f, -512.0f},
+				{-512.0f, -512.0f}, {-512.0f, 512.0f} };
 			const float edges[4][12] =
 			{
 				{ vx - extent, z, vy - extent, vx - extent, vz, vy - extent,
@@ -1258,9 +1243,15 @@ void GLHorizonPortal::DrawContents()
 				  vx - extent, vz, vy - extent, vx - extent, z, vy - extent }
 			};
 			for (int edge = 0; edge < 4; ++edge)
+			{
+				const float raw[8] = { edgeU[edge][0], 0.0f, edgeU[edge][0], distance,
+					edgeU[edge][1], distance, edgeU[edge][1], 0.0f };
+				float wallTexcoords[8];
+				transformTexcoords(raw, wallTexcoords);
 				gl_GLES_AddWall(edges[edge], wallTexcoords, color, 1.0f, texture,
-					gltexture->isMasked(), fogDensity > 0.0f, true, fogColor, fogDensity,
-					GLES_BLEND_OPAQUE);
+					false, fog, true, fogColor, fogDensity,
+					GLES_BLEND_OPAQUE, 0, NULL, NULL, 0, 0, NULL, NULL, NULL, &lighting);
+			}
 		}
 		PortalAll.Unclock();
 		return;

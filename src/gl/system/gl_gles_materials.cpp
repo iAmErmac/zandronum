@@ -31,6 +31,7 @@ namespace
 		bool palette;
 		bool framebufferContent;
 		GLuint texture;
+		GLenum internalFormat;
 		std::vector<unsigned char> pixels;
 	};
 
@@ -142,13 +143,23 @@ GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, i
 	return 0;
 }
 
+unsigned int gl_GLES_GetTextureFormat(bool fullPrecision)
+{
+	if (fullPrecision) return GL_RGBA8;
+	if (gl_texture_format == 1) return GL_RGB5_A1;
+	// GLES has no RGBA2; RGBA4 preserves its minimum component precision.
+	if (gl_texture_format == 2 || gl_texture_format == 3) return GL_RGBA4;
+	return GL_RGBA8;
+}
+
 GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	const unsigned char *pixels, int width, int height, bool repeat, int colormap,
-	int translation, bool allowhires, bool palette, bool noFilter)
+	int translation, bool allowhires, bool palette, bool noFilter, bool noCompression)
 {
 	if (!resourcesAvailable || key == NULL || pixels == NULL || width <= 0 || height <= 0)
 		return 0;
 	const size_t pixelBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+	const GLenum internalFormat = gl_GLES_GetTextureFormat(noCompression || colormap == CM_SHADE);
 	const FGLESMaterialKey materialKey = MakeMaterialKey(key, colormap, translation, repeat, allowhires);
 	FGLESMaterialTexture *entry = FindMaterialEntry(materialKey);
 	if (entry != NULL)
@@ -158,7 +169,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 			gl_GLES_RecordProfileMaterial(true, false);
 			return entry->texture;
 		}
-		if (entry->texture != 0 && entry->width == width && entry->height == height &&
+		if (entry->texture != 0 && entry->width == width && entry->height == height && entry->internalFormat == internalFormat &&
 			entry->pixels.size() == pixelBytes && memcmp(entry->pixels.data(), pixels, pixelBytes) == 0)
 		{
 			gl_GLES_RecordProfileMaterial(true, false);
@@ -181,7 +192,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 		MaterialTextureIndices.emplace(materialKey, MaterialTextures.size() - 1);
 		entry = &MaterialTextures.back();
 	}
-	if (entry->width != width || entry->height != height)
+	if (entry->width != width || entry->height != height || entry->internalFormat != internalFormat)
 	{
 		if (entry->texture != 0)
 		{
@@ -191,6 +202,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 		entry->texture = 0;
 		entry->width = width;
 		entry->height = height;
+		entry->internalFormat = internalFormat;
 		entry->framebufferContent = false;
 		entry->pixels.assign(pixels, pixels + pixelBytes);
 	}
@@ -230,7 +242,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter.magfilter);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+	glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
 		entry->pixels.data());
 	if (useMipmaps) glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);

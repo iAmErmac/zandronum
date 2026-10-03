@@ -303,36 +303,6 @@ unsigned char *FGLRenderer::GetTextureBuffer(FTexture *tex, int &w, int &h)
 
 void FGLRenderer::ClearBorders()
 {
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	if (gl_GLES_IsActive())
-	{
-		OpenGLFrameBuffer *glscreen = static_cast<OpenGLFrameBuffer*>(screen);
-		const int width = glscreen != NULL ? glscreen->GetWidth() : 0;
-		const int height = glscreen != NULL ? glscreen->GetHeight() : 0;
-		const int trueHeight = glscreen != NULL ? glscreen->GetTrueHeight() : 0;
-		if (width <= 0 || height <= 0 || trueHeight <= height) return;
-		const float border = static_cast<float>(trueHeight - height) /
-			(2.0f * static_cast<float>(trueHeight));
-		const float black[3] = { 0.0f, 0.0f, 0.0f };
-		const float upper[12] =
-		{
-			-1.0f, 1.0f - 2.0f * border, 0.0f,
-			-1.0f, 1.0f, 0.0f,
-			 1.0f, 1.0f, 0.0f,
-			 1.0f, 1.0f - 2.0f * border, 0.0f
-		};
-		const float lower[12] =
-		{
-			-1.0f, -1.0f, 0.0f,
-			-1.0f, -1.0f + 2.0f * border, 0.0f,
-			 1.0f, -1.0f + 2.0f * border, 0.0f,
-			 1.0f, -1.0f, 0.0f
-		};
-		gl_GLES_AddHUDQuad(upper, NULL, black, 1.0f, false, 0, GLES_BLEND_OPAQUE);
-		gl_GLES_AddHUDQuad(lower, NULL, black, 1.0f, false, 0, GLES_BLEND_OPAQUE);
-		return;
-	}
-#endif
 #if !defined(__ANDROID__)
 	OpenGLFrameBuffer *glscreen = static_cast<OpenGLFrameBuffer*>(screen);
 
@@ -468,10 +438,11 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		else if (parms.style.BlendOp == STYLEOP_Sub) blendMode = GLES_BLEND_SUBTRACT;
 		else if (parms.style.BlendOp == STYLEOP_RevSub) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
 		else if (parms.alpha < FRACUNIT || parms.style.BlendOp != STYLEOP_None) blendMode = GLES_BLEND_ALPHA;
-		const bool customBlend = blendMode != GLES_BLEND_OPAQUE &&
-			(parms.style.BlendOp < STYLEOP_Fuzz || parms.style.BlendOp > STYLEOP_FuzzOrRevSub);
-		unsigned int materialFlags = img->bHasCanvas || textureMode == TM_OPAQUE ?
+		const bool customBlend = blendMode != GLES_BLEND_OPAQUE;
+		unsigned int materialFlags = img->bHasCanvas || textureMode == TM_OPAQUE || textureMode == TM_INVERTOPAQUE ?
 			GLES_MATERIAL_OPAQUE_TEXTURE : 0;
+		if (!img->bHasCanvas && (textureMode == TM_INVERT || textureMode == TM_INVERTOPAQUE))
+			materialFlags |= GLES_MATERIAL_INVERT_TEXTURE;
 		if (alphaChannel) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
 		if (!img->bHasCanvas && (parms.style.Flags & STYLEF_RedIsAlpha)) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
 		if (!img->bHasCanvas && (parms.style.Flags & STYLEF_ColorIsFixed)) materialFlags |= GLES_MATERIAL_COLOR_FIXED;
@@ -646,36 +617,14 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
 		const float height = screen != NULL && screen->GetHeight() > 0 ?
 			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
-		const float dx = static_cast<float>(x2 - x1);
-		const float dy = static_cast<float>(y2 - y1);
-		const float length = sqrtf(dx * dx + dy * dy);
-		if (length > 0.001f)
+		const float positions[6] =
 		{
-			const float offsetX = -dy / length * 0.5f;
-			const float offsetY = dx / length * 0.5f;
-			const float points[8] =
-			{
-				x1 + offsetX, y1 + offsetY,
-				x1 - offsetX, y1 - offsetY,
-				x2 - offsetX, y2 - offsetY,
-				x2 + offsetX, y2 + offsetY
-			};
-			float positions[12];
-			for (int i = 0; i < 4; ++i)
-			{
-				positions[i * 3 + 0] = 2.0f * points[i * 2 + 0] / width - 1.0f;
-				positions[i * 3 + 1] = 1.0f - 2.0f * points[i * 2 + 1] / height;
-				positions[i * 3 + 2] = 0.0f;
-			}
-			const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
-			const float alpha = color != 0 && p.a != 0 ? p.a / 255.0f : 1.0f;
-			gl_GLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
-				alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
-		}
-		else
-		{
-			DrawPixel(x1, y1, palcolor, color);
-		}
+			2.0f * x1 / width - 1.0f, 1.0f - 2.0f * y1 / height, 0.0f,
+			2.0f * x2 / width - 1.0f, 1.0f - 2.0f * y2 / height, 0.0f
+		};
+		const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
+		gl_GLES_AddHUDPrimitive(positions, NULL, 2, rgb, 1.0f, false, 0, false,
+			GLES_BLEND_OPAQUE, 0, GLES_PRIMITIVE_LINES);
 		return;
 	}
 #endif
@@ -706,19 +655,14 @@ void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
 		const float height = screen != NULL && screen->GetHeight() > 0 ?
 			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
-		const float left = 2.0f * static_cast<float>(x1) / width - 1.0f;
-		const float right = 2.0f * static_cast<float>(x1 + 1) / width - 1.0f;
-		const float top = 1.0f - 2.0f * static_cast<float>(y1) / height;
-		const float bottom = 1.0f - 2.0f * static_cast<float>(y1 + 1) / height;
-		const float positions[12] =
+		const float positions[3] =
 		{
-			left, top, 0.0f, left, bottom, 0.0f,
-			right, bottom, 0.0f, right, top, 0.0f
+			// Center the point in the pixel selected by the desktop 2D projection.
+			2.0f * (x1 + 0.5f) / width - 1.0f, 1.0f - 2.0f * (y1 - 0.5f) / height, 0.0f
 		};
 		const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
-		const float alpha = color != 0 && p.a != 0 ? p.a / 255.0f : 1.0f;
-		gl_GLES_AddHUDQuad(positions, NULL, rgb, alpha, false, 0,
-			alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
+		gl_GLES_AddHUDPrimitive(positions, NULL, 1, rgb, 1.0f, false, 0, false,
+			GLES_BLEND_OPAQUE, 0, GLES_PRIMITIVE_POINTS);
 		return;
 	}
 #endif
@@ -822,7 +766,7 @@ void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *
 		};
 		const float texcoords[8] = { u1, v1, u1, v2, u2, v2, u2, v1 };
 		const unsigned int nativeTexture = nativeMaterial->BindNative(CM_DEFAULT, 0, true);
-		gl_GLES_AddHUDPolygon(positions, texcoords, 4, NULL, 1.0f,
+		gl_GLES_AddHUDPrimitive(positions, texcoords, 4, NULL, 1.0f,
 			nativeMaterial->isMasked(), nativeTexture, true, GLES_BLEND_OPAQUE);
 		return;
 	}
@@ -988,7 +932,7 @@ void FGLRenderer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoint
 			light.b / 255.0f
 		};
 		const unsigned int nativeTexture = nativeMaterial->BindNative(cm.colormap, 0, true);
-		gl_GLES_AddHUDPolygon(&positions[0], &texcoords[0],
+		gl_GLES_AddHUDPrimitive(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(npoints), color, 1.0f, nativeMaterial->isMasked(),
 			nativeTexture, true, GLES_BLEND_OPAQUE);
 		return;

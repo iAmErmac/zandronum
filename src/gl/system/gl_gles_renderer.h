@@ -47,6 +47,7 @@ enum EGLESBlendMode
 enum EGLESMaterialFlags
 {
 	GLES_MATERIAL_RED_IS_ALPHA = 1,
+	GLES_MATERIAL_INVERT_TEXTURE = 2,
 	GLES_MATERIAL_OPAQUE_TEXTURE = 4,
 	GLES_MATERIAL_FUZZ = 8,
 	GLES_MATERIAL_COLOR_OVERLAY = 16,
@@ -61,6 +62,13 @@ enum EGLESMaterialFlags
 	GLES_MATERIAL_GLOW = 65536,
 	GLES_MATERIAL_MIRROR_DECAL = 131072,
 	GLES_MATERIAL_SPRITE_FOG_LAYER = 262144
+};
+
+enum EGLESPrimitiveMode
+{
+	GLES_PRIMITIVE_TRIANGLE_FAN,
+	GLES_PRIMITIVE_LINES,
+	GLES_PRIMITIVE_POINTS
 };
 
 bool gl_GLES_CollectCapabilities();
@@ -122,12 +130,14 @@ void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	EGLESBlendMode blendMode, unsigned int materialFlags = 0, bool customBlend = false,
 	int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0);
-void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
+void gl_GLES_AddHUDPrimitive(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, bool masked,
-	unsigned int texture, bool repeat, EGLESBlendMode blendMode, unsigned int materialFlags = 0);
+	unsigned int texture, bool repeat, EGLESBlendMode blendMode, unsigned int materialFlags = 0,
+	EGLESPrimitiveMode primitiveMode = GLES_PRIMITIVE_TRIANGLE_FAN);
 void gl_GLES_AddScreenQuad(const float *color, float alpha, EGLESBlendMode blendMode);
 unsigned int gl_GLES_BindMaterial(const void *key, const unsigned char *pixels,
-	int width, int height, bool repeat, int colormap, int translation, bool allowhires, bool noFilter = false);
+	int width, int height, bool repeat, int colormap, int translation, bool allowhires, bool noFilter = false, bool noCompression = false);
+unsigned int gl_GLES_GetTextureFormat(bool fullPrecision);
 unsigned int gl_GLES_EnsureMaterialTexture(const void *key, int width, int height,
 	bool repeat, int colormap, int translation, bool allowhires);
 void gl_GLES_MarkMaterialFramebufferContent(const void *key, int colormap,
@@ -135,7 +145,7 @@ void gl_GLES_MarkMaterialFramebufferContent(const void *key, int colormap,
 bool gl_GLES_EndSceneToTexture(unsigned int targetTexture, int width, int height);
 void gl_GLES_ClearMaterialCache();
 void gl_GLES_EndScene();
-bool gl_GLES_ReadScreenshot(unsigned char *rgba, int width, int height);
+bool gl_GLES_ReadScreenshot(unsigned char *rgba, int width, int height, int trueHeight);
 bool gl_GLES_WriteSavePic(FILE *file, int width, int height);
 unsigned int gl_GLES_BeginPortalCapture();
 bool gl_GLES_ClearPortalCapture();

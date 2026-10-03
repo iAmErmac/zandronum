@@ -197,7 +197,7 @@ namespace
 	{
 		if (Display != EGL_NO_DISPLAY && Surface != EGL_NO_SURFACE)
 		{
-			eglMakeCurrent(Display, EGL_NO_SURFACE, EGL_NO_SURFACE, Context);
+			eglMakeCurrent(Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 			eglDestroySurface(Display, Surface);
 		}
 		Surface = EGL_NO_SURFACE;
@@ -401,6 +401,11 @@ bool Zandronum_AndroidHost_SwapBuffers()
 	if (eglSwapBuffers(Display, Surface) == EGL_TRUE)
 		return true;
 	std::lock_guard<std::mutex> lock(HostMutex);
+	if (NextSurfaceWindow == nullptr && SurfaceWindow != nullptr)
+	{
+		ANativeWindow_acquire(SurfaceWindow);
+		NextSurfaceWindow = SurfaceWindow;
+	}
 	SurfaceLostPending = true;
 	SurfaceReady = false;
 	HostCondition.notify_all();
@@ -413,6 +418,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 	bool lost = false;
 	bool restore = false;
 	bool paused = false;
+	bool surfaceAvailable = false;
 	{
 		std::lock_guard<std::mutex> lock(HostMutex);
 		if (SurfaceLostPending)
@@ -427,6 +433,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 		restore = SurfaceRestoredPending;
 		SurfaceRestoredPending = false;
 		paused = Paused;
+		surfaceAvailable = SurfaceReady && SurfaceWindow != nullptr;
 	}
 
 	if (paused != AppliedPause)
@@ -437,19 +444,17 @@ void Zandronum_AndroidHost_ProcessSurfaceState()
 	if (lost)
 	{
 		gl_GLES_OnContextLost();
-		DestroyWindowSurface();
+		DestroyContext();
 		if (oldWindow != nullptr)
 			ANativeWindow_release(oldWindow);
 		restore = true;
 	}
-	if (restore && Zandronum_AndroidHost_IsSurfaceReady() == false)
+	if (restore && surfaceAvailable && !Zandronum_AndroidHost_IsSurfaceReady())
 	{
-		if (CreateWindowSurface())
+		if ((Context != EGL_NO_CONTEXT || CreateContext()) && CreateWindowSurface())
 		{
 			RegisterGLESHostCallbacks();
-			if (gl_GLES_OnContextRestored(SurfaceWidth, SurfaceHeight))
-				HostLog("Zandronum GLES Android surface restored");
-			else
+			if (!gl_GLES_OnContextRestored(SurfaceWidth, SurfaceHeight))
 				HostLog("Zandronum GLES Android context restore failed");
 		}
 	}
@@ -587,6 +592,7 @@ void Zandronum_AndroidHost_SurfaceCreated(JNIEnv *env, jobject surface, int widt
 	else
 	{
 		SurfaceWindow = window;
+		SurfaceRestoredPending = Starting;
 	}
 	SurfaceReady = true;
 	HostCondition.notify_all();

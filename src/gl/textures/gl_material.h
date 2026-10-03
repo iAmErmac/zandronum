@@ -141,7 +141,6 @@ public:
 	unsigned int BindNative(int cm, int translation, bool repeat, bool allowhires = true) const;
 	unsigned int BindNativeBrightmap(bool repeat) const;
 	void RemapNativeTexCoords(float *u, float *v) const;
-	void GetNativeSpriteCoords(float *u1, float *v1, float *u2, float *v2) const;
 #endif
 
 	unsigned char * CreateTexBuffer(int cm, int translation, int & w, int & h, bool expand = false, bool allowhires=true, int warp = 0) const

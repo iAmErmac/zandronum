@@ -869,8 +869,14 @@ void D_Display ()
 #ifdef __ANDROID__
 	if (gl_GLES_IsActive())
 	{
+		static bool nativeWipeSoundPaused = false;
 		bool nativeWipeInProgress = gl_GLES_IsWipeInProgress();
 		bool nativeWipeDone = false;
+		if (nativeWipeSoundPaused && !nativeWipeInProgress)
+		{
+			GSnd->SetSfxPaused(false, 1);
+			nativeWipeSoundPaused = false;
+		}
 		if (NETWORK_GetState() == NETSTATE_SERVER || nodrawers || screen == NULL)
 			return;
 		cycle_t nativeFrameCycles;
@@ -903,7 +909,10 @@ void D_Display ()
 				}
 				nativeWipeInProgress = screen->WipeStartScreen(wipeType);
 				if (nativeWipeInProgress)
+				{
 					GSnd->SetSfxPaused(true, 1);
+					nativeWipeSoundPaused = true;
+				}
 				wipegamestate = gamestate;
 			}
 		}
@@ -1021,37 +1030,37 @@ void D_Display ()
 			screen->WipeEndScreen();
 			nativeWipeDone = screen->WipeDo(1);
 			gl_GLES_BeginWipeOverlay();
-			C_DrawConsole(false);
+			C_DrawConsole(true);
 			M_Drawer();
 			gl_GLES_EndWipeOverlay();
 		}
 		else if (gamestate == GS_FULLCONSOLE)
 		{
-			C_DrawConsole(false);
+			C_DrawConsole(true);
 			M_Drawer();
 		}
 		else if (gamestate == GS_INTERMISSION)
 		{
 			WI_Drawer();
 			CHAT_Render();
-			C_DrawConsole(false);
+			C_DrawConsole(true);
 			M_Drawer();
 		}
 		else if (gamestate == GS_FINALE)
 		{
 			F_Drawer();
-			C_DrawConsole(false);
+			C_DrawConsole(true);
 			M_Drawer();
 		}
 		else if (gamestate == GS_DEMOSCREEN)
 		{
 			D_PageDrawer();
-			C_DrawConsole(false);
+			C_DrawConsole(true);
 			M_Drawer();
 		}
 		else
 		{
-			C_DrawConsole(false);
+			C_DrawConsole(true);
 			M_Drawer();
 		}
 		if (!nativeWipeInProgress)
@@ -1063,6 +1072,7 @@ void D_Display ()
 			screen->WipeCleanup();
 			nativeWipeInProgress = false;
 			GSnd->SetSfxPaused(false, 1);
+			nativeWipeSoundPaused = false;
 		}
 		nativeFrameCycles.Unclock();
 		FrameCycles = nativeFrameCycles;

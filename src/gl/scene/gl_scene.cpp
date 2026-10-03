@@ -1101,7 +1101,7 @@ sector_t * FGLRenderer::RenderViewpoint (AActor * camera, GL_IRECT * bounds, flo
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		if ((mainview && toscreen) || (!mainview && !toscreen))
+		if (mainview || !toscreen)
 		{
 			SetCameraPos(viewx, viewy, viewz, viewangle);
 			mCurrentFoV = fov;
@@ -1330,6 +1330,12 @@ void FGLRenderer::WriteSavePic (player_t *player, FILE *file, int width, int hei
 	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
+		SetFixedColormap(player);
+		TThinkerIterator<ADynamicLight> it(STAT_DLIGHT);
+		mLightCount = it.Next() != NULL;
+		sector_t *viewsector = RenderViewpoint(player->camera, NULL,
+			FieldOfView * 360.0f / FINEANGLES, 1.6f, 1.6f, true, false);
+		DrawBlend(viewsector);
 		if (!gl_GLES_WriteSavePic(file, width, height))
 			M_CreateDummyPNG(file);
 		return;

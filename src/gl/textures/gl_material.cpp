@@ -993,7 +993,7 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 	}
 	mBaseLayer->tex->ProcessData(pixels, width, height, !repeat);
 	const unsigned int texture = gl_GLES_BindMaterial(this, pixels, width, height,
-		repeat, cm, translation, allowhires, !repeat && tex->gl_info.bNoFilter);
+		repeat, cm, translation, allowhires, !repeat && tex->gl_info.bNoFilter, tex->gl_info.bNoCompress);
 	delete[] pixels;
 	gl_GLESInternalSetMaterialEffect(texture, effect, tex->gl_info.shaderspeed, cm);
 	return texture;
@@ -1016,18 +1016,6 @@ void FMaterial::RemapNativeTexCoords(float *u, float *v) const
 	const float nativeHeight = static_cast<float>(std::max(1, nativeTextureHeight));
 	*u = clamp<float>(*u * paddedWidth / nativeWidth, 0.0f, 1.0f);
 	*v = clamp<float>(*v * paddedHeight / nativeHeight, 0.0f, 1.0f);
-}
-
-void FMaterial::GetNativeSpriteCoords(float *u1, float *v1, float *u2, float *v2) const
-{
-	if (u1 == NULL || v1 == NULL || u2 == NULL || v2 == NULL)
-		return;
-	*u1 = SpriteU[0];
-	*v1 = SpriteV[0];
-	*u2 = SpriteU[1];
-	*v2 = SpriteV[1];
-	RemapNativeTexCoords(u1, v1);
-	RemapNativeTexCoords(u2, v2);
 }
 
 unsigned int FMaterial::BindNativeBrightmap(bool repeat) const
