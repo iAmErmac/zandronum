@@ -10,6 +10,7 @@ void gl_CleanLevelData();
 
 // [BB] Export this.
 bool IsLightmodeValid();
+bool gl_SupportsDoomLighting();
 // [BB] This construction purposely overrides the CVAR gl_fogmode with a local variable of the same name.
 // This allows to implement ZADF_FORCE_VIDEO_DEFAULTS by only putting this define at the beginning of a function
 // that uses gl_fogmode without any further changes in that function.
@@ -23,7 +24,7 @@ bool IsLightmodeValid();
 #define OVERRIDE_LIGHTMODE_IF_NECESSARY \
 	const int gl_lightmode_CVAR_value = gl_lightmode; \
 	const int gl_lightmode_CVAR_defaultvalue = ( ( IsLightmodeValid() == false ) || \
-		( ( glset.map_lightmode == 2 || glset.map_lightmode == 8 ) && gl.shadermodel < 4 )) ? gl_lightmode.GetGenericRepDefault( CVAR_Int ).Int : glset.map_lightmode; \
+		( ( glset.map_lightmode == 2 || glset.map_lightmode == 8 ) && !gl_SupportsDoomLighting() )) ? gl_lightmode.GetGenericRepDefault( CVAR_Int ).Int : glset.map_lightmode; \
 	const int gl_lightmode = ( zadmflags & ZADF_FORCE_VIDEO_DEFAULTS ) ? gl_lightmode_CVAR_defaultvalue : gl_lightmode_CVAR_value;
 
 // [EP] Override gl_light_ambient in the same way as gl_lightmode

@@ -274,9 +274,7 @@ void FRenderState::Apply(bool forcenoshader)
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		gl_GLES_ApplyRenderState(mSrcBlend, mDstBlend, mAlphaFunc,
-			mAlphaThreshold, mAlphaTest, mBlendEquation, mFogEnabled,
-			mTextureEnabled, mTextureMode);
+		gl_GLES_ApplyBlendState(mSrcBlend, mDstBlend, mBlendEquation);
 		return;
 	}
 #if defined(__ANDROID__)

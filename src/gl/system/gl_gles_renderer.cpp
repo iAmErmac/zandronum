@@ -16,6 +16,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <vector>
+#include <unordered_map>
+#include <string>
+#include "w_wad.h"
+#include "gl/shaders/gl_shaderdefs.h"
 
 #include "c_console.h"
 #include "i_system.h"
@@ -47,6 +51,7 @@ EXTERN_CVAR(Int, gl_vid_multisample)
 EXTERN_CVAR(Bool, gl_no_skyclear)
 EXTERN_CVAR(Int, screenblocks)
 extern int skyfog;
+extern long gl_frameMS;
 
 namespace
 {
@@ -78,11 +83,13 @@ namespace
 		GLsizei firstIndex;
 		GLsizei indexCount;
 		GLuint texture;
+		FGLESMaterialEffect materialEffect;
 		GLuint brightmap;
 		int brightmapDesaturation;
 		bool masked;
 		bool fog;
 		bool translucent;
+		bool sourceOrdered;
 		bool repeat;
 		bool cameraTexture;
 		bool palette;
@@ -99,10 +106,11 @@ namespace
 		bool customBlend;
 		GLenum sourceBlend;
 		GLenum destinationBlend;
-		float alphaCutoff;
+		float alphaCutoff = 0.5f;
 		float sortDepth;
 		float fogColor[3];
 		float fogDensity;
+		FShaderLightParameters lighting;
 		float glowTopColor[4];
 		float glowBottomColor[4];
 		size_t lightOffset;
@@ -205,10 +213,12 @@ namespace
 		GLuint vertexBuffer;
 		GLuint indexBuffer;
 		GLuint checkerTexture;
-		GLuint checkerSampler;
-		GLuint sceneSampler;
-		GLuint cameraSampler;
+		GLuint worldSamplers[4];
+		GLuint sceneSamplers[4];
+		GLuint nearestSamplers[4];
 		int textureFilter;
+		float textureAnisotropy;
+		GLint maximumAnisotropy;
 		FGLESTargetDescriptor sceneTarget;
 		FGLESTargetDescriptor cameraTarget;
 		FGLESViewDescriptor viewContract;
@@ -226,113 +236,10 @@ namespace
 		GLint sceneSkyDepth;
 		GLint sceneSkyFog;
 		GLint sceneMaterialFlags;
-		GLint sceneFuzzTime;
-		GLint sceneLightOnlyMode;
-		GLint sceneLightPositionRadius;
-		GLint sceneLightColor;
 		GLint sceneLightCounts;
-		GLint sceneLightPlaneNormal;
 		GLint sceneProjectedLights;
-		GLint sceneDynamicLightTexture;
 		GLint sceneClipPlane;
 		GLint sceneClipPlaneEnabled;
-		GLint simpleTextureUniform;
-		GLint simpleViewProjection;
-		GLint simpleUseTexture;
-		GLint simpleModel;
-		GLint simpleTextureTransform;
-		GLint simpleCameraPosition;
-		GLint simpleObjectColor;
-		GLint simpleSkyDepth;
-		GLint simpleSkyFog;
-		GLint maskedTextureUniform;
-		GLint maskedBrightmapUniform;
-		GLint maskedUseBrightmap;
-		GLint maskedBrightmapDesaturation;
-		GLint maskedViewProjection;
-		GLint maskedUseTexture;
-		GLint maskedModel;
-		GLint maskedTextureTransform;
-		GLint maskedCameraPosition;
-		GLint maskedObjectColor;
-		GLint maskedAlphaCutoff;
-		GLint maskedMaterialFlags;
-		GLint maskedFuzzTime;
-		GLint maskedLightOnlyMode;
-		GLint maskedLightPositionRadius;
-		GLint maskedLightColor;
-		GLint maskedLightCounts;
-		GLint maskedLightPlaneNormal;
-		GLint maskedProjectedLights;
-		GLint maskedDynamicLightTexture;
-		GLint maskedClipPlane;
-		GLint maskedClipPlaneEnabled;
-		GLint paletteTextureUniform;
-		GLint paletteBrightmapUniform;
-		GLint paletteUseBrightmap;
-		GLint paletteBrightmapDesaturation;
-		GLint paletteViewProjection;
-		GLint paletteUseTexture;
-		GLint paletteModel;
-		GLint paletteTextureTransform;
-		GLint paletteCameraPosition;
-		GLint paletteObjectColor;
-		GLint paletteMaterialFlags;
-		GLint paletteFuzzTime;
-		GLint paletteLightOnlyMode;
-		GLint paletteLightPositionRadius;
-		GLint paletteLightColor;
-		GLint paletteLightCounts;
-		GLint paletteLightPlaneNormal;
-		GLint paletteProjectedLights;
-		GLint paletteDynamicLightTexture;
-		GLint paletteClipPlane;
-		GLint paletteClipPlaneEnabled;
-		GLint fogViewProjection;
-		GLint fogTextureUniform;
-		GLint fogBrightmapUniform;
-		GLint fogUseBrightmap;
-		GLint fogBrightmapDesaturation;
-		GLint fogUseTexture;
-		GLint fogModel;
-		GLint fogTextureTransform;
-		GLint fogCameraPosition;
-		GLint fogObjectColor;
-		GLint fogMaterialFlags;
-		GLint fogFuzzTime;
-		GLint fogLightOnlyMode;
-		GLint fogLightPositionRadius;
-		GLint fogLightColor;
-		GLint fogLightCounts;
-		GLint fogLightPlaneNormal;
-		GLint fogProjectedLights;
-		GLint fogDynamicLightTexture;
-		GLint fogClipPlane;
-		GLint fogClipPlaneEnabled;
-		GLint fogMaskedViewProjection;
-		GLint fogMaskedTextureUniform;
-		GLint fogMaskedBrightmapUniform;
-		GLint fogMaskedUseBrightmap;
-		GLint fogMaskedBrightmapDesaturation;
-		GLint fogMaskedUseTexture;
-		GLint fogMaskedModel;
-		GLint fogMaskedTextureTransform;
-		GLint fogMaskedCameraPosition;
-		GLint fogMaskedObjectColor;
-		GLint fogMaskedAlphaCutoff;
-		GLint fogMaskedMaterialFlags;
-		GLint fogMaskedFuzzTime;
-		GLint fogMaskedLightOnlyMode;
-		GLint fogMaskedColor;
-		GLint fogMaskedDensity;
-		GLint fogMaskedLightPositionRadius;
-		GLint fogMaskedLightColor;
-		GLint fogMaskedLightCounts;
-		GLint fogMaskedLightPlaneNormal;
-		GLint fogMaskedProjectedLights;
-		GLint fogMaskedDynamicLightTexture;
-		GLint fogMaskedClipPlane;
-		GLint fogMaskedClipPlaneEnabled;
 		GLint fogColor;
 		GLint fogDensity;
 		unsigned int frame;
@@ -422,7 +329,6 @@ namespace
 		unsigned int drawCalls;
 		unsigned int triangles;
 		unsigned int bufferReallocations;
-		unsigned int overflowPasses;
 		unsigned int materialHits;
 		unsigned int materialMisses;
 		unsigned int materialUploads;
@@ -484,13 +390,6 @@ namespace
 	static bool NativeWipeOverlayCollecting = false;
 	static GLuint NativeBoundProgram = 0;
 	static bool NativeProgramBindingKnown = false;
-	static GLuint NativeGlowPrograms[5] = {};
-	static GLint NativeGlowTopLocations[5] = { -1, -1, -1, -1, -1 };
-	static GLint NativeGlowBottomLocations[5] = { -1, -1, -1, -1, -1 };
-	static GLfloat NativeGlowTopValues[5][4] = {};
-	static GLfloat NativeGlowBottomValues[5][4] = {};
-	static bool NativeGlowValuesKnown[5] = {};
-
 	static void SetNativeFullViewport(int width, int height)
 	{
 		glViewport(0, 0, width, height);
@@ -498,50 +397,177 @@ namespace
 		glDisable(GL_SCISSOR_TEST);
 	}
 
-	static void ResetNativeGlowLocations()
+	struct FNativeDrawUniforms
 	{
-		memset(NativeGlowPrograms, 0, sizeof(NativeGlowPrograms));
-		for (int i = 0; i < 5; ++i)
+		GLint viewProjection;
+		GLint skyDepth, skyFog;
+		GLint textureUniform;
+		GLint brightmapUniform;
+		GLint useBrightmap;
+		GLint brightmapDesaturation;
+		GLint useTexture;
+		GLint model;
+		GLint textureTransform;
+		GLint cameraPosition;
+		GLint objectColor;
+		GLint materialFlags;
+		GLint fuzzTime;
+		GLint alphaCutoff;
+		GLint depthBias;
+		GLint fogColor;
+		GLint fogDensity;
+		GLint lightDataSampler;
+		GLint lightDataOffset;
+		GLint lightCounts;
+		GLint lightPlaneNormal;
+		GLint projectedLights;
+		GLint dynamicLightSampler;
+		GLint clipPlaneUniform;
+		GLint clipPlaneEnabledUniform;
+		GLint glowTop, glowBottom, staticLight, spriteLight, fogEnabled;
+		float top[4], bottom[4];
+		FShaderLightParameters lighting;
+		bool glowKnown, lightingKnown;
+	};
+	static std::unordered_map<GLuint, FNativeDrawUniforms> NativeDrawUniforms;
+
+	static FNativeDrawUniforms &GetNativeDrawUniforms(GLuint program)
+	{
+		auto found = NativeDrawUniforms.find(program);
+		if (found == NativeDrawUniforms.end())
 		{
-			NativeGlowTopLocations[i] = -1;
-			NativeGlowBottomLocations[i] = -1;
-			NativeGlowValuesKnown[i] = false;
+			FNativeDrawUniforms value = {};
+			value.viewProjection = glGetUniformLocation(program, "u_view_projection");
+			value.skyDepth = glGetUniformLocation(program, "u_sky_depth");
+			value.skyFog = glGetUniformLocation(program, "u_sky_fog");
+			value.textureUniform = glGetUniformLocation(program, "u_texture");
+			value.brightmapUniform = glGetUniformLocation(program, "u_brightmap");
+			value.useBrightmap = glGetUniformLocation(program, "u_use_brightmap");
+			value.brightmapDesaturation = glGetUniformLocation(program, "u_brightmap_desaturation");
+			value.useTexture = glGetUniformLocation(program, "u_use_texture");
+			value.model = glGetUniformLocation(program, "u_model");
+			value.textureTransform = glGetUniformLocation(program, "u_texture_transform");
+			value.cameraPosition = glGetUniformLocation(program, "u_camera_position");
+			value.objectColor = glGetUniformLocation(program, "u_object_color");
+			value.materialFlags = glGetUniformLocation(program, "u_material_flags");
+			value.fuzzTime = glGetUniformLocation(program, "u_fuzz_time");
+			value.alphaCutoff = glGetUniformLocation(program, "u_alpha_cutoff");
+			value.depthBias = glGetUniformLocation(program, "u_depth_bias");
+			value.fogColor = glGetUniformLocation(program, "u_fog_color");
+			value.fogDensity = glGetUniformLocation(program, "u_fog_density");
+			value.lightDataSampler = glGetUniformLocation(program, "u_light_data");
+			value.lightDataOffset = glGetUniformLocation(program, "u_light_offset");
+			value.lightCounts = glGetUniformLocation(program, "u_light_counts");
+			value.lightPlaneNormal = glGetUniformLocation(program, "u_light_plane_normal");
+			value.projectedLights = glGetUniformLocation(program, "u_projected_lights");
+			value.dynamicLightSampler = glGetUniformLocation(program, "u_dynamic_light_texture");
+			value.clipPlaneUniform = glGetUniformLocation(program, "u_clip_plane");
+			value.clipPlaneEnabledUniform = glGetUniformLocation(program, "u_clip_plane_enabled");
+			value.glowTop = glGetUniformLocation(program, "u_glow_top_color");
+			value.glowBottom = glGetUniformLocation(program, "u_glow_bottom_color");
+			value.staticLight = glGetUniformLocation(program, "u_static_light");
+			value.spriteLight = glGetUniformLocation(program, "u_sprite_light");
+			value.fogEnabled = glGetUniformLocation(program, "fogenabled");
+			found = NativeDrawUniforms.emplace(program, value).first;
 		}
+		return found->second;
 	}
+
+	static void ResetNativeDrawUniforms()
+	{
+		NativeDrawUniforms.clear();
+	}
+
 	static void SetNativeGlowUniforms(GLuint program, const FSceneBatch &batch)
 	{
-		int slot = -1;
-		const GLuint knownPrograms[5] =
-		{
-			Resources.sceneProgram, Resources.maskedProgram, Resources.paletteProgram,
-			Resources.fogProgram, Resources.fogMaskedProgram
-		};
-		for (int i = 0; i < 5; ++i)
-			if (knownPrograms[i] == program) { slot = i; break; }
-		if (slot < 0) return;
-		if (NativeGlowPrograms[slot] != program)
-		{
-			NativeGlowPrograms[slot] = program;
-			NativeGlowTopLocations[slot] = glGetUniformLocation(program, "u_glow_top_color");
-			NativeGlowBottomLocations[slot] = glGetUniformLocation(program, "u_glow_bottom_color");
-			NativeGlowValuesKnown[slot] = false;
-		}
-		const bool unchanged = NativeGlowValuesKnown[slot] &&
-			memcmp(NativeGlowTopValues[slot], batch.glowTopColor, sizeof(batch.glowTopColor)) == 0 &&
-			memcmp(NativeGlowBottomValues[slot], batch.glowBottomColor, sizeof(batch.glowBottomColor)) == 0;
-		if (unchanged)
+		FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+		if (uniforms.glowKnown && memcmp(uniforms.top, batch.glowTopColor, sizeof(uniforms.top)) == 0 &&
+			memcmp(uniforms.bottom, batch.glowBottomColor, sizeof(uniforms.bottom)) == 0)
 		{
 			++Resources.sceneGlowUniformUploadSkips;
 			return;
 		}
-		if (NativeGlowTopLocations[slot] >= 0)
-			glUniform4fv(NativeGlowTopLocations[slot], 1, batch.glowTopColor);
-		if (NativeGlowBottomLocations[slot] >= 0)
-			glUniform4fv(NativeGlowBottomLocations[slot], 1, batch.glowBottomColor);
-		memcpy(NativeGlowTopValues[slot], batch.glowTopColor, sizeof(batch.glowTopColor));
-		memcpy(NativeGlowBottomValues[slot], batch.glowBottomColor, sizeof(batch.glowBottomColor));
-		NativeGlowValuesKnown[slot] = true;
+		if (uniforms.glowTop >= 0) glUniform4fv(uniforms.glowTop, 1, batch.glowTopColor);
+		if (uniforms.glowBottom >= 0) glUniform4fv(uniforms.glowBottom, 1, batch.glowBottomColor);
+		memcpy(uniforms.top, batch.glowTopColor, sizeof(uniforms.top));
+		memcpy(uniforms.bottom, batch.glowBottomColor, sizeof(uniforms.bottom));
+		uniforms.glowKnown = true;
 		++Resources.sceneGlowUniformUploads;
+	}
+	struct FNativeMaterialUniforms
+	{
+		GLint effect;
+		GLint time;
+		GLint userTime, desaturation, colormapEnabled, colormapStart, colormapRange;
+		int shaderIndex;
+		float animationTime;
+		bool known;
+	};
+	static std::unordered_map<GLuint, FNativeMaterialUniforms> NativeMaterialUniforms;
+
+	static void SetNativeMaterialUniforms(GLuint program, const FSceneBatch &batch)
+	{
+		auto found = NativeMaterialUniforms.find(program);
+		if (found == NativeMaterialUniforms.end())
+		{
+			FNativeMaterialUniforms uniforms = {};
+			uniforms.effect = glGetUniformLocation(program, "u_material_effect");
+			uniforms.time = glGetUniformLocation(program, "u_material_time");
+			uniforms.userTime = glGetUniformLocation(program, "timer");
+			uniforms.desaturation = glGetUniformLocation(program, "desaturation_factor");
+			uniforms.colormapEnabled = glGetUniformLocation(program, "u_material_colormap");
+			uniforms.colormapStart = glGetUniformLocation(program, "colormapstart");
+			uniforms.colormapRange = glGetUniformLocation(program, "colormaprange");
+			found = NativeMaterialUniforms.emplace(program, uniforms).first;
+		}
+		FNativeMaterialUniforms &uniforms = found->second;
+		const unsigned int materialFlags = batch.materialFlags;
+		FGLESMaterialEffect effect = batch.materialEffect;
+		if ((materialFlags & GLES_MATERIAL_FUZZ) != 0)
+		{
+			effect.shaderIndex = 0;
+			effect.speed = 0.0f;
+		}
+		if ((materialFlags & GLES_MATERIAL_COLOR_FIXED) != 0)
+			effect.colormap = CM_DEFAULT;
+		const float animationTime = effect.speed > 0.0f ? gl_frameMS * effect.speed / 1000.0f : 0.0f;
+		if (!uniforms.known || uniforms.shaderIndex != effect.shaderIndex)
+			if (uniforms.effect >= 0) glUniform1i(uniforms.effect, effect.shaderIndex);
+		if (!uniforms.known || uniforms.animationTime != animationTime)
+			{
+				if (uniforms.time >= 0) glUniform1f(uniforms.time, animationTime);
+				if (uniforms.userTime >= 0) glUniform1f(uniforms.userTime, animationTime);
+			}
+		if (uniforms.desaturation >= 0) glUniform1f(uniforms.desaturation,
+			effect.colormap >= CM_DESAT1 && effect.colormap <= CM_DESAT31 ?
+				1.0f - float(effect.colormap - CM_DESAT0) / (CM_DESAT31 - CM_DESAT0) : 1.0f);
+		const bool special = effect.colormap >= CM_FIRSTSPECIALCOLORMAP && effect.colormap < CM_MAXCOLORMAP;
+		if (uniforms.colormapEnabled >= 0) glUniform1i(uniforms.colormapEnabled, special ? 1 : 0);
+		if (special)
+		{
+			const FSpecialColormap &map = SpecialColormaps[effect.colormap - CM_FIRSTSPECIALCOLORMAP];
+			const float range[3] = { map.ColorizeEnd[0] - map.ColorizeStart[0],
+				map.ColorizeEnd[1] - map.ColorizeStart[1], map.ColorizeEnd[2] - map.ColorizeStart[2] };
+			if (uniforms.colormapStart >= 0) glUniform3fv(uniforms.colormapStart, 1, map.ColorizeStart);
+			if (uniforms.colormapRange >= 0) glUniform3fv(uniforms.colormapRange, 1, range);
+		}
+		uniforms.shaderIndex = effect.shaderIndex;
+		uniforms.animationTime = animationTime;
+		uniforms.known = true;
+	}
+
+	static void SetNativeLightingUniforms(GLuint program, const FSceneBatch &batch)
+	{
+		const GLint fogEnabled = GetNativeDrawUniforms(program).fogEnabled;
+		if (fogEnabled >= 0) glUniform1i(fogEnabled, batch.fog ?
+			(batch.fogColor[0] == 0.0f && batch.fogColor[1] == 0.0f && batch.fogColor[2] == 0.0f ? gl_fogmode : -gl_fogmode) : 0);
+
+		FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+		if (uniforms.lightingKnown && memcmp(&uniforms.lighting, &batch.lighting, sizeof(batch.lighting)) == 0) return;
+		if (uniforms.staticLight >= 0) glUniform4fv(uniforms.staticLight, 1, &batch.lighting.level);
+		if (uniforms.spriteLight >= 0) glUniform3fv(uniforms.spriteLight, 1, batch.lighting.dynamic);
+		uniforms.lighting = batch.lighting;
+		uniforms.lightingKnown = true;
 	}
 	static std::vector<unsigned int> NativePortalCaptureStack;
 	// Bits 0 and 1 belong to the outer sky and flood masks. The remaining
@@ -665,8 +691,14 @@ namespace
 
 	static GLuint NativeSamplerForBatch(const FSceneBatch &batch)
 	{
-		if (batch.cameraTexture) return batch.repeat ? Resources.cameraSampler : Resources.sceneSampler;
-		return batch.repeat ? Resources.checkerSampler : Resources.sceneSampler;
+		unsigned int clamp = batch.repeat ? 0 : 3;
+		if (batch.materialFlags & GLES_MATERIAL_CLAMP_X) clamp |= 1;
+		if (batch.materialFlags & GLES_MATERIAL_CLAMP_Y) clamp |= 2;
+		if (batch.cameraTexture) clamp = 0;
+		if ((gl_GLESInternalGetMaterialFlags(batch.texture) & GLES_TEXTURE_FLAG_NOFILTER) != 0)
+			return Resources.nearestSamplers[clamp];
+		return batch.cameraTexture || !batch.repeat ?
+			Resources.sceneSamplers[clamp] : Resources.worldSamplers[clamp];
 	}
 
 	static GLuint BindNativeProgram(GLuint fallback, const char *name)
@@ -688,18 +720,130 @@ namespace
 		const char *defines = "")
 	{
 		char log[1024] = {};
-		GLuint program = gl_GLES_LinkProgram(vertexSource, fragmentSource, label, log, sizeof(log));
+		GLuint program = gl_GLES_LinkProgram(vertexSource, fragmentSource, label, log, sizeof(log), true);
 		if (program == 0)
 		{
 			DPrintf("Zandronum GLES %s defines:\n%s\nvertex source:\n%s\nfragment source:\n%s\n",
 				label, defines, vertexSource, fragmentSource);
+			Printf("Zandronum GLES %s program failed: %s\n", label, log);
 			I_FatalError("Zandronum GLES %s program failed: %s", label, log);
 		}
 		return program;
 	}
 
+	static std::string NativeMaterialVertexSource;
+	static std::string NativeMaterialFragmentSources[5];
+	static std::unordered_map<unsigned int, GLuint> NativeUserPrograms;
+
+	static GLuint ResolveNativeMaterialProgram(GLuint base, const FSceneBatch &batch)
+	{
+		const FGLESMaterialEffect effect = batch.materialEffect;
+		if (effect.shaderIndex < FIRST_USER_SHADER || (batch.materialFlags & GLES_MATERIAL_FUZZ) != 0) return base;
+		const unsigned int variant = batch.fog ? (batch.masked ? 4 : 3) : (batch.masked ? 1 : (batch.palette ? 2 : 0));
+		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 5 + variant;
+		const auto found = NativeUserPrograms.find(key);
+		if (found != NativeUserPrograms.end()) return found->second;
+		const char *path = gl_GetUserShaderPath(effect.shaderIndex);
+		if (path == NULL) I_FatalError("Zandronum GLES material shader index %d is invalid.", effect.shaderIndex);
+		const int lump = Wads.CheckNumForFullName(path);
+		if (lump < 0) I_FatalError("Zandronum GLES material shader '%s' is missing.", path);
+		FMemLump data = Wads.ReadLump(lump);
+		std::string fragment = NativeMaterialFragmentSources[variant];
+		if (fragment.find("in float v_camera_distance;") == std::string::npos)
+			fragment.insert(fragment.find("void main()"), "in float v_camera_distance;\n");
+		if (fragment.find("uniform vec3 u_camera_position;") == std::string::npos)
+			fragment.insert(fragment.find("void main()"), "uniform vec3 u_camera_position;\n");
+		if (fragment.find("uniform vec4 u_fog_color;") == std::string::npos)
+			fragment.insert(fragment.find("void main()"), "uniform vec4 u_fog_color;\n");
+		if (fragment.find("uniform float u_fog_density;") == std::string::npos)
+			fragment.insert(fragment.find("void main()"), "uniform float u_fog_density;\n");
+		if (fragment.find("uniform float u_alpha_cutoff;") == std::string::npos)
+			fragment.insert(fragment.find("void main()"), "uniform float u_alpha_cutoff;\n");
+		const std::string contract =
+			"uniform int fogenabled;\n"
+			"#define DOOMLIGHTFACTOR 232.0\n"
+			"#define fogcolor u_fog_color\n"
+			"#define fogparm vec4(u_static_light.y, u_static_light.z, -u_fog_density * 1.44269504089, 0.0)\n"
+			"#define topglowcolor u_glow_top_color\n"
+			"#define bottomglowcolor u_glow_bottom_color\n"
+			"#define glowdist v_glow_distance\n"
+			"#define texturemode ((u_material_flags & 64) != 0 ? 1 : ((u_material_flags & 4) != 0 ? 2 : 0))\n"
+			"vec4 zandronum_texcoord[1];\n"
+			"#define tex u_texture\n"
+			"#define texture2 u_brightmap\n"
+			"#define camerapos u_camera_position\n"
+			"#define pixelpos vec4(v_world_position, v_camera_distance)\n"
+			"#define lightlevel u_static_light.x\n"
+			"#define dlightcolor u_sprite_light\n"
+			"vec4 getLightColor(float fogdist, float fogfactor) { vec3 color = apply_static_light(v_color.rgb, fogdist); if (fogenabled > 0) color *= fogfactor; return vec4(apply_glow(color), v_color.a); }\n"
+			"vec4 applyFog(vec4 color, float factor) { return vec4(mix(u_fog_color.rgb, color.rgb, factor), color.a); }\n"
+			"vec4 getTexel(vec2 coords) { vec4 value = u_use_texture ? texture(u_texture, coords) : vec4(1.0); if ((u_material_flags & 4) != 0) value.a = 1.0; if ((u_material_flags & 64) != 0) value.rgb = vec3(1.0); return desaturate(value); }\n";
+		const std::string mainStart = "void main() {";
+		fragment.replace(fragment.find(mainStart), mainStart.size(), mainStart + " zandronum_texcoord[0] = vec4(v_uv, 0.0, 1.0);");
+		const std::string original = "vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a));";
+		fragment.replace(fragment.find(original), original.size(),
+			"vec4 color = Process(vec4(lighting, u_material_colormap ? 1.0 : v_color.a));");
+		const std::string earlyTest = "if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard;";
+		const size_t alphaTest = fragment.find(earlyTest);
+		if (alphaTest != std::string::npos)
+		{
+			fragment.erase(alphaTest, earlyTest.size());
+			fragment.insert(fragment.find("color.rgb += additive;"), "if (color.a <= 0.0 || color.a < u_alpha_cutoff) discard; ");
+		}
+		const std::string fogAlpha = "(1.0 - fog) * texel.a * 0.75 * v_color.a";
+		const size_t fogLayer = fragment.find(fogAlpha);
+		if (fogLayer != std::string::npos)
+			fragment.replace(fogLayer, fogAlpha.size(), "(1.0 - fog) * Process(vec4(1.0)).a * 0.75 * v_color.a");
+		fragment.insert(fragment.find("void main()"), contract + gl_GLES_LowerMaterialShader(data.GetString().GetChars()) + "\n");
+		const GLuint program = LinkProgram(NativeMaterialVertexSource.c_str(), fragment.c_str(), path);
+		NativeUserPrograms.emplace(key, program);
+		return program;
+	}
+
+
+	static FNativeDrawUniforms &BindNativeSkyMaterial(GLuint texture, const float *viewProjection, bool fog = false)
+	{
+		FSceneBatch batch = {};
+		batch.texture = texture;
+		batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
+		batch.lighting.level = batch.lighting.factor = 1.0f;
+		const GLuint program = ResolveNativeMaterialProgram(Resources.sceneProgram, batch);
+		BindNativeProgram(program, program == Resources.sceneProgram ? "gles/opaque" : NULL);
+		SetNativeMaterialUniforms(program, batch);
+		SetNativeLightingUniforms(program, batch);
+		SetNativeGlowUniforms(program, batch);
+		FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+		static const GLfloat identity[16] =
+		{
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		};
+		if (uniforms.viewProjection >= 0) glUniformMatrix4fv(uniforms.viewProjection, 1, GL_FALSE, viewProjection);
+		if (uniforms.model >= 0) glUniformMatrix4fv(uniforms.model, 1, GL_FALSE, identity);
+		if (uniforms.textureTransform >= 0) glUniform4f(uniforms.textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
+		if (uniforms.cameraPosition >= 0) glUniform3f(uniforms.cameraPosition, Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+		if (uniforms.skyDepth >= 0) glUniform1i(uniforms.skyDepth, 1);
+		if (uniforms.skyFog >= 0) glUniform1i(uniforms.skyFog, fog ? 1 : 0);
+		if (uniforms.materialFlags >= 0) glUniform1i(uniforms.materialFlags, 0);
+		if (uniforms.lightCounts >= 0) glUniform3i(uniforms.lightCounts, 0, 0, 0);
+		if (uniforms.projectedLights >= 0) glUniform1i(uniforms.projectedLights, 0);
+		if (uniforms.clipPlaneEnabledUniform >= 0) glUniform1i(uniforms.clipPlaneEnabledUniform, 0);
+		if (uniforms.useBrightmap >= 0) glUniform1i(uniforms.useBrightmap, 0);
+		if (uniforms.brightmapDesaturation >= 0) glUniform1i(uniforms.brightmapDesaturation, 0);
+		if (uniforms.textureUniform >= 0) glUniform1i(uniforms.textureUniform, 0);
+		if (uniforms.brightmapUniform >= 0) glUniform1i(uniforms.brightmapUniform, 1);
+		if (uniforms.fogColor >= 0) glUniform4f(uniforms.fogColor, 0.0f, 0.0f, 0.0f, 0.0f);
+		if (uniforms.fogDensity >= 0) glUniform1f(uniforms.fogDensity, 0.0f);
+		return uniforms;
+	}
+
 	static void DeleteResources(bool clearTextureCache)
 	{
+		for (const auto &program : NativeUserPrograms) glDeleteProgram(program.second);
+		NativeUserPrograms.clear();
+		gl_GLESInternalSceneDeleteLights();
 		gl_GLESInternalSceneInvalidateBuffers();
 		if (Resources.sceneProgram != 0) glDeleteProgram(Resources.sceneProgram);
 		if (Resources.simpleProgram != 0) glDeleteProgram(Resources.simpleProgram);
@@ -718,9 +862,9 @@ namespace
 		if (Resources.checkerTexture != 0) glDeleteTextures(1, &Resources.checkerTexture);
 		gl_GLESInternalWipeDestroy();
 		gl_GLESInternalDeleteMaterialTextures();
-		if (Resources.checkerSampler != 0) glDeleteSamplers(1, &Resources.checkerSampler);
-		if (Resources.sceneSampler != 0) glDeleteSamplers(1, &Resources.sceneSampler);
-		if (Resources.cameraSampler != 0) glDeleteSamplers(1, &Resources.cameraSampler);
+		glDeleteSamplers(4, Resources.worldSamplers);
+		glDeleteSamplers(4, Resources.sceneSamplers);
+		glDeleteSamplers(4, Resources.nearestSamplers);
 		gl_GLES_DestroyRenderTarget(&Resources.sceneTarget);
 		gl_GLES_DestroyRenderTarget(&Resources.cameraTarget);
 		Resources.sceneProgram = 0;
@@ -736,10 +880,11 @@ namespace
 		Resources.indexBuffer = 0;
 		Resources.vertexArray = 0;
 		Resources.checkerTexture = 0;
-		Resources.checkerSampler = 0;
-		Resources.sceneSampler = 0;
-		Resources.cameraSampler = 0;
+		memset(Resources.worldSamplers, 0, sizeof(Resources.worldSamplers));
+		memset(Resources.sceneSamplers, 0, sizeof(Resources.sceneSamplers));
+		memset(Resources.nearestSamplers, 0, sizeof(Resources.nearestSamplers));
 		Resources.textureFilter = -1;
+		Resources.textureAnisotropy = -1.0f;
 		Resources.sceneTarget = {};
 		Resources.cameraTarget = {};
 		Resources.viewContract = {};
@@ -747,7 +892,8 @@ namespace
 		NativeOffscreenRender = false;
 		PendingCameraTargetCreates = 0;
 		PendingCameraCopies = 0;
-		ResetNativeGlowLocations();
+		ResetNativeDrawUniforms();
+		NativeMaterialUniforms.clear();
 		Resources.sceneTextureUniform = -1;
 		Resources.sceneBrightmapUniform = -1;
 		Resources.sceneUseBrightmap = -1;
@@ -761,103 +907,10 @@ namespace
 		Resources.sceneSkyDepth = -1;
 		Resources.sceneSkyFog = -1;
 		Resources.sceneMaterialFlags = -1;
-		Resources.sceneLightPositionRadius = -1;
-		Resources.sceneLightColor = -1;
 		Resources.sceneLightCounts = -1;
-		Resources.sceneLightPlaneNormal = -1;
 		Resources.sceneProjectedLights = -1;
-		Resources.sceneDynamicLightTexture = -1;
 		Resources.sceneClipPlane = -1;
 		Resources.sceneClipPlaneEnabled = -1;
-		Resources.simpleTextureUniform = -1;
-		Resources.simpleViewProjection = -1;
-		Resources.simpleUseTexture = -1;
-		Resources.simpleModel = -1;
-		Resources.simpleTextureTransform = -1;
-		Resources.simpleCameraPosition = -1;
-		Resources.simpleObjectColor = -1;
-		Resources.simpleSkyDepth = -1;
-		Resources.simpleSkyFog = -1;
-		Resources.maskedTextureUniform = -1;
-		Resources.maskedBrightmapUniform = -1;
-		Resources.maskedUseBrightmap = -1;
-		Resources.maskedBrightmapDesaturation = -1;
-		Resources.maskedViewProjection = -1;
-		Resources.maskedUseTexture = -1;
-		Resources.maskedModel = -1;
-		Resources.maskedTextureTransform = -1;
-		Resources.maskedCameraPosition = -1;
-		Resources.maskedObjectColor = -1;
-		Resources.maskedAlphaCutoff = -1;
-		Resources.maskedMaterialFlags = -1;
-		Resources.maskedLightPositionRadius = -1;
-		Resources.maskedLightColor = -1;
-		Resources.maskedLightCounts = -1;
-		Resources.maskedLightPlaneNormal = -1;
-		Resources.maskedProjectedLights = -1;
-		Resources.maskedDynamicLightTexture = -1;
-		Resources.maskedClipPlane = -1;
-		Resources.maskedClipPlaneEnabled = -1;
-		Resources.paletteTextureUniform = -1;
-		Resources.paletteBrightmapUniform = -1;
-		Resources.paletteUseBrightmap = -1;
-		Resources.paletteBrightmapDesaturation = -1;
-		Resources.paletteViewProjection = -1;
-		Resources.paletteUseTexture = -1;
-		Resources.paletteModel = -1;
-		Resources.paletteTextureTransform = -1;
-		Resources.paletteCameraPosition = -1;
-		Resources.paletteObjectColor = -1;
-		Resources.paletteMaterialFlags = -1;
-		Resources.paletteLightPositionRadius = -1;
-		Resources.paletteLightColor = -1;
-		Resources.paletteLightCounts = -1;
-		Resources.paletteLightPlaneNormal = -1;
-		Resources.paletteProjectedLights = -1;
-		Resources.paletteDynamicLightTexture = -1;
-		Resources.paletteClipPlane = -1;
-		Resources.paletteClipPlaneEnabled = -1;
-		Resources.fogViewProjection = -1;
-		Resources.fogTextureUniform = -1;
-		Resources.fogBrightmapUniform = -1;
-		Resources.fogUseBrightmap = -1;
-		Resources.fogBrightmapDesaturation = -1;
-		Resources.fogUseTexture = -1;
-		Resources.fogModel = -1;
-		Resources.fogTextureTransform = -1;
-		Resources.fogCameraPosition = -1;
-		Resources.fogObjectColor = -1;
-		Resources.fogMaterialFlags = -1;
-		Resources.fogLightPositionRadius = -1;
-		Resources.fogLightColor = -1;
-		Resources.fogLightCounts = -1;
-		Resources.fogLightPlaneNormal = -1;
-		Resources.fogProjectedLights = -1;
-		Resources.fogDynamicLightTexture = -1;
-		Resources.fogClipPlane = -1;
-		Resources.fogClipPlaneEnabled = -1;
-		Resources.fogMaskedViewProjection = -1;
-		Resources.fogMaskedTextureUniform = -1;
-		Resources.fogMaskedBrightmapUniform = -1;
-		Resources.fogMaskedUseBrightmap = -1;
-		Resources.fogMaskedBrightmapDesaturation = -1;
-		Resources.fogMaskedUseTexture = -1;
-		Resources.fogMaskedModel = -1;
-		Resources.fogMaskedTextureTransform = -1;
-		Resources.fogMaskedCameraPosition = -1;
-		Resources.fogMaskedObjectColor = -1;
-		Resources.fogMaskedAlphaCutoff = -1;
-		Resources.fogMaskedMaterialFlags = -1;
-		Resources.fogMaskedColor = -1;
-		Resources.fogMaskedDensity = -1;
-		Resources.fogMaskedLightPositionRadius = -1;
-		Resources.fogMaskedLightColor = -1;
-		Resources.fogMaskedLightCounts = -1;
-		Resources.fogMaskedLightPlaneNormal = -1;
-		Resources.fogMaskedProjectedLights = -1;
-		Resources.fogMaskedDynamicLightTexture = -1;
-		Resources.fogMaskedClipPlane = -1;
-		Resources.fogMaskedClipPlaneEnabled = -1;
 		Resources.fogColor = -1;
 		Resources.fogDensity = -1;
 		Resources.sceneIndexCount = 0;
@@ -888,6 +941,7 @@ namespace
 
 	static void InvalidateResources()
 	{
+		NativeUserPrograms.clear();
 		gl_GLESInternalSceneInvalidateBuffers();
 		Resources.sceneProgram = 0;
 		Resources.simpleProgram = 0;
@@ -909,12 +963,14 @@ namespace
 		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
 		NativeOffscreenRender = false;
-		ResetNativeGlowLocations();
+		ResetNativeDrawUniforms();
+		NativeMaterialUniforms.clear();
 		gl_GLESInternalWipeContextLost();
-		Resources.checkerSampler = 0;
-		Resources.sceneSampler = 0;
-		Resources.cameraSampler = 0;
+		memset(Resources.worldSamplers, 0, sizeof(Resources.worldSamplers));
+		memset(Resources.sceneSamplers, 0, sizeof(Resources.sceneSamplers));
+		memset(Resources.nearestSamplers, 0, sizeof(Resources.nearestSamplers));
 		Resources.textureFilter = -1;
+		Resources.textureAnisotropy = -1.0f;
 		Resources.sceneTextureUniform = -1;
 		Resources.sceneBrightmapUniform = -1;
 		Resources.sceneUseBrightmap = -1;
@@ -928,103 +984,10 @@ namespace
 		Resources.sceneSkyDepth = -1;
 		Resources.sceneSkyFog = -1;
 		Resources.sceneMaterialFlags = -1;
-		Resources.sceneLightPositionRadius = -1;
-		Resources.sceneLightColor = -1;
 		Resources.sceneLightCounts = -1;
-		Resources.sceneLightPlaneNormal = -1;
 		Resources.sceneProjectedLights = -1;
-		Resources.sceneDynamicLightTexture = -1;
 		Resources.sceneClipPlane = -1;
 		Resources.sceneClipPlaneEnabled = -1;
-		Resources.simpleTextureUniform = -1;
-		Resources.simpleViewProjection = -1;
-		Resources.simpleUseTexture = -1;
-		Resources.simpleModel = -1;
-		Resources.simpleTextureTransform = -1;
-		Resources.simpleCameraPosition = -1;
-		Resources.simpleObjectColor = -1;
-		Resources.simpleSkyDepth = -1;
-		Resources.simpleSkyFog = -1;
-		Resources.maskedTextureUniform = -1;
-		Resources.maskedBrightmapUniform = -1;
-		Resources.maskedUseBrightmap = -1;
-		Resources.maskedBrightmapDesaturation = -1;
-		Resources.maskedViewProjection = -1;
-		Resources.maskedUseTexture = -1;
-		Resources.maskedModel = -1;
-		Resources.maskedTextureTransform = -1;
-		Resources.maskedCameraPosition = -1;
-		Resources.maskedObjectColor = -1;
-		Resources.maskedAlphaCutoff = -1;
-		Resources.maskedMaterialFlags = -1;
-		Resources.maskedLightPositionRadius = -1;
-		Resources.maskedLightColor = -1;
-		Resources.maskedLightCounts = -1;
-		Resources.maskedLightPlaneNormal = -1;
-		Resources.maskedProjectedLights = -1;
-		Resources.maskedDynamicLightTexture = -1;
-		Resources.maskedClipPlane = -1;
-		Resources.maskedClipPlaneEnabled = -1;
-		Resources.paletteTextureUniform = -1;
-		Resources.paletteBrightmapUniform = -1;
-		Resources.paletteUseBrightmap = -1;
-		Resources.paletteBrightmapDesaturation = -1;
-		Resources.paletteViewProjection = -1;
-		Resources.paletteUseTexture = -1;
-		Resources.paletteModel = -1;
-		Resources.paletteTextureTransform = -1;
-		Resources.paletteCameraPosition = -1;
-		Resources.paletteObjectColor = -1;
-		Resources.paletteMaterialFlags = -1;
-		Resources.paletteLightPositionRadius = -1;
-		Resources.paletteLightColor = -1;
-		Resources.paletteLightCounts = -1;
-		Resources.paletteLightPlaneNormal = -1;
-		Resources.paletteProjectedLights = -1;
-		Resources.paletteDynamicLightTexture = -1;
-		Resources.paletteClipPlane = -1;
-		Resources.paletteClipPlaneEnabled = -1;
-		Resources.fogViewProjection = -1;
-		Resources.fogTextureUniform = -1;
-		Resources.fogBrightmapUniform = -1;
-		Resources.fogUseBrightmap = -1;
-		Resources.fogBrightmapDesaturation = -1;
-		Resources.fogUseTexture = -1;
-		Resources.fogModel = -1;
-		Resources.fogTextureTransform = -1;
-		Resources.fogCameraPosition = -1;
-		Resources.fogObjectColor = -1;
-		Resources.fogMaterialFlags = -1;
-		Resources.fogLightPositionRadius = -1;
-		Resources.fogLightColor = -1;
-		Resources.fogLightCounts = -1;
-		Resources.fogLightPlaneNormal = -1;
-		Resources.fogProjectedLights = -1;
-		Resources.fogDynamicLightTexture = -1;
-		Resources.fogClipPlane = -1;
-		Resources.fogClipPlaneEnabled = -1;
-		Resources.fogMaskedViewProjection = -1;
-		Resources.fogMaskedTextureUniform = -1;
-		Resources.fogMaskedBrightmapUniform = -1;
-		Resources.fogMaskedUseBrightmap = -1;
-		Resources.fogMaskedBrightmapDesaturation = -1;
-		Resources.fogMaskedUseTexture = -1;
-		Resources.fogMaskedModel = -1;
-		Resources.fogMaskedTextureTransform = -1;
-		Resources.fogMaskedCameraPosition = -1;
-		Resources.fogMaskedObjectColor = -1;
-		Resources.fogMaskedAlphaCutoff = -1;
-		Resources.fogMaskedMaterialFlags = -1;
-		Resources.fogMaskedColor = -1;
-		Resources.fogMaskedDensity = -1;
-		Resources.fogMaskedLightPositionRadius = -1;
-		Resources.fogMaskedLightColor = -1;
-		Resources.fogMaskedLightCounts = -1;
-		Resources.fogMaskedLightPlaneNormal = -1;
-		Resources.fogMaskedProjectedLights = -1;
-		Resources.fogMaskedDynamicLightTexture = -1;
-		Resources.fogMaskedClipPlane = -1;
-		Resources.fogMaskedClipPlaneEnabled = -1;
 		Resources.fogColor = -1;
 		Resources.fogDensity = -1;
 		Resources.sceneIndexCount = 0;
@@ -1081,38 +1044,51 @@ namespace
 		glBindTexture(GL_TEXTURE_2D, 0);
 		CheckError("texture upload");
 
-		glGenSamplers(1, &Resources.checkerSampler);
-		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
-		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_WRAP_T, GL_REPEAT);
-		glGenSamplers(1, &Resources.sceneSampler);
-		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		glGenSamplers(1, &Resources.cameraSampler);
-		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
-		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		Resources.maximumAnisotropy = 1;
+		if (Capabilities.hasAnisotropicFiltering)
+			glGetIntegerv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &Resources.maximumAnisotropy);
+		glGenSamplers(4, Resources.worldSamplers);
+		glGenSamplers(4, Resources.sceneSamplers);
+		glGenSamplers(4, Resources.nearestSamplers);
+		for (unsigned int clamp = 0; clamp < 4; ++clamp)
+		{
+			const GLuint samplers[3] = { Resources.worldSamplers[clamp],
+				Resources.sceneSamplers[clamp], Resources.nearestSamplers[clamp] };
+			for (int kind = 0; kind < 3; ++kind)
+			{
+				glSamplerParameteri(samplers[kind], GL_TEXTURE_MIN_FILTER,
+					kind == 0 ? GL_LINEAR_MIPMAP_LINEAR : kind == 1 ? GL_LINEAR : GL_NEAREST);
+				glSamplerParameteri(samplers[kind], GL_TEXTURE_MAG_FILTER, kind == 2 ? GL_NEAREST : GL_LINEAR);
+				glSamplerParameteri(samplers[kind], GL_TEXTURE_WRAP_S, clamp & 1 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+				glSamplerParameteri(samplers[kind], GL_TEXTURE_WRAP_T, clamp & 2 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+			}
+		}
 		CheckError("sampler setup");
 	}
 
 	static void ConfigureNativeSamplers()
 	{
-		if (Resources.checkerSampler == 0 || Resources.sceneSampler == 0 || Resources.cameraSampler == 0) return;
+		if (Resources.worldSamplers[0] == 0 || Resources.sceneSamplers[0] == 0) return;
 		int filter = gl_texture_filter;
 		if (filter < 0 || filter >= 6) filter = 0;
-		if (Resources.textureFilter == filter) return;
+		const float anisotropy = std::max(1.0f, std::min(static_cast<float>(gl_texture_filter_anisotropic),
+			static_cast<float>(Resources.maximumAnisotropy)));
+		if (Resources.textureFilter == filter && Resources.textureAnisotropy == anisotropy) return;
 		const TexFilter_s &settings = TexFilter[filter];
-		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_MIN_FILTER, settings.minfilter);
-		glSamplerParameteri(Resources.checkerSampler, GL_TEXTURE_MAG_FILTER, settings.magfilter);
-		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MIN_FILTER, settings.minfilter);
-		glSamplerParameteri(Resources.sceneSampler, GL_TEXTURE_MAG_FILTER, settings.magfilter);
-		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MIN_FILTER, settings.minfilter);
-		glSamplerParameteri(Resources.cameraSampler, GL_TEXTURE_MAG_FILTER, settings.magfilter);
+		for (unsigned int clamp = 0; clamp < 4; ++clamp)
+		{
+			glSamplerParameteri(Resources.worldSamplers[clamp], GL_TEXTURE_MIN_FILTER, settings.minfilter);
+			glSamplerParameteri(Resources.worldSamplers[clamp], GL_TEXTURE_MAG_FILTER, settings.magfilter);
+			glSamplerParameteri(Resources.sceneSamplers[clamp], GL_TEXTURE_MIN_FILTER, settings.magfilter);
+			glSamplerParameteri(Resources.sceneSamplers[clamp], GL_TEXTURE_MAG_FILTER, settings.magfilter);
+			if (Capabilities.hasAnisotropicFiltering)
+			{
+				glSamplerParameterf(Resources.worldSamplers[clamp], GL_TEXTURE_MAX_ANISOTROPY_EXT, anisotropy);
+				glSamplerParameterf(Resources.sceneSamplers[clamp], GL_TEXTURE_MAX_ANISOTROPY_EXT, 1.0f);
+			}
+		}
 		Resources.textureFilter = filter;
+		Resources.textureAnisotropy = anisotropy;
 		CheckError("native texture filter setup");
 	}
 
@@ -1261,66 +1237,12 @@ namespace
 			return;
 		}
 		FGLESSceneLightSelection selection = {};
-		gl_GLESInternalSceneAppendLights(lightData, lightCounts, &selection);
+		if (!gl_GLESInternalSceneAppendLights(lightData, lightCounts, &selection))
+			I_FatalError("Zandronum GLES selected light data could not be retained.");
 		batch.lightOffset = selection.streamOffset;
 		batch.lightCount = selection.lightCount;
 		batch.lightNormalCount = selection.normalCount;
 		batch.lightSubtractiveCount = selection.subtractiveCount;
-	}
-
-	static void GetNativeLightUpload(const FSceneBatch &batch, unsigned int firstLight,
-		unsigned int maxLightCount,
-		const GLfloat *&positions, const GLfloat *&colors, unsigned int &normalCount,
-		unsigned int &subtractiveCount, unsigned int &lightCount)
-	{
-		FGLESSceneLightSelection selection = {};
-		selection.streamOffset = batch.lightOffset;
-		selection.lightCount = batch.lightCount;
-		selection.normalCount = batch.lightNormalCount;
-		selection.subtractiveCount = batch.lightSubtractiveCount;
-		FGLESSceneLightUpload upload = {};
-		gl_GLESInternalSceneGetLightUpload(selection, firstLight, maxLightCount, &upload);
-		positions = upload.positions;
-		colors = upload.colors;
-		normalCount = upload.normalCount;
-		subtractiveCount = upload.subtractiveCount;
-		lightCount = upload.lightCount;
-	}
-
-	static void DrawNativeLightOverflow(const FSceneBatch &batch, GLuint dynamicLightTexture,
-		GLuint program, GLint lightPositionRadius, GLint lightColor, GLint lightCounts,
-		GLint projectedLights, GLsizei indexCount, size_t firstIndex,
-		GLint depthFunction = -1, bool depthWriteKnown = false, bool depthWrite = true)
-	{
-		FGLESSceneLightPass pass = {};
-		pass.selection.streamOffset = batch.lightOffset;
-		pass.selection.lightCount = batch.lightCount;
-		pass.selection.normalCount = batch.lightNormalCount;
-		pass.selection.subtractiveCount = batch.lightSubtractiveCount;
-		memcpy(pass.planeNormal, batch.lightPlaneNormal, sizeof(pass.planeNormal));
-		pass.dynamicLightTexture = dynamicLightTexture;
-		pass.checkerTexture = Resources.checkerTexture;
-		pass.program = program;
-		pass.positionUniform = lightPositionRadius;
-		pass.colorUniform = lightColor;
-		pass.countsUniform = lightCounts;
-		pass.lightOnlyUniform = -1;
-		if (program == Resources.sceneProgram) pass.lightOnlyUniform = Resources.sceneLightOnlyMode;
-		else if (program == Resources.maskedProgram) pass.lightOnlyUniform = Resources.maskedLightOnlyMode;
-		else if (program == Resources.paletteProgram) pass.lightOnlyUniform = Resources.paletteLightOnlyMode;
-		else if (program == Resources.fogProgram) pass.lightOnlyUniform = Resources.fogLightOnlyMode;
-		else if (program == Resources.fogMaskedProgram) pass.lightOnlyUniform = Resources.fogMaskedLightOnlyMode;
-		pass.projectedUniform = projectedLights;
-		pass.depthFunction = depthFunction;
-		pass.depthStateKnown = depthWriteKnown && depthFunction >= 0;
-		pass.depthWrite = depthWrite;
-		pass.indexCount = indexCount;
-		pass.firstIndex = firstIndex;
-		pass.indexType = NativeSceneIndexType();
-		pass.indexStride = NativeSceneIndexStride();
-		pass.translucent = batch.translucent;
-		pass.blendMode = static_cast<int>(batch.blendMode);
-		gl_GLESInternalSceneDrawLightOverflow(pass);
 	}
 
 	static void SetLightPlaneNormal(FSceneBatch &batch, const FSceneVertex &a,
@@ -1360,8 +1282,11 @@ namespace
 		return static_cast<unsigned int>(Resources.sceneViewSnapshots.size() - 1);
 	}
 
+	static bool NativeSourceOrder = false;
+
 	static void CaptureBatchView(FSceneBatch &batch)
 	{
+		batch.sourceOrdered = NativeSourceOrder;
 		batch.viewSerial = Resources.viewSerial;
 		batch.clipSerial = Resources.clipSerial;
 		if (!Resources.sceneBatches.empty())
@@ -1395,14 +1320,18 @@ namespace
 		const FSceneViewSnapshot &batchView = BatchView(batch);
 		// Keep every order-sensitive path as its own command. Consecutive opaque
 		// world quads sharing the exact selected-light payload are safe to submit together.
-		return !previous.translucent && !batch.translucent &&
+		return !previous.sourceOrdered && !batch.sourceOrdered &&
+			!previous.translucent && !batch.translucent &&
 			previous.flat == batch.flat && !previous.hud && !batch.hud &&
 			!previous.wipeOverlay && !batch.wipeOverlay && !previous.model && !batch.model &&
 			!previous.cullBackFaces && !batch.cullBackFaces && !previous.skyMask && !batch.skyMask &&
 			!previous.flood && !batch.flood && !previous.portalMask && !batch.portalMask &&
 			previous.portalId < 0 && batch.portalId < 0 &&
 			previous.firstIndex + previous.indexCount == batch.firstIndex &&
-			previous.texture == batch.texture && previous.brightmap == batch.brightmap &&
+			previous.texture == batch.texture &&
+			previous.materialEffect.shaderIndex == batch.materialEffect.shaderIndex &&
+			previous.materialEffect.speed == batch.materialEffect.speed &&
+			previous.materialEffect.colormap == batch.materialEffect.colormap && previous.brightmap == batch.brightmap &&
 			previous.brightmapDesaturation == batch.brightmapDesaturation &&
 			previous.masked == batch.masked && previous.fog == batch.fog &&
 			previous.cameraTexture == batch.cameraTexture &&
@@ -1420,6 +1349,7 @@ namespace
 			previousView.clipPlaneEnabled == batchView.clipPlaneEnabled &&
 			memcmp(previous.fogColor, batch.fogColor, sizeof(batch.fogColor)) == 0 &&
 			previous.fogDensity == batch.fogDensity &&
+			memcmp(&previous.lighting, &batch.lighting, sizeof(batch.lighting)) == 0 &&
 			memcmp(previous.glowTopColor, batch.glowTopColor, sizeof(batch.glowTopColor)) == 0 &&
 			memcmp(previous.glowBottomColor, batch.glowBottomColor, sizeof(batch.glowBottomColor)) == 0 &&
 			previous.viewSerial == batch.viewSerial &&
@@ -1437,6 +1367,7 @@ namespace
 		HashSceneOrderValue(batch.masked);
 		HashSceneOrderValue(batch.fog);
 		HashSceneOrderValue(batch.translucent);
+		HashSceneOrderValue(batch.sourceOrdered);
 		HashSceneOrderValue(batch.flat);
 		HashSceneOrderValue(batch.hud);
 		HashSceneOrderValue(batch.wipeOverlay);
@@ -1484,7 +1415,7 @@ namespace
 		int brightmapDesaturation = 0, const float *topGlowColor = NULL,
 		const float *bottomGlowColor = NULL, bool customBlend = false,
 		GLenum sourceBlend = GL_SRC_ALPHA, GLenum destinationBlend = GL_ONE_MINUS_SRC_ALPHA,
-	float alphaCutoff = 0.5f, bool hud = false)
+	float alphaCutoff = 0.5f, bool hud = false, const FShaderLightParameters *lighting = NULL)
 	{
 		if (!CanAppendSceneGeometry(4, 6, "quad")) return;
 		const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
@@ -1517,9 +1448,11 @@ namespace
 		const float dz = centerZ - Resources.cameraZ;
 		FSceneBatch batch = {};
 		CaptureBatchView(batch);
+		if (lighting != NULL) batch.lighting = *lighting;
 		batch.firstIndex = firstIndex;
 		batch.indexCount = 6;
 		batch.texture = texture;
+		batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 		batch.brightmap = brightmap;
 		batch.brightmapDesaturation = brightmapDesaturation;
 		batch.masked = masked;
@@ -1541,6 +1474,13 @@ namespace
 		if (batch.lightCount > 0)
 			SetLightPlaneNormal(batch, a, b, c);
 		batch.sortDepth = dx * dx + dy * dy + dz * dz;
+		if ((materialFlags & GLES_MATERIAL_MIRROR_DECAL) != 0 && !Resources.sceneBatches.empty())
+		{
+			const FSceneBatch &surface = Resources.sceneBatches.back();
+			if (surface.portalId == batch.portalId && surface.viewSerial == batch.viewSerial &&
+				(surface.materialFlags & (GLES_MATERIAL_SPHERE_MAP | GLES_MATERIAL_MIRROR_DECAL)) != 0)
+				batch.sortDepth = surface.sortDepth;
+		}
 		if (fogColor != NULL)
 		{
 			batch.fogColor[0] = ClampUnit(fogColor[0]);
@@ -1548,6 +1488,7 @@ namespace
 			batch.fogColor[2] = ClampUnit(fogColor[2]);
 		}
 		batch.fogDensity = std::max(0.0f, fogDensity);
+		if (topGlowColor != NULL || bottomGlowColor != NULL) batch.materialFlags |= GLES_MATERIAL_GLOW;
 		if (topGlowColor != NULL) memcpy(batch.glowTopColor, topGlowColor, sizeof(batch.glowTopColor));
 		if (bottomGlowColor != NULL) memcpy(batch.glowBottomColor, bottomGlowColor, sizeof(batch.glowBottomColor));
 		AppendOpaqueBatch(batch);
@@ -1557,13 +1498,13 @@ namespace
 		const FSceneVertex &c, const FSceneVertex &d, GLuint texture, bool masked,
 		EGLESBlendMode blendMode, unsigned int materialFlags, bool customBlend = false,
 		GLenum sourceBlend = GL_SRC_ALPHA, GLenum destinationBlend = GL_ONE_MINUS_SRC_ALPHA,
-		float alphaCutoff = 0.5f)
+		float alphaCutoff = 0.5f, GLuint brightmap = 0, int brightmapDesaturation = 0)
 	{
 		const size_t batchCount = Resources.sceneBatches.size();
 		const bool translucent = masked || blendMode != GLES_BLEND_OPAQUE || a.a < 0.999f ||
 			b.a < 0.999f || c.a < 0.999f || d.a < 0.999f;
 		AddSceneQuad(a, b, c, d, texture, masked, false, translucent, false, blendMode, NULL, 0.0f, materialFlags,
-			NULL, NULL, 0, 0, NULL, NULL, customBlend, sourceBlend, destinationBlend, alphaCutoff, true);
+			NULL, NULL, brightmap, brightmapDesaturation, NULL, NULL, customBlend, sourceBlend, destinationBlend, alphaCutoff, true);
 		if (Resources.sceneBatches.size() <= batchCount) return;
 		FSceneBatch &batch = Resources.sceneBatches.back();
 		if (!batch.wipeOverlay || Resources.sceneBatches.size() < 2) return;
@@ -1573,7 +1514,10 @@ namespace
 		const FSceneViewSnapshot &batchView = BatchView(batch);
 		const bool compatible = previous.hud && previous.wipeOverlay &&
 			previous.firstIndex + previous.indexCount == batch.firstIndex &&
-			previous.texture == batch.texture && previous.brightmap == batch.brightmap &&
+			previous.texture == batch.texture &&
+			previous.materialEffect.shaderIndex == batch.materialEffect.shaderIndex &&
+			previous.materialEffect.speed == batch.materialEffect.speed &&
+			previous.materialEffect.colormap == batch.materialEffect.colormap && previous.brightmap == batch.brightmap &&
 			previous.brightmapDesaturation == batch.brightmapDesaturation &&
 			previous.masked == batch.masked && previous.fog == batch.fog &&
 			previous.cameraTexture == batch.cameraTexture &&
@@ -1597,6 +1541,12 @@ namespace
 	static void SetNativeDecalDepthBias(const FSceneBatch &batch, bool enabled)
 	{
 		if ((batch.materialFlags & GLES_MATERIAL_DECAL) == 0) return;
+		if (!gl_GLES_GetContextInfo().hasDepthClamp)
+		{
+			const GLint bias = GetNativeDrawUniforms(NativeBoundProgram).depthBias;
+			if (bias >= 0) glUniform4f(bias, enabled ? -1.0f : 0.0f, enabled ? -128.0f : 0.0f, 0.0f, 0.0f);
+			return;
+		}
 		if (enabled)
 		{
 			glEnable(GL_POLYGON_OFFSET_FILL);
@@ -1620,12 +1570,17 @@ namespace
 			!batch.translucent && !batch.hud && !batch.model && !batch.flood &&
 			!batch.skyMask && !batch.portalMask && !batch.wipeOverlay && batch.portalId < 0 &&
 			batch.materialFlags == 0 && batch.brightmap == 0 && batch.lightCount == 0 &&
+			batch.lighting.software == 0.0f && batch.lighting.distance == 0.0f &&
+			batch.materialEffect.shaderIndex == 0 &&
+			batch.materialEffect.colormap == CM_DEFAULT &&
 			!BatchView(batch).clipPlaneEnabled && !batch.customBlend && batch.blendMode == GLES_BLEND_OPAQUE &&
 			batch.glowTopColor[3] <= 0.0f && batch.glowBottomColor[3] <= 0.0f;
 	}
 
 	static void UploadSceneGeometry()
 	{
+		if (!gl_GLESInternalSceneUploadLights())
+			I_FatalError("Zandronum GLES light data could not be uploaded.");
 		Resources.sceneIndexCount = static_cast<GLsizei>(Resources.sceneIndices.size());
 		Resources.sceneReady = Resources.sceneIndexCount > 0;
 		if (!Resources.sceneReady) return;
@@ -1725,6 +1680,8 @@ namespace
 
 	static bool BuildResources(int width, int height)
 	{
+		if (developer) DPrintf("GLES depth: %s\n", gl_GLES_GetContextInfo().hasDepthClamp ?
+			"native depth clamping available" : "shader depth clamping enabled");
 		static const char *sceneVertexSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1745,7 +1702,7 @@ namespace
 			"out vec3 v_world_position;\n"
 			"out float v_camera_distance;\n"
 			"out vec2 v_glow_distance;\n"
-			"void main() { vec4 world_position = u_model * vec4(a_position, 1.0); gl_Position = u_view_projection * world_position; if (u_sky_depth) gl_Position.z = clamp(gl_Position.z, -gl_Position.w, gl_Position.w); v_world_position = world_position.xyz; v_uv = a_uv * u_texture_transform.xy + u_texture_transform.zw; v_color = vec4(a_color.rgb * u_object_color.rgb, (u_sky_fog ? 1.0 : a_color.a) * u_object_color.a); v_camera_distance = distance(world_position.xyz, u_camera_position); v_glow_distance = a_secondary; }\n";
+			"void main() { vec4 world_position = u_model * vec4(a_position, 1.0); gl_Position = u_view_projection * world_position; if (u_sky_depth) gl_Position.z = gl_Position.w; v_world_position = world_position.xyz; v_uv = a_uv * u_texture_transform.xy + u_texture_transform.zw; v_color = vec4(a_color.rgb * u_object_color.rgb, (u_sky_fog ? 1.0 : a_color.a) * u_object_color.a); v_camera_distance = gl_Position.w; v_glow_distance = a_secondary; }\n";
 		static const char *sceneFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1759,12 +1716,16 @@ namespace
 			"uniform bool u_use_texture;\n"
 			"uniform bool u_use_brightmap;\n"
 			"uniform int u_brightmap_desaturation;\n"
-			"uniform int u_material_flags;\n"
+			"uniform float desaturation_factor;\n"
+			"uniform bool u_material_colormap;\n"
+			"uniform vec3 colormapstart;\n"
+			"uniform vec3 colormaprange;\n"
+			"vec4 desaturate(vec4 value) { float gray = dot(value.rgb, vec3(0.3, 0.56, 0.14)); return mix(vec4(gray, gray, gray, value.a), value, desaturation_factor); }\n"
+			"uniform highp int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[32];\n"
-			"uniform vec4 u_light_color[32];\n"
-			"uniform ivec3 u_light_counts;\n"
-			"uniform int u_light_only_mode;\n"
+			"uniform highp sampler2D u_light_data;\n"
+			"uniform highp int u_light_offset;\n"
+			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1772,10 +1733,17 @@ namespace
 			"uniform bool u_clip_plane_enabled;\n"
 			"uniform vec4 u_glow_top_color;\n"
 			"uniform vec4 u_glow_bottom_color;\n"
+			"uniform vec4 u_static_light;\n"
+			"uniform vec3 u_sprite_light;\n"
+			"uniform bool u_sky_depth;\n"
+			"uniform highp int u_material_effect;\n"
+			"uniform float u_material_time;\n"
+			"vec2 material_uv(vec2 coords) { const float pi = 3.14159265358979323846; vec2 offset = vec2(0.0); if (u_material_effect == 1) { offset.y = sin(pi * 2.0 * (coords.x + u_material_time * 0.125)) * 0.1; offset.x = sin(pi * 2.0 * (coords.y + u_material_time * 0.125)) * 0.1; } else if (u_material_effect == 2) { float siny = sin(pi * 2.0 * (coords.y * 2.2 + u_material_time * 0.75)) * 0.03; offset.y = siny + sin(pi * 2.0 * (coords.x * 0.75 + u_material_time * 0.75)) * 0.03; offset.x = siny + sin(pi * 2.0 * (coords.x * 1.1 + u_material_time * 0.45)) * 0.02; } return coords + offset; }\n"
+			"vec3 apply_static_light(vec3 color, float fogDistance) { if (u_sky_depth) return color; if (u_static_light.w > 0.0) { float L = u_static_light.x * 63.0 / 31.0; float minL = clamp(36.0 / 31.0 - L, 0.0, 1.0); float scale = 1.0 / max(gl_FragCoord.z, 0.0001); float index = (59.0 / 31.0 - L) - (scale * 232.0 / 31.0 - 232.0 / 31.0); float light = 1.0 - clamp(index, minL, 1.0); color *= clamp(vec3(light) + u_sprite_light, vec3(0.0), vec3(1.0)); } else if (u_static_light.z > 0.0 && fogDistance < u_static_light.z) color *= u_static_light.y - (fogDistance / u_static_light.z) * (u_static_light.y - 1.0); return color; }\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
-			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
+			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; texel = desaturate(texel); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  frag_color = color; }\n";
 		static const char *simpleFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1798,13 +1766,17 @@ namespace
 			"uniform bool u_use_texture;\n"
 			"uniform bool u_use_brightmap;\n"
 			"uniform int u_brightmap_desaturation;\n"
+			"uniform float desaturation_factor;\n"
+			"uniform bool u_material_colormap;\n"
+			"uniform vec3 colormapstart;\n"
+			"uniform vec3 colormaprange;\n"
+			"vec4 desaturate(vec4 value) { float gray = dot(value.rgb, vec3(0.3, 0.56, 0.14)); return mix(vec4(gray, gray, gray, value.a), value, desaturation_factor); }\n"
 			"uniform float u_alpha_cutoff;\n"
-			"uniform int u_material_flags;\n"
+			"uniform highp int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[32];\n"
-			"uniform vec4 u_light_color[32];\n"
-			"uniform ivec3 u_light_counts;\n"
-			"uniform int u_light_only_mode;\n"
+			"uniform highp sampler2D u_light_data;\n"
+			"uniform highp int u_light_offset;\n"
+			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1812,10 +1784,17 @@ namespace
 			"uniform bool u_clip_plane_enabled;\n"
 			"uniform vec4 u_glow_top_color;\n"
 			"uniform vec4 u_glow_bottom_color;\n"
+			"uniform vec4 u_static_light;\n"
+			"uniform vec3 u_sprite_light;\n"
+			"uniform bool u_sky_depth;\n"
+			"uniform highp int u_material_effect;\n"
+			"uniform float u_material_time;\n"
+			"vec2 material_uv(vec2 coords) { const float pi = 3.14159265358979323846; vec2 offset = vec2(0.0); if (u_material_effect == 1) { offset.y = sin(pi * 2.0 * (coords.x + u_material_time * 0.125)) * 0.1; offset.x = sin(pi * 2.0 * (coords.y + u_material_time * 0.125)) * 0.1; } else if (u_material_effect == 2) { float siny = sin(pi * 2.0 * (coords.y * 2.2 + u_material_time * 0.75)) * 0.03; offset.y = siny + sin(pi * 2.0 * (coords.x * 0.75 + u_material_time * 0.75)) * 0.03; offset.x = siny + sin(pi * 2.0 * (coords.x * 1.1 + u_material_time * 0.45)) * 0.02; } return coords + offset; }\n"
+			"vec3 apply_static_light(vec3 color, float fogDistance) { if (u_sky_depth) return color; if (u_static_light.w > 0.0) { float L = u_static_light.x * 63.0 / 31.0; float minL = clamp(36.0 / 31.0 - L, 0.0, 1.0); float scale = 1.0 / max(gl_FragCoord.z, 0.0001); float index = (59.0 / 31.0 - L) - (scale * 232.0 / 31.0 - 232.0 / 31.0); float light = 1.0 - clamp(index, minL, 1.0); color *= clamp(vec3(light) + u_sprite_light, vec3(0.0), vec3(1.0)); } else if (u_static_light.z > 0.0 && fogDistance < u_static_light.z) color *= u_static_light.y - (fogDistance / u_static_light.z) * (u_static_light.y - 1.0); return color; }\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
-			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
+			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  frag_color = color; }\n";
 		static const char *fogFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1830,14 +1809,19 @@ namespace
 			"uniform bool u_use_texture;\n"
 			"uniform bool u_use_brightmap;\n"
 			"uniform int u_brightmap_desaturation;\n"
+			"uniform float desaturation_factor;\n"
+			"uniform bool u_material_colormap;\n"
+			"uniform vec3 colormapstart;\n"
+			"uniform vec3 colormaprange;\n"
+			"vec4 desaturate(vec4 value) { float gray = dot(value.rgb, vec3(0.3, 0.56, 0.14)); return mix(vec4(gray, gray, gray, value.a), value, desaturation_factor); }\n"
 			"uniform vec4 u_fog_color;\n"
 			"uniform float u_fog_density;\n"
-			"uniform int u_material_flags;\n"
+			"uniform vec3 u_camera_position;\n"
+			"uniform highp int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[32];\n"
-			"uniform vec4 u_light_color[32];\n"
-			"uniform ivec3 u_light_counts;\n"
-			"uniform int u_light_only_mode;\n"
+			"uniform highp sampler2D u_light_data;\n"
+			"uniform highp int u_light_offset;\n"
+			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1845,10 +1829,17 @@ namespace
 			"uniform bool u_clip_plane_enabled;\n"
 			"uniform vec4 u_glow_top_color;\n"
 			"uniform vec4 u_glow_bottom_color;\n"
+			"uniform vec4 u_static_light;\n"
+			"uniform vec3 u_sprite_light;\n"
+			"uniform bool u_sky_depth;\n"
+			"uniform highp int u_material_effect;\n"
+			"uniform float u_material_time;\n"
+			"vec2 material_uv(vec2 coords) { const float pi = 3.14159265358979323846; vec2 offset = vec2(0.0); if (u_material_effect == 1) { offset.y = sin(pi * 2.0 * (coords.x + u_material_time * 0.125)) * 0.1; offset.x = sin(pi * 2.0 * (coords.y + u_material_time * 0.125)) * 0.1; } else if (u_material_effect == 2) { float siny = sin(pi * 2.0 * (coords.y * 2.2 + u_material_time * 0.75)) * 0.03; offset.y = siny + sin(pi * 2.0 * (coords.x * 0.75 + u_material_time * 0.75)) * 0.03; offset.x = siny + sin(pi * 2.0 * (coords.x * 1.1 + u_material_time * 0.45)) * 0.02; } return coords + offset; }\n"
+			"vec3 apply_static_light(vec3 color, float fogDistance) { if (u_sky_depth) return color; if (u_static_light.w > 0.0) { float L = u_static_light.x * 63.0 / 31.0; float minL = clamp(36.0 / 31.0 - L, 0.0, 1.0); float scale = 1.0 / max(gl_FragCoord.z, 0.0001); float index = (59.0 / 31.0 - L) - (scale * 232.0 / 31.0 - 232.0 / 31.0); float light = 1.0 - clamp(index, minL, 1.0); color *= clamp(vec3(light) + u_sprite_light, vec3(0.0), vec3(1.0)); } else if (u_static_light.z > 0.0 && fogDistance < u_static_light.z) color *= u_static_light.y - (fogDistance / u_static_light.z) * (u_static_light.y - 1.0); return color; }\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
-			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
+			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; texel = desaturate(texel); float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); frag_color = color; }\n";
 		static const char *fogMaskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1863,15 +1854,20 @@ namespace
 			"uniform bool u_use_texture;\n"
 			"uniform bool u_use_brightmap;\n"
 			"uniform int u_brightmap_desaturation;\n"
+			"uniform float desaturation_factor;\n"
+			"uniform bool u_material_colormap;\n"
+			"uniform vec3 colormapstart;\n"
+			"uniform vec3 colormaprange;\n"
+			"vec4 desaturate(vec4 value) { float gray = dot(value.rgb, vec3(0.3, 0.56, 0.14)); return mix(vec4(gray, gray, gray, value.a), value, desaturation_factor); }\n"
 			"uniform vec4 u_fog_color;\n"
 			"uniform float u_fog_density;\n"
+			"uniform vec3 u_camera_position;\n"
 			"uniform float u_alpha_cutoff;\n"
-			"uniform int u_material_flags;\n"
+			"uniform highp int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[32];\n"
-			"uniform vec4 u_light_color[32];\n"
-			"uniform ivec3 u_light_counts;\n"
-			"uniform int u_light_only_mode;\n"
+			"uniform highp sampler2D u_light_data;\n"
+			"uniform highp int u_light_offset;\n"
+			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1879,10 +1875,17 @@ namespace
 			"uniform bool u_clip_plane_enabled;\n"
 			"uniform vec4 u_glow_top_color;\n"
 			"uniform vec4 u_glow_bottom_color;\n"
+			"uniform vec4 u_static_light;\n"
+			"uniform vec3 u_sprite_light;\n"
+			"uniform bool u_sky_depth;\n"
+			"uniform highp int u_material_effect;\n"
+			"uniform float u_material_time;\n"
+			"vec2 material_uv(vec2 coords) { const float pi = 3.14159265358979323846; vec2 offset = vec2(0.0); if (u_material_effect == 1) { offset.y = sin(pi * 2.0 * (coords.x + u_material_time * 0.125)) * 0.1; offset.x = sin(pi * 2.0 * (coords.y + u_material_time * 0.125)) * 0.1; } else if (u_material_effect == 2) { float siny = sin(pi * 2.0 * (coords.y * 2.2 + u_material_time * 0.75)) * 0.03; offset.y = siny + sin(pi * 2.0 * (coords.x * 0.75 + u_material_time * 0.75)) * 0.03; offset.x = siny + sin(pi * 2.0 * (coords.x * 1.1 + u_material_time * 0.45)) * 0.02; } return coords + offset; }\n"
+			"vec3 apply_static_light(vec3 color, float fogDistance) { if (u_sky_depth) return color; if (u_static_light.w > 0.0) { float L = u_static_light.x * 63.0 / 31.0; float minL = clamp(36.0 / 31.0 - L, 0.0, 1.0); float scale = 1.0 / max(gl_FragCoord.z, 0.0001); float index = (59.0 / 31.0 - L) - (scale * 232.0 / 31.0 - 232.0 / 31.0); float light = 1.0 - clamp(index, minL, 1.0); color *= clamp(vec3(light) + u_sprite_light, vec3(0.0), vec3(1.0)); } else if (u_static_light.z > 0.0 && fogDistance < u_static_light.z) color *= u_static_light.y - (fogDistance / u_static_light.z) * (u_static_light.y - 1.0); return color; }\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
-			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; float fog = clamp(exp(-u_fog_density * v_camera_distance), 0.0, 1.0); color.rgb = apply_glow(mix(u_fog_color.rgb, color.rgb, fog)); frag_color = color; }\n";
+			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); frag_color = color; }\n";
 		static const char *paletteFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1896,12 +1899,16 @@ namespace
 			"uniform bool u_use_texture;\n"
 			"uniform bool u_use_brightmap;\n"
 			"uniform int u_brightmap_desaturation;\n"
-			"uniform int u_material_flags;\n"
+			"uniform float desaturation_factor;\n"
+			"uniform bool u_material_colormap;\n"
+			"uniform vec3 colormapstart;\n"
+			"uniform vec3 colormaprange;\n"
+			"vec4 desaturate(vec4 value) { float gray = dot(value.rgb, vec3(0.3, 0.56, 0.14)); return mix(vec4(gray, gray, gray, value.a), value, desaturation_factor); }\n"
+			"uniform highp int u_material_flags;\n"
 			"uniform float u_fuzz_time;\n"
-			"uniform vec4 u_light_position_radius[32];\n"
-			"uniform vec4 u_light_color[32];\n"
-			"uniform ivec3 u_light_counts;\n"
-			"uniform int u_light_only_mode;\n"
+			"uniform highp sampler2D u_light_data;\n"
+			"uniform highp int u_light_offset;\n"
+			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1909,10 +1916,20 @@ namespace
 			"uniform bool u_clip_plane_enabled;\n"
 			"uniform vec4 u_glow_top_color;\n"
 			"uniform vec4 u_glow_bottom_color;\n"
+			"uniform vec4 u_static_light;\n"
+			"uniform vec3 u_sprite_light;\n"
+			"uniform bool u_sky_depth;\n"
+			"uniform highp int u_material_effect;\n"
+			"uniform float u_material_time;\n"
+			"vec2 material_uv(vec2 coords) { const float pi = 3.14159265358979323846; vec2 offset = vec2(0.0); if (u_material_effect == 1) { offset.y = sin(pi * 2.0 * (coords.x + u_material_time * 0.125)) * 0.1; offset.x = sin(pi * 2.0 * (coords.y + u_material_time * 0.125)) * 0.1; } else if (u_material_effect == 2) { float siny = sin(pi * 2.0 * (coords.y * 2.2 + u_material_time * 0.75)) * 0.03; offset.y = siny + sin(pi * 2.0 * (coords.x * 0.75 + u_material_time * 0.75)) * 0.03; offset.x = siny + sin(pi * 2.0 * (coords.x * 1.1 + u_material_time * 0.45)) * 0.02; } return coords + offset; }\n"
+			"vec3 apply_static_light(vec3 color, float fogDistance) { if (u_sky_depth) return color; if (u_static_light.w > 0.0) { float L = u_static_light.x * 63.0 / 31.0; float minL = clamp(36.0 / 31.0 - L, 0.0, 1.0); float scale = 1.0 / max(gl_FragCoord.z, 0.0001); float index = (59.0 / 31.0 - L) - (scale * 232.0 / 31.0 - 232.0 / 31.0); float light = 1.0 - clamp(index, minL, 1.0); color *= clamp(vec3(light) + u_sprite_light, vec3(0.0), vec3(1.0)); } else if (u_static_light.z > 0.0 && fogDistance < u_static_light.z) color *= u_static_light.y - (fogDistance / u_static_light.z) * (u_static_light.y - 1.0); return color; }\n"
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
-			"vec3 apply_glow(vec3 color) { if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (int i = 0; i < 32; ++i) { if (i >= u_light_counts.z) break; vec3 delta = v_world_position - u_light_position_radius[i].xyz; float radius = max(u_light_position_radius[i].w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = u_light_color[i].rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } if (u_light_only_mode == 1) lighting = regular; else if (u_light_only_mode == 2) lighting = subtractive; else if (u_light_only_mode == 3) lighting = additive; else lighting = clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec4 texel = u_use_texture ? texture(u_texture, v_uv) : vec4(1.0); if ((u_material_flags & 32) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(v_color.rgb, lighting, additive); if (u_light_only_mode != 0) { frag_color = vec4(lighting, 0.0); return; } if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * v_color.a); if ((u_material_flags & 1) != 0) { color.a = texel.a * v_color.a; color.rgb = lighting; } if ((u_material_flags & 2) != 0) color.rgb = vec3(1.0) - color.rgb; if ((u_material_flags & 4) != 0) color.rgb *= (1.0 - color.a); if ((u_material_flags & 16) != 0) { color.rgb = v_color.rgb; color.a = texel.a * v_color.a; } if ((u_material_flags & 8) != 0) { vec2 texCoord = floor(v_uv * 128.0) / 128.0; float texX = texCoord.x / 3.0 + 0.66; float texY = 0.34 - texCoord.y / 3.0; float vX = (texX / texY) * 21.0; float vY = (texY / texX) * 13.0; float fuzz = mod(u_fuzz_time * 2.0 + vX + vY, 0.5); color.rgb = vec3(0.0); color.a *= fuzz; } color.rgb += additive; color.rgb = apply_glow(color.rgb); frag_color = color; }\n";
+			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += u_glow_top_color.rgb * (1.0 - v_glow_distance.x / u_glow_top_color.a); if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += u_glow_bottom_color.rgb * (1.0 - v_glow_distance.y / u_glow_bottom_color.a); return min(color, vec3(1.0)); }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; texel = desaturate(texel); texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  frag_color = color; }\n";
+		NativeMaterialVertexSource = sceneVertexSource;
+		const char *materialSources[] = { sceneFragmentSource, maskedFragmentSource, paletteFragmentSource, fogFragmentSource, fogMaskedFragmentSource };
+		for (int i = 0; i < 5; ++i) NativeMaterialFragmentSources[i] = materialSources[i];
 		Resources.sceneProgram = LinkProgram(sceneVertexSource, sceneFragmentSource, "opaque scene");
 		Resources.simpleProgram = LinkProgram(sceneVertexSource, simpleFragmentSource, "simple opaque scene");
 		Resources.maskedProgram = LinkProgram(sceneVertexSource, maskedFragmentSource, "masked scene");
@@ -1935,115 +1952,12 @@ namespace
 		Resources.sceneSkyDepth = glGetUniformLocation(Resources.sceneProgram, "u_sky_depth");
 		Resources.sceneSkyFog = glGetUniformLocation(Resources.sceneProgram, "u_sky_fog");
 		Resources.sceneMaterialFlags = glGetUniformLocation(Resources.sceneProgram, "u_material_flags");
-		Resources.sceneFuzzTime = glGetUniformLocation(Resources.sceneProgram, "u_fuzz_time");
-		Resources.sceneLightOnlyMode = glGetUniformLocation(Resources.sceneProgram, "u_light_only_mode");
-		Resources.sceneLightPositionRadius = glGetUniformLocation(Resources.sceneProgram, "u_light_position_radius[0]");
-		Resources.sceneLightColor = glGetUniformLocation(Resources.sceneProgram, "u_light_color[0]");
 		Resources.sceneLightCounts = glGetUniformLocation(Resources.sceneProgram, "u_light_counts");
-		Resources.sceneLightPlaneNormal = glGetUniformLocation(Resources.sceneProgram, "u_light_plane_normal");
 		Resources.sceneProjectedLights = glGetUniformLocation(Resources.sceneProgram, "u_projected_lights");
-		Resources.sceneDynamicLightTexture = glGetUniformLocation(Resources.sceneProgram, "u_dynamic_light_texture");
 		Resources.sceneClipPlane = glGetUniformLocation(Resources.sceneProgram, "u_clip_plane");
 		Resources.sceneClipPlaneEnabled = glGetUniformLocation(Resources.sceneProgram, "u_clip_plane_enabled");
-		Resources.simpleTextureUniform = glGetUniformLocation(Resources.simpleProgram, "u_texture");
-		Resources.simpleViewProjection = glGetUniformLocation(Resources.simpleProgram, "u_view_projection");
-		Resources.simpleUseTexture = glGetUniformLocation(Resources.simpleProgram, "u_use_texture");
-		Resources.simpleModel = glGetUniformLocation(Resources.simpleProgram, "u_model");
-		Resources.simpleTextureTransform = glGetUniformLocation(Resources.simpleProgram, "u_texture_transform");
-		Resources.simpleCameraPosition = glGetUniformLocation(Resources.simpleProgram, "u_camera_position");
-		Resources.simpleObjectColor = glGetUniformLocation(Resources.simpleProgram, "u_object_color");
-		Resources.simpleSkyDepth = glGetUniformLocation(Resources.simpleProgram, "u_sky_depth");
-		Resources.simpleSkyFog = glGetUniformLocation(Resources.simpleProgram, "u_sky_fog");
-		Resources.maskedTextureUniform = glGetUniformLocation(Resources.maskedProgram, "u_texture");
-		Resources.maskedBrightmapUniform = glGetUniformLocation(Resources.maskedProgram, "u_brightmap");
-		Resources.maskedUseBrightmap = glGetUniformLocation(Resources.maskedProgram, "u_use_brightmap");
-		Resources.maskedBrightmapDesaturation = glGetUniformLocation(Resources.maskedProgram, "u_brightmap_desaturation");
-		Resources.maskedViewProjection = glGetUniformLocation(Resources.maskedProgram, "u_view_projection");
-		Resources.maskedUseTexture = glGetUniformLocation(Resources.maskedProgram, "u_use_texture");
-		Resources.maskedModel = glGetUniformLocation(Resources.maskedProgram, "u_model");
-		Resources.maskedTextureTransform = glGetUniformLocation(Resources.maskedProgram, "u_texture_transform");
-		Resources.maskedCameraPosition = glGetUniformLocation(Resources.maskedProgram, "u_camera_position");
-		Resources.maskedObjectColor = glGetUniformLocation(Resources.maskedProgram, "u_object_color");
-		Resources.maskedAlphaCutoff = glGetUniformLocation(Resources.maskedProgram, "u_alpha_cutoff");
-		Resources.maskedMaterialFlags = glGetUniformLocation(Resources.maskedProgram, "u_material_flags");
-		Resources.maskedFuzzTime = glGetUniformLocation(Resources.maskedProgram, "u_fuzz_time");
-		Resources.maskedLightOnlyMode = glGetUniformLocation(Resources.maskedProgram, "u_light_only_mode");
-		Resources.maskedLightPositionRadius = glGetUniformLocation(Resources.maskedProgram, "u_light_position_radius[0]");
-		Resources.maskedLightColor = glGetUniformLocation(Resources.maskedProgram, "u_light_color[0]");
-		Resources.maskedLightCounts = glGetUniformLocation(Resources.maskedProgram, "u_light_counts");
-		Resources.maskedLightPlaneNormal = glGetUniformLocation(Resources.maskedProgram, "u_light_plane_normal");
-		Resources.maskedProjectedLights = glGetUniformLocation(Resources.maskedProgram, "u_projected_lights");
-		Resources.maskedDynamicLightTexture = glGetUniformLocation(Resources.maskedProgram, "u_dynamic_light_texture");
-		Resources.maskedClipPlane = glGetUniformLocation(Resources.maskedProgram, "u_clip_plane");
-		Resources.maskedClipPlaneEnabled = glGetUniformLocation(Resources.maskedProgram, "u_clip_plane_enabled");
-		Resources.paletteTextureUniform = glGetUniformLocation(Resources.paletteProgram, "u_texture");
-		Resources.paletteBrightmapUniform = glGetUniformLocation(Resources.paletteProgram, "u_brightmap");
-		Resources.paletteUseBrightmap = glGetUniformLocation(Resources.paletteProgram, "u_use_brightmap");
-		Resources.paletteBrightmapDesaturation = glGetUniformLocation(Resources.paletteProgram, "u_brightmap_desaturation");
-		Resources.paletteViewProjection = glGetUniformLocation(Resources.paletteProgram, "u_view_projection");
-		Resources.paletteUseTexture = glGetUniformLocation(Resources.paletteProgram, "u_use_texture");
-		Resources.paletteModel = glGetUniformLocation(Resources.paletteProgram, "u_model");
-		Resources.paletteTextureTransform = glGetUniformLocation(Resources.paletteProgram, "u_texture_transform");
-		Resources.paletteCameraPosition = glGetUniformLocation(Resources.paletteProgram, "u_camera_position");
-		Resources.paletteObjectColor = glGetUniformLocation(Resources.paletteProgram, "u_object_color");
-		Resources.paletteMaterialFlags = glGetUniformLocation(Resources.paletteProgram, "u_material_flags");
-		Resources.paletteFuzzTime = glGetUniformLocation(Resources.paletteProgram, "u_fuzz_time");
-		Resources.paletteLightOnlyMode = glGetUniformLocation(Resources.paletteProgram, "u_light_only_mode");
-		Resources.paletteLightPositionRadius = glGetUniformLocation(Resources.paletteProgram, "u_light_position_radius[0]");
-		Resources.paletteLightColor = glGetUniformLocation(Resources.paletteProgram, "u_light_color[0]");
-		Resources.paletteLightCounts = glGetUniformLocation(Resources.paletteProgram, "u_light_counts");
-		Resources.paletteLightPlaneNormal = glGetUniformLocation(Resources.paletteProgram, "u_light_plane_normal");
-		Resources.paletteProjectedLights = glGetUniformLocation(Resources.paletteProgram, "u_projected_lights");
-		Resources.paletteDynamicLightTexture = glGetUniformLocation(Resources.paletteProgram, "u_dynamic_light_texture");
-		Resources.paletteClipPlane = glGetUniformLocation(Resources.paletteProgram, "u_clip_plane");
-		Resources.paletteClipPlaneEnabled = glGetUniformLocation(Resources.paletteProgram, "u_clip_plane_enabled");
-		Resources.fogViewProjection = glGetUniformLocation(Resources.fogProgram, "u_view_projection");
-		Resources.fogTextureUniform = glGetUniformLocation(Resources.fogProgram, "u_texture");
-		Resources.fogBrightmapUniform = glGetUniformLocation(Resources.fogProgram, "u_brightmap");
-		Resources.fogUseBrightmap = glGetUniformLocation(Resources.fogProgram, "u_use_brightmap");
-		Resources.fogBrightmapDesaturation = glGetUniformLocation(Resources.fogProgram, "u_brightmap_desaturation");
-		Resources.fogUseTexture = glGetUniformLocation(Resources.fogProgram, "u_use_texture");
-		Resources.fogModel = glGetUniformLocation(Resources.fogProgram, "u_model");
-		Resources.fogTextureTransform = glGetUniformLocation(Resources.fogProgram, "u_texture_transform");
-		Resources.fogCameraPosition = glGetUniformLocation(Resources.fogProgram, "u_camera_position");
-		Resources.fogObjectColor = glGetUniformLocation(Resources.fogProgram, "u_object_color");
-		Resources.fogMaterialFlags = glGetUniformLocation(Resources.fogProgram, "u_material_flags");
-		Resources.fogFuzzTime = glGetUniformLocation(Resources.fogProgram, "u_fuzz_time");
-		Resources.fogLightOnlyMode = glGetUniformLocation(Resources.fogProgram, "u_light_only_mode");
 		Resources.fogColor = glGetUniformLocation(Resources.fogProgram, "u_fog_color");
 		Resources.fogDensity = glGetUniformLocation(Resources.fogProgram, "u_fog_density");
-		Resources.fogLightPositionRadius = glGetUniformLocation(Resources.fogProgram, "u_light_position_radius[0]");
-		Resources.fogLightColor = glGetUniformLocation(Resources.fogProgram, "u_light_color[0]");
-		Resources.fogLightCounts = glGetUniformLocation(Resources.fogProgram, "u_light_counts");
-		Resources.fogLightPlaneNormal = glGetUniformLocation(Resources.fogProgram, "u_light_plane_normal");
-		Resources.fogProjectedLights = glGetUniformLocation(Resources.fogProgram, "u_projected_lights");
-		Resources.fogDynamicLightTexture = glGetUniformLocation(Resources.fogProgram, "u_dynamic_light_texture");
-		Resources.fogClipPlane = glGetUniformLocation(Resources.fogProgram, "u_clip_plane");
-		Resources.fogClipPlaneEnabled = glGetUniformLocation(Resources.fogProgram, "u_clip_plane_enabled");
-		Resources.fogMaskedViewProjection = glGetUniformLocation(Resources.fogMaskedProgram, "u_view_projection");
-		Resources.fogMaskedTextureUniform = glGetUniformLocation(Resources.fogMaskedProgram, "u_texture");
-		Resources.fogMaskedBrightmapUniform = glGetUniformLocation(Resources.fogMaskedProgram, "u_brightmap");
-		Resources.fogMaskedUseBrightmap = glGetUniformLocation(Resources.fogMaskedProgram, "u_use_brightmap");
-		Resources.fogMaskedBrightmapDesaturation = glGetUniformLocation(Resources.fogMaskedProgram, "u_brightmap_desaturation");
-		Resources.fogMaskedUseTexture = glGetUniformLocation(Resources.fogMaskedProgram, "u_use_texture");
-		Resources.fogMaskedModel = glGetUniformLocation(Resources.fogMaskedProgram, "u_model");
-		Resources.fogMaskedTextureTransform = glGetUniformLocation(Resources.fogMaskedProgram, "u_texture_transform");
-		Resources.fogMaskedCameraPosition = glGetUniformLocation(Resources.fogMaskedProgram, "u_camera_position");
-		Resources.fogMaskedObjectColor = glGetUniformLocation(Resources.fogMaskedProgram, "u_object_color");
-		Resources.fogMaskedAlphaCutoff = glGetUniformLocation(Resources.fogMaskedProgram, "u_alpha_cutoff");
-		Resources.fogMaskedMaterialFlags = glGetUniformLocation(Resources.fogMaskedProgram, "u_material_flags");
-		Resources.fogMaskedFuzzTime = glGetUniformLocation(Resources.fogMaskedProgram, "u_fuzz_time");
-		Resources.fogMaskedLightOnlyMode = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_only_mode");
-		Resources.fogMaskedColor = glGetUniformLocation(Resources.fogMaskedProgram, "u_fog_color");
-		Resources.fogMaskedDensity = glGetUniformLocation(Resources.fogMaskedProgram, "u_fog_density");
-		Resources.fogMaskedLightPositionRadius = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_position_radius[0]");
-		Resources.fogMaskedLightColor = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_color[0]");
-		Resources.fogMaskedLightCounts = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_counts");
-		Resources.fogMaskedLightPlaneNormal = glGetUniformLocation(Resources.fogMaskedProgram, "u_light_plane_normal");
-		Resources.fogMaskedProjectedLights = glGetUniformLocation(Resources.fogMaskedProgram, "u_projected_lights");
-		Resources.fogMaskedDynamicLightTexture = glGetUniformLocation(Resources.fogMaskedProgram, "u_dynamic_light_texture");
-		Resources.fogMaskedClipPlane = glGetUniformLocation(Resources.fogMaskedProgram, "u_clip_plane");
-		Resources.fogMaskedClipPlaneEnabled = glGetUniformLocation(Resources.fogMaskedProgram, "u_clip_plane_enabled");
 
 		static const FBootstrapVertex vertices[] =
 		{
@@ -2189,7 +2103,6 @@ bool gl_GLES_CollectCapabilities()
 	Capabilities.hasUniformBuffers = true;
 	Capabilities.hasFramebuffers = true;
 	Capabilities.hasDepthStencil = context.hasDepthStencil;
-	Capabilities.hasBufferMapping = false;
 	Capabilities.maxTextureSize = context.maxTextureSize;
 	Capabilities.maxTextureUnits = context.maxTextureUnits;
 	Capabilities.maxVertexUniformVectors = context.maxVertexUniformVectors;
@@ -2502,7 +2415,9 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation,
-	const float *topGlowColor, const float *bottomGlowColor, const float *glowDistances)
+	const float *topGlowColor, const float *bottomGlowColor, const float *glowDistances,
+	const FShaderLightParameters *lighting, float alphaCutoff, bool customBlend,
+	int sourceBlend, int destinationBlend)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL) return;
 	FScopedProfileTimer timer(Profile.wallCollectionMilliseconds);
@@ -2577,13 +2492,15 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	}
 	AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, fog, alpha < 0.999f, repeat,
 		blendMode, fogColor, fogDensity, materialFlags, lightData, lightCounts, brightmap,
-		brightmapDesaturation, topGlowColor, bottomGlowColor);
+		brightmapDesaturation, topGlowColor, bottomGlowColor, customBlend, static_cast<GLenum>(sourceBlend),
+		static_cast<GLenum>(destinationBlend), alphaCutoff, false, lighting);
 }
 
 void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
-	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation)
+	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation,
+	const FShaderLightParameters *lighting)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
 	FScopedProfileTimer timer(Profile.flatCollectionMilliseconds);
@@ -2636,9 +2553,11 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 		const float dz = centerZ - Resources.cameraZ;
 		FSceneBatch batch = {};
 		CaptureBatchView(batch);
+	if (lighting != NULL) batch.lighting = *lighting;
 		batch.firstIndex = firstIndex;
 		batch.indexCount = indexCount;
 		batch.texture = texture;
+		batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 		batch.brightmap = brightmap;
 		batch.brightmapDesaturation = brightmapDesaturation;
 		batch.masked = masked;
@@ -2673,7 +2592,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 
 void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
 	const float *texcoords, const float *color, unsigned int texture, bool fog,
-	const float *fogColor, float fogDensity)
+	const float *fogColor, float fogDensity, const FShaderLightParameters *lighting)
 {
 	if (!gl_GLES_CanUseResources() || wallPositions == NULL || planePositions == NULL ||
 		texcoords == NULL || !CanAppendSceneGeometry(8, 12, "flood plane"))
@@ -2732,10 +2651,12 @@ void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositio
 	batch.firstIndex = planeIndex;
 	batch.indexCount = 6;
 	batch.texture = texture;
+	batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 	batch.fog = fog;
 	batch.repeat = true;
 	batch.palette = IsPaletteTexture(texture);
 	batch.flood = true;
+	if (lighting != NULL) batch.lighting = *lighting;
 	batch.floodWallFirstIndex = wallIndex;
 	batch.sortDepth = dx * dx + dy * dy + dz * dz;
 	if (fogColor != NULL)
@@ -2787,6 +2708,7 @@ void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
 	batch.firstIndex = firstIndex;
 	batch.indexCount = indexCount;
 	batch.texture = texture;
+	batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 	batch.masked = masked;
 	batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 	batch.repeat = repeat;
@@ -2803,7 +2725,8 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	unsigned int brightmap, int brightmapDesaturation, bool customBlend,
-	int sourceBlend, int destinationBlend, float alphaCutoff)
+	int sourceBlend, int destinationBlend, float alphaCutoff,
+	const FShaderLightParameters *lighting)
 {
 	const bool resourcesReady = gl_GLES_CanUseResources();
 	if (resourcesReady) ++Resources.sceneSpriteCount;
@@ -2826,10 +2749,21 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 		vertices[i].a = ClampUnit(alpha);
 		vertices[i].glowTopDistance = vertices[i].glowBottomDistance = 0.0f;
 	}
-	AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, fog,
-		alpha < 0.999f, false, blendMode, fogColor, fogDensity, materialFlags, NULL, NULL,
+	const bool fogLayer = fog && fogColor != NULL &&
+		(fogColor[0] != 0.0f || fogColor[1] != 0.0f || fogColor[2] != 0.0f) &&
+		(blendMode == GLES_BLEND_SUBTRACT || blendMode == GLES_BLEND_REVERSE_SUBTRACT);
+	AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture,
+		fogLayer ? false : masked, fog && !fogLayer,
+		alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE, false, blendMode, fogColor, fogDensity, materialFlags, NULL, NULL,
 		brightmap, brightmapDesaturation, NULL, NULL, customBlend,
-		static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend), alphaCutoff);
+		static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend),
+		fogLayer ? 0.0f : alphaCutoff, false, lighting);
+	if (fogLayer)
+	{
+		AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, false, true,
+			true, false, GLES_BLEND_ALPHA, fogColor, fogDensity, GLES_MATERIAL_SPRITE_FOG_LAYER,
+			NULL, NULL, 0, 0, NULL, NULL, true, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, 0.0f, false);
+	}
 }
 
 void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
@@ -2837,7 +2771,8 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	const float *normals, unsigned int brightmap, int brightmapDesaturation, bool cullBackFaces,
-	bool customBlend, int sourceBlend, int destinationBlend)
+	bool customBlend, int sourceBlend, int destinationBlend,
+	const FShaderLightParameters *lighting, float alphaCutoff)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || indices == NULL ||
 		vertexCount == 0 || indexCount < 3 || (indexCount % 3) != 0) return;
@@ -2889,15 +2824,17 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	const float dz = centerZ - Resources.cameraZ;
 	FSceneBatch batch = {};
 	CaptureBatchView(batch);
+	if (lighting != NULL) batch.lighting = *lighting;
 	batch.firstIndex = firstIndex;
 	batch.indexCount = static_cast<GLsizei>(indexCount);
 	batch.texture = texture;
+	batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 	batch.brightmap = brightmap;
 	batch.brightmapDesaturation = brightmapDesaturation;
 	batch.masked = masked;
 	batch.fog = fog;
 	batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
-	batch.repeat = false;
+	batch.repeat = true;
 	const unsigned int textureFlags = gl_GLESInternalGetMaterialFlags(texture);
 	batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
 	batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
@@ -2908,7 +2845,11 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	batch.customBlend = customBlend;
 	batch.sourceBlend = static_cast<GLenum>(sourceBlend);
 	batch.destinationBlend = static_cast<GLenum>(destinationBlend);
-	batch.alphaCutoff = 0.5f;
+	batch.alphaCutoff = ClampUnit(alphaCutoff);
+	// Custom materials test alpha after Process applies the actor opacity.
+	if ((materialFlags & GLES_MATERIAL_FUZZ) == 0 &&
+		batch.materialEffect.shaderIndex >= FIRST_USER_SHADER)
+		batch.alphaCutoff *= ClampUnit(alpha);
 	batch.sortDepth = dx * dx + dy * dy + dz * dz;
 	if (fogColor != NULL)
 	{
@@ -2924,7 +2865,7 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
 	EGLESBlendMode blendMode, unsigned int materialFlags, bool customBlend,
-	int sourceBlend, int destinationBlend, float alphaCutoff)
+	int sourceBlend, int destinationBlend, float alphaCutoff, unsigned int brightmap, int brightmapDesaturation)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL) return;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
@@ -2944,7 +2885,7 @@ void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 		vertices[i].a = ClampUnit(alpha);
 	}
 	AddHUDQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, blendMode, materialFlags,
-		customBlend, static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend), alphaCutoff);
+		customBlend, static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend), alphaCutoff, brightmap, brightmapDesaturation);
 }
 
 void gl_GLES_AddScreenQuad(const float *color, float alpha,
@@ -3039,13 +2980,6 @@ struct FNativeRenderStateCache
 	GLuint staticUniformProgram;
 	bool staticUniformsKnown;
 };
-
-static void InvalidateNativeBlendState(FNativeRenderStateCache &cache)
-{
-	cache.blendEnabledKnown = false;
-	cache.blendFunctionKnown = false;
-	cache.blendEquationKnown = false;
-}
 
 static void ApplyNativeBlendState(FNativeRenderStateCache &cache, bool enabled,
 	GLenum sourceBlend, GLenum destinationBlend, GLenum equation)
@@ -3193,7 +3127,7 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		}
 		else if (batch.blendMode == GLES_BLEND_FUZZ)
 		{
-			sourceBlend = GL_DST_COLOR;
+			sourceBlend = (batch.materialFlags >> GLES_MATERIAL_FUZZ_SHIFT) & 7 ? GL_SRC_ALPHA : GL_DST_COLOR;
 			destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
 		}
 		else if (batch.blendMode == GLES_BLEND_MULTIPLY)
@@ -3208,143 +3142,51 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		ApplyNativeBlendState(stateCache, false, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD);
 	}
 	ApplyNativeDepthState(stateCache, depthEnabled, depthFunction,
-		batch.translucent || batch.hud || batch.flood || IsNativeDecal(batch) ? false : true);
+		batch.sourceOrdered || batch.translucent || batch.hud || batch.flood || IsNativeDecal(batch) ? false : true);
 	ApplyNativeCullState(stateCache, cullEnabled, GL_CW);
-	const GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
+	GLuint program = batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
 		(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram));
 	const char *programName = batch.fog ? (batch.masked ? "gles/portal-fog-masked" : "gles/portal-fog") :
 		(batch.masked ? "gles/portal-masked" : (batch.palette ? "gles/portal-palette" : "gles/portal-opaque"));
+	const GLuint materialProgram = ResolveNativeMaterialProgram(program, batch);
+	if (materialProgram != program) { program = materialProgram; programName = NULL; }
 	BindNativeProgram(program, programName);
+	SetNativeLightingUniforms(program, batch);
+	SetNativeMaterialUniforms(program, batch);
 	SetNativeGlowUniforms(program, batch);
 	const bool setStaticUniforms = !stateCache.staticUniformsKnown ||
 		stateCache.staticUniformProgram != program;
 	RecordNativePortalUniform(!setStaticUniforms);
-	if (setStaticUniforms && program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
-		glUniform1i(Resources.sceneSkyDepth, 0);
-	GLint viewProjection = Resources.sceneViewProjection;
-	GLint textureUniform = Resources.sceneTextureUniform;
-	GLint brightmapUniform = Resources.sceneBrightmapUniform;
-	GLint useBrightmap = Resources.sceneUseBrightmap;
-	GLint brightmapDesaturation = Resources.sceneBrightmapDesaturation;
-	GLint useTexture = Resources.sceneUseTexture;
-	GLint model = Resources.sceneModel;
-	GLint textureTransform = Resources.sceneTextureTransform;
-	GLint cameraPosition = Resources.sceneCameraPosition;
-	GLint objectColor = Resources.sceneObjectColor;
-	GLint materialFlags = Resources.sceneMaterialFlags;
-	GLint fuzzTime = Resources.sceneFuzzTime;
-	GLint alphaCutoff = -1;
-	GLint fogColor = -1;
-	GLint fogDensity = -1;
-	GLint lightPositionRadius = Resources.sceneLightPositionRadius;
-	GLint lightColor = Resources.sceneLightColor;
-	GLint lightCounts = Resources.sceneLightCounts;
-	GLint lightPlaneNormal = Resources.sceneLightPlaneNormal;
-	GLint projectedLights = Resources.sceneProjectedLights;
-	GLint dynamicLightSampler = Resources.sceneDynamicLightTexture;
-	GLint clipPlaneUniform = Resources.sceneClipPlane;
-	GLint clipPlaneEnabledUniform = Resources.sceneClipPlaneEnabled;
-	if (batch.fog)
+	if (setStaticUniforms)
 	{
-		if (batch.masked)
-		{
-			viewProjection = Resources.fogMaskedViewProjection;
-			textureUniform = Resources.fogMaskedTextureUniform;
-			brightmapUniform = Resources.fogMaskedBrightmapUniform;
-			useBrightmap = Resources.fogMaskedUseBrightmap;
-			brightmapDesaturation = Resources.fogMaskedBrightmapDesaturation;
-			useTexture = Resources.fogMaskedUseTexture;
-			model = Resources.fogMaskedModel;
-			textureTransform = Resources.fogMaskedTextureTransform;
-			cameraPosition = Resources.fogMaskedCameraPosition;
-			objectColor = Resources.fogMaskedObjectColor;
-			materialFlags = Resources.fogMaskedMaterialFlags;
-			fuzzTime = Resources.fogMaskedFuzzTime;
-			alphaCutoff = Resources.fogMaskedAlphaCutoff;
-			fogColor = Resources.fogMaskedColor;
-			fogDensity = Resources.fogMaskedDensity;
-			lightPositionRadius = Resources.fogMaskedLightPositionRadius;
-			lightColor = Resources.fogMaskedLightColor;
-			lightCounts = Resources.fogMaskedLightCounts;
-			lightPlaneNormal = Resources.fogMaskedLightPlaneNormal;
-			projectedLights = Resources.fogMaskedProjectedLights;
-			dynamicLightSampler = Resources.fogMaskedDynamicLightTexture;
-			clipPlaneUniform = Resources.fogMaskedClipPlane;
-			clipPlaneEnabledUniform = Resources.fogMaskedClipPlaneEnabled;
-		}
-		else
-		{
-			viewProjection = Resources.fogViewProjection;
-			textureUniform = Resources.fogTextureUniform;
-			brightmapUniform = Resources.fogBrightmapUniform;
-			useBrightmap = Resources.fogUseBrightmap;
-			brightmapDesaturation = Resources.fogBrightmapDesaturation;
-			useTexture = Resources.fogUseTexture;
-			model = Resources.fogModel;
-			textureTransform = Resources.fogTextureTransform;
-			cameraPosition = Resources.fogCameraPosition;
-			objectColor = Resources.fogObjectColor;
-			materialFlags = Resources.fogMaterialFlags;
-			fuzzTime = Resources.fogFuzzTime;
-			fogColor = Resources.fogColor;
-			fogDensity = Resources.fogDensity;
-			lightPositionRadius = Resources.fogLightPositionRadius;
-			lightColor = Resources.fogLightColor;
-			lightCounts = Resources.fogLightCounts;
-			lightPlaneNormal = Resources.fogLightPlaneNormal;
-			projectedLights = Resources.fogProjectedLights;
-			dynamicLightSampler = Resources.fogDynamicLightTexture;
-			clipPlaneUniform = Resources.fogClipPlane;
-			clipPlaneEnabledUniform = Resources.fogClipPlaneEnabled;
-		}
+		const FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+		if (uniforms.skyDepth >= 0) glUniform1i(uniforms.skyDepth, 0);
+		if (uniforms.skyFog >= 0) glUniform1i(uniforms.skyFog, 0);
 	}
-	else if (batch.masked)
-	{
-		viewProjection = Resources.maskedViewProjection;
-		textureUniform = Resources.maskedTextureUniform;
-		brightmapUniform = Resources.maskedBrightmapUniform;
-		useBrightmap = Resources.maskedUseBrightmap;
-		brightmapDesaturation = Resources.maskedBrightmapDesaturation;
-		useTexture = Resources.maskedUseTexture;
-		model = Resources.maskedModel;
-		textureTransform = Resources.maskedTextureTransform;
-		cameraPosition = Resources.maskedCameraPosition;
-		objectColor = Resources.maskedObjectColor;
-		materialFlags = Resources.maskedMaterialFlags;
-		fuzzTime = Resources.maskedFuzzTime;
-		alphaCutoff = Resources.maskedAlphaCutoff;
-		lightPositionRadius = Resources.maskedLightPositionRadius;
-		lightColor = Resources.maskedLightColor;
-		lightCounts = Resources.maskedLightCounts;
-		lightPlaneNormal = Resources.maskedLightPlaneNormal;
-		projectedLights = Resources.maskedProjectedLights;
-		dynamicLightSampler = Resources.maskedDynamicLightTexture;
-		clipPlaneUniform = Resources.maskedClipPlane;
-		clipPlaneEnabledUniform = Resources.maskedClipPlaneEnabled;
-	}
-	else if (batch.palette)
-	{
-		viewProjection = Resources.paletteViewProjection;
-		textureUniform = Resources.paletteTextureUniform;
-		brightmapUniform = Resources.paletteBrightmapUniform;
-		useBrightmap = Resources.paletteUseBrightmap;
-		brightmapDesaturation = Resources.paletteBrightmapDesaturation;
-		useTexture = Resources.paletteUseTexture;
-		model = Resources.paletteModel;
-		textureTransform = Resources.paletteTextureTransform;
-		cameraPosition = Resources.paletteCameraPosition;
-		objectColor = Resources.paletteObjectColor;
-		materialFlags = Resources.paletteMaterialFlags;
-		fuzzTime = Resources.paletteFuzzTime;
-		lightPositionRadius = Resources.paletteLightPositionRadius;
-		lightColor = Resources.paletteLightColor;
-		lightCounts = Resources.paletteLightCounts;
-		lightPlaneNormal = Resources.paletteLightPlaneNormal;
-		projectedLights = Resources.paletteProjectedLights;
-		dynamicLightSampler = Resources.paletteDynamicLightTexture;
-		clipPlaneUniform = Resources.paletteClipPlane;
-		clipPlaneEnabledUniform = Resources.paletteClipPlaneEnabled;
-	}
+	const FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+	const GLint viewProjection = uniforms.viewProjection;
+	const GLint textureUniform = uniforms.textureUniform;
+	const GLint brightmapUniform = uniforms.brightmapUniform;
+	const GLint useBrightmap = uniforms.useBrightmap;
+	const GLint brightmapDesaturation = uniforms.brightmapDesaturation;
+	const GLint useTexture = uniforms.useTexture;
+	const GLint model = uniforms.model;
+	const GLint textureTransform = uniforms.textureTransform;
+	const GLint cameraPosition = uniforms.cameraPosition;
+	const GLint objectColor = uniforms.objectColor;
+	const GLint materialFlags = uniforms.materialFlags;
+	const GLint fuzzTime = uniforms.fuzzTime;
+	const GLint alphaCutoff = uniforms.alphaCutoff;
+	const GLint fogColor = uniforms.fogColor;
+	const GLint fogDensity = uniforms.fogDensity;
+	const GLint lightDataSampler = uniforms.lightDataSampler;
+	const GLint lightDataOffset = uniforms.lightDataOffset;
+	const GLint lightCounts = uniforms.lightCounts;
+	const GLint lightPlaneNormal = uniforms.lightPlaneNormal;
+	const GLint projectedLights = uniforms.projectedLights;
+	const GLint dynamicLightSampler = uniforms.dynamicLightSampler;
+	const GLint clipPlaneUniform = uniforms.clipPlaneUniform;
+	const GLint clipPlaneEnabledUniform = uniforms.clipPlaneEnabledUniform;
 	static const GLfloat identity[16] =
 	{
 		1.0f, 0.0f, 0.0f, 0.0f,
@@ -3359,28 +3201,19 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	if (cameraPosition >= 0) glUniform3f(cameraPosition, batch.hud ? 0.0f : view.cameraPosition[0],
 		batch.hud ? 0.0f : view.cameraPosition[1], batch.hud ? 0.0f : view.cameraPosition[2]);
 	if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
-	if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags));
-	if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
+	if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags |
+		(gl_fogmode == 2 ? GLES_MATERIAL_RADIAL_FOG : 0)));
+	if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, gl_frameMS / 1000.0f);
 	if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, view.clipPlane);
 	if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, view.clipPlaneEnabled ? 1 : 0);
-	if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ||
-		(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f :
-		(batch.alphaCutoff > 0.0f ? batch.alphaCutoff : 0.5f));
+	if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ? 0.0f : batch.alphaCutoff);
 	if (fogColor >= 0) glUniform4f(fogColor, batch.fogColor[0], batch.fogColor[1], batch.fogColor[2], 1.0f);
 	if (fogDensity >= 0) glUniform1f(fogDensity, batch.fogDensity / 64000.0f);
-	const GLfloat *lightPositions = NULL;
-	const GLfloat *lightColors = NULL;
-	unsigned int lightNormalCount = 0;
-	unsigned int lightSubtractiveCount = 0;
-	unsigned int lightCount = 0;
-	GetNativeLightUpload(batch, 0, GLES_MAX_LIGHTS, lightPositions, lightColors, lightNormalCount,
-		lightSubtractiveCount, lightCount);
-	if (lightPositionRadius >= 0 && lightCount > 0)
-		glUniform4fv(lightPositionRadius, lightCount, lightPositions);
-	if (lightColor >= 0 && lightCount > 0)
-		glUniform4fv(lightColor, lightCount, lightColors);
-	if (lightCounts >= 0) glUniform3i(lightCounts, static_cast<GLint>(lightNormalCount),
-		static_cast<GLint>(lightSubtractiveCount), static_cast<GLint>(lightCount));
+	const unsigned int lightCount = batch.lightCount;
+	if (lightDataSampler >= 0) glUniform1i(lightDataSampler, 3);
+	if (lightDataOffset >= 0) glUniform1i(lightDataOffset, static_cast<GLint>(batch.lightOffset));
+	if (lightCounts >= 0) glUniform3i(lightCounts, static_cast<GLint>(batch.lightNormalCount),
+		static_cast<GLint>(batch.lightSubtractiveCount), static_cast<GLint>(lightCount));
 	if (lightPlaneNormal >= 0) glUniform3fv(lightPlaneNormal, 1, batch.lightPlaneNormal);
 	const bool projected = dynamicLightTexture != 0 && lightCount > 0 &&
 		(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
@@ -3399,20 +3232,13 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 		NativeSamplerForBatch(batch));
 	BindNativePortalTexture(textureCache, 2,
 		projected ? dynamicLightTexture : Resources.checkerTexture,
-		Resources.sceneSampler);
+		Resources.sceneSamplers[3]);
 	BindNativePortalTexture(textureCache, 0, textureCache.textures[0], textureCache.samplers[0]);
 	SetNativeDecalDepthBias(batch, true);
 	ProfileDrawElements(GL_TRIANGLES, batch.indexCount, NativeSceneIndexType(),
 		NativeSceneIndexOffset(batch.firstIndex));
 	stateCache.staticUniformProgram = program;
 	stateCache.staticUniformsKnown = true;
-	DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
-		lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex);
-	if (batch.lightCount > GLES_MAX_LIGHTS)
-	{
-		textureCache.known[2] = false;
-		InvalidateNativeBlendState(stateCache);
-	}
 	SetNativeDecalDepthBias(batch, false);
 }
 
@@ -3492,7 +3318,7 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 	return true;
 }
 
-static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2, bool fliptop)
+static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2, bool fliptop, const float *viewProjection)
 {
 	if (material == NULL || material->tex == NULL || !material->tex->gl_info.bSkybox) return false;
 	FSkyBox *skybox = static_cast<FSkyBox *>(material->tex);
@@ -3511,19 +3337,20 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 		if (faceMaterial == NULL) continue;
 		const GLuint texture = faceMaterial->BindNative(CM_DEFAULT, 0, false);
 		if (texture == 0) continue;
+		FNativeDrawUniforms *skyUniforms = &BindNativeSkyMaterial(texture, viewProjection);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture);
 		// Skybox faces use the source renderer's clamped edge sampling.
-		glBindSampler(0, Resources.sceneSampler);
-		if (Resources.sceneTextureTransform >= 0)
+		glBindSampler(0, Resources.sceneSamplers[3]);
+		if (skyUniforms->textureTransform >= 0)
 		{
 			if (threeFace && face < 4)
-				glUniform4f(Resources.sceneTextureTransform, 0.25f, 1.0f, face * 0.25f, 0.0f);
+				glUniform4f(skyUniforms->textureTransform, 0.25f, 1.0f, face * 0.25f, 0.0f);
 			else
-				glUniform4f(Resources.sceneTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
+				glUniform4f(skyUniforms->textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 		}
-		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		const FGLESSkyPrimitiveRange range = gl_GLESInternalPortalSkyboxFace(face);
 		ProfileDrawElements(GL_TRIANGLES, range.indexCount, GL_UNSIGNED_SHORT,
 			reinterpret_cast<const void *>(range.firstIndex * sizeof(GLushort)));
@@ -3555,36 +3382,12 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	glStencilMask(0x00);
 	glStencilFunc(GL_EQUAL, stencilRef, stencilMask);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-	BindNativeProgram(Resources.sceneProgram, "gles/portal-sky");
-	static const GLfloat identity[16] =
-	{
-		1.0f, 0.0f, 0.0f, 0.0f,
-		0.0f, 1.0f, 0.0f, 0.0f,
-		0.0f, 0.0f, 1.0f, 0.0f,
-		0.0f, 0.0f, 0.0f, 1.0f
-	};
-	if (Resources.sceneViewProjection >= 0)
-		glUniformMatrix4fv(Resources.sceneViewProjection, 1, GL_FALSE, target.sky.viewProjection);
-	if (Resources.sceneModel >= 0) glUniformMatrix4fv(Resources.sceneModel, 1, GL_FALSE, identity);
-	if (Resources.sceneTextureTransform >= 0) glUniform4f(Resources.sceneTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
-	if (Resources.sceneCameraPosition >= 0)
-		glUniform3f(Resources.sceneCameraPosition, target.sky.cameraPosition[0], target.sky.cameraPosition[1], target.sky.cameraPosition[2]);
-	if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 1);
-	if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
-	if (Resources.sceneMaterialFlags >= 0) glUniform1i(Resources.sceneMaterialFlags, 0);
-	if (Resources.sceneLightCounts >= 0) glUniform3i(Resources.sceneLightCounts, 0, 0, 0);
-	if (Resources.sceneProjectedLights >= 0) glUniform1i(Resources.sceneProjectedLights, 0);
-	if (Resources.sceneClipPlane >= 0) glUniform4f(Resources.sceneClipPlane, 0.0f, 0.0f, 0.0f, 0.0f);
-	if (Resources.sceneClipPlaneEnabled >= 0) glUniform1i(Resources.sceneClipPlaneEnabled, 0);
-	if (Resources.sceneBrightmapUniform >= 0) glUniform1i(Resources.sceneBrightmapUniform, 1);
-	if (Resources.sceneUseBrightmap >= 0) glUniform1i(Resources.sceneUseBrightmap, 0);
-	if (Resources.sceneBrightmapDesaturation >= 0) glUniform1i(Resources.sceneBrightmapDesaturation, 0);
-	if (Resources.sceneTextureUniform >= 0) glUniform1i(Resources.sceneTextureUniform, 0);
+	FNativeDrawUniforms *skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection);
 	glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
-	if (target.sky.capEligible && target.skyMaterial->tex->gl_info.bSkybox)
+	if (target.skyMaterial->tex->gl_info.bSkybox)
 	{
 		if (DrawNativeSkyboxLayer(target.skyMaterial, target.skyXOffset, target.sky2,
-			static_cast<FSkyBox *>(target.skyMaterial->tex)->fliptop))
+			static_cast<FSkyBox *>(target.skyMaterial->tex)->fliptop, target.sky.viewProjection))
 		{
 			// The skybox uses its own VAO; reflected scene batches use the scene stream.
 			glBindVertexArray(Resources.sceneVertexArray);
@@ -3597,42 +3400,44 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	auto drawSkyLayer = [&](FMaterial *material, float xOffset, float yOffset, bool mirrored, bool drawCaps) -> bool
 	{
 		if (material == NULL || material->tex == NULL) return false;
-		const bool caps = drawCaps && target.sky.capEligible;
+		const bool caps = drawCaps;
 		const GLuint texture = material->BindNative(CM_DEFAULT, 0, true);
 		if (texture == 0) return false;
+		skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection);
 		gl_GLESInternalPortalUploadSkyGeometry(material, xOffset, yOffset, mirrored,
 			Resources.cameraX, Resources.cameraY, Resources.cameraZ);
 		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture);
-		glBindSampler(0, Resources.checkerSampler);
-		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, caps ? 0 : 1);
+		glBindSampler(0, Resources.worldSamplers[0]);
+		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, caps ? 0 : 1);
 		if (caps)
 		{
-			if (Resources.sceneObjectColor >= 0)
-				glUniform4f(Resources.sceneObjectColor, target.skyUpperCapColor.r / 255.0f,
+			if (skyUniforms->objectColor >= 0)
+				glUniform4f(skyUniforms->objectColor, target.skyUpperCapColor.r / 255.0f,
 					target.skyUpperCapColor.g / 255.0f, target.skyUpperCapColor.b / 255.0f, 1.0f);
-			if (Resources.outerSky.capEligible)
-				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
+			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		}
-		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		skyUniforms = &BindNativeSkyMaterial(texture, target.sky.viewProjection);
+		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		for (int row = 0; row < 4; ++row)
 			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 		if (caps)
 		{
-			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
-			if (Resources.sceneObjectColor >= 0)
-				glUniform4f(Resources.sceneObjectColor, target.skyLowerCapColor.r / 255.0f,
+			skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection);
+			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 0);
+			if (skyUniforms->objectColor >= 0)
+				glUniform4f(skyUniforms->objectColor, target.skyLowerCapColor.r / 255.0f,
 					target.skyLowerCapColor.g / 255.0f, target.skyLowerCapColor.b / 255.0f, 1.0f);
-			if (Resources.outerSky.capEligible)
-				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
+			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		}
-		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		skyUniforms = &BindNativeSkyMaterial(texture, target.sky.viewProjection);
+		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		for (int row = 0; row < 4; ++row)
 			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
@@ -3648,28 +3453,26 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 		gl_GLESInternalPortalUploadSkyGeometry(NULL, 0.0f, 0.0f, false,
 			Resources.cameraX, Resources.cameraY, Resources.cameraZ);
 		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
-		if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 1);
-		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
-		if (Resources.sceneObjectColor >= 0)
-			glUniform4f(Resources.sceneObjectColor, target.skyFogColor.r / 255.0f,
+		skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection, true);
+		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 0);
+		if (skyUniforms->objectColor >= 0)
+			glUniform4f(skyUniforms->objectColor, target.skyFogColor.r / 255.0f,
 				target.skyFogColor.g / 255.0f, target.skyFogColor.b / 255.0f, skyfog / 255.0f);
 		glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
-		if (target.sky.capEligible)
-			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
+		ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+			reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		for (int row = 0; row < 4; ++row)
 			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
-		if (target.sky.capEligible)
-			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
-				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
+		ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+			reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		for (int row = 0; row < 4; ++row)
 			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
 	}
-	if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
-	if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-	if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+	if (skyUniforms->skyFog >= 0) glUniform1i(skyUniforms->skyFog, 0);
+	if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+	if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 	glActiveTexture(GL_TEXTURE0);
 	glBindVertexArray(Resources.sceneVertexArray);
 	Resources.cameraX = savedCameraX;
@@ -3729,7 +3532,7 @@ static bool CompositeNativePortalFallback(const FNativePortalTarget &target,
 	FGLESPortalCompositeList composite = {};
 	composite.sourceTexture = sourceTexture;
 	composite.sceneVertexArray = Resources.sceneVertexArray;
-	composite.sceneSampler = Resources.sceneSampler;
+	composite.sceneSampler = Resources.sceneSamplers[3];
 	composite.indexType = NativeSceneIndexType();
 	composite.masks = masks.data();
 	composite.maskCount = masks.size();
@@ -3946,9 +3749,11 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 			record.batchIndex = batchIndex;
 			record.included = batch.portalId == static_cast<int>(target.id) &&
 				!batch.portalMask && !batch.skyMask && !batch.hud;
+			record.sourceOrdered = batch.sourceOrdered;
 			record.hud = batch.hud;
 			record.flood = batch.flood;
 			record.flat = batch.flat;
+			record.decal = IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_MIRROR_DECAL) == 0;
 			record.translucent = batch.translucent || IsNativeDecal(batch);
 			record.sortDepth = batch.sortDepth;
 			orderRecords.push_back(record);
@@ -3970,24 +3775,7 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 			++drawnBatches;
 		}
 		++drawnTargets;
-		static bool fallbackPixelLogWritten = false;
-		if (developer && target.framebufferFallback && targetSurface != nullptr &&
-			!fallbackPixelLogWritten)
-		{
-			GLint previousRead = 0;
-			glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, targetSurface->resolveFramebuffer);
-			GLubyte center[4] = {};
-			gl_GLES_RecordProfileReadback();
-			glReadPixels(targetSurface->renderWidth / 2, targetSurface->renderHeight / 2,
-				1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
-			const GLenum readError = glGetError();
-			DPrintf("Zandronum GLES portal fallback target=%u center=%u,%u,%u,%u read=%s.\n",
-				target.id, center[0], center[1], center[2], center[3],
-				readError == GL_NO_ERROR ? "ok" : "failed");
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
-			fallbackPixelLogWritten = true;
-		}
+
 	}
 	while (!fallbackScopes.empty())
 	{
@@ -4212,14 +4000,14 @@ void gl_GLES_EndPortalCapture(unsigned int portalId)
 }
 
 unsigned int gl_GLES_BindMaterial(const void *key, const unsigned char *pixels,
-	int width, int height, bool repeat, int colormap, int translation, bool allowhires)
+	int width, int height, bool repeat, int colormap, int translation, bool allowhires, bool noFilter)
 {
 	if (!gl_GLES_CanUseResources() || key == NULL || pixels == NULL || width <= 0 || height <= 0)
 		return 0;
 	FScopedProfileTimer timer(Profile.materialResolutionMilliseconds);
 	ConfigureNativeSamplers();
 	return gl_GLESInternalBindMaterial(true, key, pixels, width, height, repeat,
-		colormap, translation, allowhires, colormap != CM_DEFAULT || translation != 0);
+		colormap, translation, allowhires, colormap != CM_DEFAULT || translation != 0, noFilter);
 }
 
 unsigned int gl_GLES_EnsureMaterialTexture(const void *key, int width, int height,
@@ -4282,6 +4070,11 @@ bool gl_GLES_OnContextRestored(int width, int height)
 	return restored;
 }
 
+void gl_GLES_SetSourceOrder(bool enabled)
+{
+	NativeSourceOrder = enabled;
+}
+
 void gl_GLES_RenderBootstrap(int width, int height)
 {
 	if (!Resources.ready)
@@ -4310,6 +4103,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		I_FatalError("Zandronum GLES active render target has invalid size %dx%d.", width, height);
 	}
 	gl_GLES_BindRenderTarget(activeTarget);
+	if (gl_GLES_GetContextInfo().hasDepthClamp) glEnable(GL_DEPTH_CLAMP);
 	SetNativeFullViewport(activeTarget->renderWidth, activeTarget->renderHeight);
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_TRUE);
@@ -4423,68 +4217,55 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glDisable(GL_CULL_FACE);
-			BindNativeProgram(Resources.sceneProgram, "gles/opaque");
-		if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 1);
-		static const GLfloat identity[16] =
-		{
-			1.0f, 0.0f, 0.0f, 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		};
-		if (Resources.sceneViewProjection >= 0)
-			glUniformMatrix4fv(Resources.sceneViewProjection, 1, GL_FALSE, Resources.viewProjection);
-		if (Resources.sceneModel >= 0) glUniformMatrix4fv(Resources.sceneModel, 1, GL_FALSE, identity);
-		if (Resources.sceneTextureTransform >= 0) glUniform4f(Resources.sceneTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
-		if (Resources.sceneCameraPosition >= 0)
-			glUniform3f(Resources.sceneCameraPosition, Resources.cameraX, Resources.cameraY, Resources.cameraZ);
-		if (Resources.sceneLightCounts >= 0) glUniform3i(Resources.sceneLightCounts, 0, 0, 0);
-		if (Resources.sceneMaterialFlags >= 0) glUniform1i(Resources.sceneMaterialFlags, 0);
-		if (Resources.sceneTextureUniform >= 0) glUniform1i(Resources.sceneTextureUniform, 0);
+		FNativeDrawUniforms *skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection);
 		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 		auto drawSkyLayer = [&](FMaterial *material, float xOffset, float yOffset, bool drawCaps) -> bool
 		{
 			if (material == NULL || material->tex == NULL) return false;
-			const bool caps = drawCaps && sky.capEligible;
-			if (caps && material->tex->gl_info.bSkybox)
+			const bool caps = drawCaps;
+			if (material->tex->gl_info.bSkybox)
 			{
 				FSkyBox *skybox = static_cast<FSkyBox *>(material->tex);
-				return DrawNativeSkyboxLayer(material, xOffset, Resources.sky2, skybox->fliptop);
+				return DrawNativeSkyboxLayer(material, xOffset, Resources.sky2, skybox->fliptop, Resources.viewProjection);
 			}
 			const GLuint skyTexture = material->BindNative(CM_DEFAULT, 0, true);
 			if (skyTexture == 0) return false;
+			skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection);
 			gl_GLESInternalPortalUploadSkyGeometry(material, xOffset, yOffset,
 				caps ? Resources.skyMirrored : Resources.skyLayerMirrored,
 				Resources.cameraX, Resources.cameraY, Resources.cameraZ);
 			glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 			glActiveTexture(GL_TEXTURE0);
 			glBindTexture(GL_TEXTURE_2D, skyTexture);
-			glBindSampler(0, Resources.checkerSampler);
-			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, caps ? 0 : 1);
+			glBindSampler(0, Resources.worldSamplers[0]);
+			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, caps ? 0 : 1);
 			if (caps)
 			{
-				if (Resources.sceneObjectColor >= 0)
-					glUniform4f(Resources.sceneObjectColor, Resources.skyUpperCapColor.r / 255.0f,
+				if (skyUniforms->objectColor >= 0)
+					glUniform4f(skyUniforms->objectColor, Resources.skyUpperCapColor.r / 255.0f,
 						Resources.skyUpperCapColor.g / 255.0f, Resources.skyUpperCapColor.b / 255.0f, 1.0f);
 				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			}
-			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-			if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+			skyUniforms = &BindNativeSkyMaterial(skyTexture, Resources.viewProjection);
+			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+			if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			for (int row = 0; row < 4; ++row)
 				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
 			if (caps)
 			{
-				if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
-				if (Resources.sceneObjectColor >= 0)
-					glUniform4f(Resources.sceneObjectColor, Resources.skyLowerCapColor.r / 255.0f,
+				skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection);
+				if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 0);
+				if (skyUniforms->objectColor >= 0)
+					glUniform4f(skyUniforms->objectColor, Resources.skyLowerCapColor.r / 255.0f,
 						Resources.skyLowerCapColor.g / 255.0f, Resources.skyLowerCapColor.b / 255.0f, 1.0f);
 				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			}
-			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-			if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+			skyUniforms = &BindNativeSkyMaterial(skyTexture, Resources.viewProjection);
+			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+			if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			for (int row = 0; row < 4; ++row)
 				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
@@ -4501,28 +4282,27 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			gl_GLESInternalPortalUploadSkyGeometry(NULL, 0.0f, 0.0f, false,
 				Resources.cameraX, Resources.cameraY, Resources.cameraZ);
 			glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
-			if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 1);
-			if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
-			if (Resources.sceneObjectColor >= 0)
-				glUniform4f(Resources.sceneObjectColor, Resources.skyFogColor.r / 255.0f,
+			skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection, true);
+			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 0);
+			if (skyUniforms->objectColor >= 0)
+				glUniform4f(skyUniforms->objectColor, Resources.skyFogColor.r / 255.0f,
 					Resources.skyFogColor.g / 255.0f, Resources.skyFogColor.b / 255.0f, skyfog / 255.0f);
 			glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
-			if (Resources.outerSky.capEligible)
-				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
+			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			for (int row = 0; row < 4; ++row)
 				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
-			if (Resources.outerSky.capEligible)
-				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
-					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
+			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
+				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			for (int row = 0; row < 4; ++row)
 				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
-			if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
+			if (skyUniforms->skyFog >= 0) glUniform1i(skyUniforms->skyFog, 0);
 		}
-		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 1);
-		if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection);
+		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
+		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 		glBindVertexArray(0);
 		glDepthFunc(GL_LESS);
 		glDepthMask(GL_TRUE);
@@ -4560,9 +4340,11 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			const FSceneBatch &batch = Resources.sceneBatches[i];
 			orderRecords[i].batchIndex = i;
 			orderRecords[i].included = true;
+			orderRecords[i].sourceOrdered = batch.sourceOrdered;
 			orderRecords[i].hud = batch.hud;
 			orderRecords[i].flood = batch.flood;
 			orderRecords[i].flat = batch.flat;
+			orderRecords[i].decal = IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_MIRROR_DECAL) == 0;
 			orderRecords[i].translucent = batch.translucent || IsNativeDecal(batch);
 			orderRecords[i].sortDepth = batch.sortDepth;
 		}
@@ -4627,25 +4409,25 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		unsigned int lastLightUniformNormalCount = 0;
 		unsigned int lastLightUniformSubtractiveCount = 0;
 		unsigned int lastLightUniformCount = 0;
-		GLint lastLightPositionRadius = -1;
-		GLint lastLightColor = -1;
+		GLint lastLightDataSampler = -1;
+		GLint lastLightDataOffset = -1;
 		GLint lastLightCounts = -1;
 		auto uploadOpaqueLights = [&](const FSceneBatch &batch, GLuint program,
-			GLint positionRadius, GLint color, GLint counts, const GLfloat *positions,
-			const GLfloat *colors, unsigned int normalCount, unsigned int subtractiveCount,
+			GLint positionRadius, GLint color, GLint counts,
+			unsigned int normalCount, unsigned int subtractiveCount,
 			unsigned int count)
 		{
 			const bool sameSelection = lightUniformStateKnown && lastLightUniformProgram == program &&
 				lastLightUniformOffset == batch.lightOffset && lastLightUniformNormalCount == normalCount &&
 				lastLightUniformSubtractiveCount == subtractiveCount && lastLightUniformCount == count &&
-				lastLightPositionRadius == positionRadius && lastLightColor == color && lastLightCounts == counts;
+				lastLightDataSampler == positionRadius && lastLightDataOffset == color && lastLightCounts == counts;
 			if (sameSelection)
 			{
 				++Resources.sceneLightUniformUploadSkips;
 				return;
 			}
-			if (positionRadius >= 0 && count > 0) glUniform4fv(positionRadius, count, positions);
-			if (color >= 0 && count > 0) glUniform4fv(color, count, colors);
+			if (positionRadius >= 0) glUniform1i(positionRadius, 3);
+			if (color >= 0) glUniform1i(color, static_cast<GLint>(batch.lightOffset));
 			if (counts >= 0) glUniform3i(counts, static_cast<GLint>(normalCount),
 				static_cast<GLint>(subtractiveCount), static_cast<GLint>(count));
 			lightUniformStateKnown = true;
@@ -4654,8 +4436,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			lastLightUniformNormalCount = normalCount;
 			lastLightUniformSubtractiveCount = subtractiveCount;
 			lastLightUniformCount = count;
-			lastLightPositionRadius = positionRadius;
-			lastLightColor = color;
+			lastLightDataSampler = positionRadius;
+			lastLightDataOffset = color;
 			lastLightCounts = counts;
 			++Resources.sceneLightUniformUploads;
 		};
@@ -4669,7 +4451,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			const FSceneViewSnapshot &view = BatchView(batch);
 			// Opaque world geometry establishes depth before portal targets and
 			// translucent/HUD batches are composited.
-			if (batch.skyMask || batch.portalMask || batch.portalId >= 0 || batch.translucent || batch.hud ||
+			if (batch.skyMask || batch.portalMask || batch.portalId >= 0 || batch.sourceOrdered || batch.translucent || batch.hud ||
 				IsNativeDecal(batch))
 				continue;
 			if (batch.firstIndex < 0 || batch.indexCount <= 0 ||
@@ -4722,7 +4504,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
 				glActiveTexture(GL_TEXTURE0);
 				glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
-				glBindSampler(0, Resources.sceneSampler);
+				glBindSampler(0, Resources.sceneSamplers[3]);
 				textureKnown[0] = false;
 		ProfileDrawElements(GL_TRIANGLES, 6, NativeSceneIndexType(),
 			NativeSceneIndexOffset(batch.floodWallFirstIndex));
@@ -4784,7 +4566,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				else if (batch.blendMode == GLES_BLEND_MULTIPLY)
 					glBlendFunc(GL_DST_COLOR, GL_ZERO);
 				else if (batch.blendMode == GLES_BLEND_FUZZ)
-					glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
+					glBlendFunc((batch.materialFlags >> GLES_MATERIAL_FUZZ_SHIFT) & 7 ? GL_SRC_ALPHA : GL_DST_COLOR,
+						GL_ONE_MINUS_SRC_ALPHA);
 				else
 					glBlendFunc(GL_SRC_ALPHA, additiveBlend ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 			}
@@ -4798,178 +4581,53 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				}
 			}
 			const bool simpleOpaque = CanUseNativeSimpleProgram(batch);
-			const GLuint program = simpleOpaque ? Resources.simpleProgram :
+			GLuint program = simpleOpaque ? Resources.simpleProgram :
 				(batch.fog ? (batch.masked ? Resources.fogMaskedProgram : Resources.fogProgram) :
 				(batch.masked ? Resources.maskedProgram : (batch.palette ? Resources.paletteProgram : Resources.sceneProgram)));
 			const char *programName = simpleOpaque ? "gles/simple-opaque" :
 				(batch.fog ? (batch.masked ? "gles/fog-masked" : "gles/fog") :
 				(batch.masked ? "gles/masked" : (batch.palette ? "gles/palette" : "gles/opaque")));
+			const GLuint materialProgram = ResolveNativeMaterialProgram(program, batch);
+			if (materialProgram != program) { program = materialProgram; programName = NULL; }
 			BindNativeProgram(program, programName);
 			if (Profile.active && simpleOpaque) ++Profile.simpleShaderDraws;
+			SetNativeLightingUniforms(program, batch);
+			SetNativeMaterialUniforms(program, batch);
 			SetNativeGlowUniforms(program, batch);
 			const bool setStaticUniforms = !opaqueStaticUniformsKnown ||
 				opaqueStaticUniformProgram != program;
 			if (setStaticUniforms)
 			{
-				if (program == Resources.sceneProgram && Resources.sceneSkyDepth >= 0)
-					glUniform1i(Resources.sceneSkyDepth, 0);
-				else if (program == Resources.simpleProgram)
-				{
-					if (Resources.simpleSkyDepth >= 0) glUniform1i(Resources.simpleSkyDepth, 0);
-					if (Resources.simpleSkyFog >= 0) glUniform1i(Resources.simpleSkyFog, 0);
-				}
+				const FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+				if (uniforms.skyDepth >= 0) glUniform1i(uniforms.skyDepth, 0);
+				if (uniforms.skyFog >= 0) glUniform1i(uniforms.skyFog, 0);
 			}
-			GLint viewProjection = Resources.sceneViewProjection;
-			GLint textureUniform = Resources.sceneTextureUniform;
-			GLint brightmapUniform = Resources.sceneBrightmapUniform;
-			GLint useBrightmap = Resources.sceneUseBrightmap;
-			GLint brightmapDesaturation = Resources.sceneBrightmapDesaturation;
-			GLint useTexture = Resources.sceneUseTexture;
-			GLint model = Resources.sceneModel;
-			GLint textureTransform = Resources.sceneTextureTransform;
-			GLint cameraPosition = Resources.sceneCameraPosition;
-			GLint objectColor = Resources.sceneObjectColor;
-			GLint materialFlags = Resources.sceneMaterialFlags;
-			GLint fuzzTime = Resources.sceneFuzzTime;
-			GLint alphaCutoff = -1;
-			GLint fogColor = -1;
-			GLint fogDensity = -1;
-			GLint lightPositionRadius = Resources.sceneLightPositionRadius;
-			GLint lightColor = Resources.sceneLightColor;
-			GLint lightCounts = Resources.sceneLightCounts;
-			GLint lightPlaneNormal = Resources.sceneLightPlaneNormal;
-			GLint projectedLights = Resources.sceneProjectedLights;
-			GLint dynamicLightSampler = Resources.sceneDynamicLightTexture;
-			GLint clipPlaneUniform = Resources.sceneClipPlane;
-			GLint clipPlaneEnabledUniform = Resources.sceneClipPlaneEnabled;
-			if (simpleOpaque)
-			{
-				viewProjection = Resources.simpleViewProjection;
-				textureUniform = Resources.simpleTextureUniform;
-				brightmapUniform = -1;
-				useBrightmap = -1;
-				brightmapDesaturation = -1;
-				useTexture = Resources.simpleUseTexture;
-				model = Resources.simpleModel;
-				textureTransform = Resources.simpleTextureTransform;
-				cameraPosition = Resources.simpleCameraPosition;
-				objectColor = Resources.simpleObjectColor;
-				materialFlags = -1;
-				fuzzTime = -1;
-				lightPositionRadius = -1;
-				lightColor = -1;
-				lightCounts = -1;
-				lightPlaneNormal = -1;
-				projectedLights = -1;
-				dynamicLightSampler = -1;
-				clipPlaneUniform = -1;
-				clipPlaneEnabledUniform = -1;
-			}
-			else if (batch.fog)
-			{
-				if (batch.masked)
-				{
-					viewProjection = Resources.fogMaskedViewProjection;
-					textureUniform = Resources.fogMaskedTextureUniform;
-					brightmapUniform = Resources.fogMaskedBrightmapUniform;
-					useBrightmap = Resources.fogMaskedUseBrightmap;
-					brightmapDesaturation = Resources.fogMaskedBrightmapDesaturation;
-					useTexture = Resources.fogMaskedUseTexture;
-					model = Resources.fogMaskedModel;
-					textureTransform = Resources.fogMaskedTextureTransform;
-					cameraPosition = Resources.fogMaskedCameraPosition;
-					objectColor = Resources.fogMaskedObjectColor;
-					materialFlags = Resources.fogMaskedMaterialFlags;
-					fuzzTime = Resources.fogMaskedFuzzTime;
-					alphaCutoff = Resources.fogMaskedAlphaCutoff;
-					fogColor = Resources.fogMaskedColor;
-					fogDensity = Resources.fogMaskedDensity;
-					lightPositionRadius = Resources.fogMaskedLightPositionRadius;
-					lightColor = Resources.fogMaskedLightColor;
-					lightCounts = Resources.fogMaskedLightCounts;
-					lightPlaneNormal = Resources.fogMaskedLightPlaneNormal;
-					projectedLights = Resources.fogMaskedProjectedLights;
-					dynamicLightSampler = Resources.fogMaskedDynamicLightTexture;
-					clipPlaneUniform = Resources.fogMaskedClipPlane;
-					clipPlaneEnabledUniform = Resources.fogMaskedClipPlaneEnabled;
-				}
-				else
-				{
-					viewProjection = Resources.fogViewProjection;
-					textureUniform = Resources.fogTextureUniform;
-					brightmapUniform = Resources.fogBrightmapUniform;
-					useBrightmap = Resources.fogUseBrightmap;
-					brightmapDesaturation = Resources.fogBrightmapDesaturation;
-					useTexture = Resources.fogUseTexture;
-					model = Resources.fogModel;
-					textureTransform = Resources.fogTextureTransform;
-					cameraPosition = Resources.fogCameraPosition;
-					objectColor = Resources.fogObjectColor;
-					materialFlags = Resources.fogMaterialFlags;
-					fuzzTime = Resources.fogFuzzTime;
-					fogColor = Resources.fogColor;
-					fogDensity = Resources.fogDensity;
-					lightPositionRadius = Resources.fogLightPositionRadius;
-					lightColor = Resources.fogLightColor;
-					lightCounts = Resources.fogLightCounts;
-					lightPlaneNormal = Resources.fogLightPlaneNormal;
-					projectedLights = Resources.fogProjectedLights;
-					dynamicLightSampler = Resources.fogDynamicLightTexture;
-					clipPlaneUniform = Resources.fogClipPlane;
-					clipPlaneEnabledUniform = Resources.fogClipPlaneEnabled;
-				}
-				if (fogColor >= 0)
-					glUniform4f(fogColor, batch.fogColor[0], batch.fogColor[1], batch.fogColor[2], 1.0f);
-				if (fogDensity >= 0)
-					glUniform1f(fogDensity, batch.fogDensity / 64000.0f);
-			}
-			else if (batch.masked)
-			{
-				viewProjection = Resources.maskedViewProjection;
-				textureUniform = Resources.maskedTextureUniform;
-				brightmapUniform = Resources.maskedBrightmapUniform;
-				useBrightmap = Resources.maskedUseBrightmap;
-				brightmapDesaturation = Resources.maskedBrightmapDesaturation;
-				useTexture = Resources.maskedUseTexture;
-				model = Resources.maskedModel;
-				textureTransform = Resources.maskedTextureTransform;
-				cameraPosition = Resources.maskedCameraPosition;
-				objectColor = Resources.maskedObjectColor;
-				materialFlags = Resources.maskedMaterialFlags;
-				fuzzTime = Resources.maskedFuzzTime;
-				alphaCutoff = Resources.maskedAlphaCutoff;
-				lightPositionRadius = Resources.maskedLightPositionRadius;
-				lightColor = Resources.maskedLightColor;
-				lightCounts = Resources.maskedLightCounts;
-				lightPlaneNormal = Resources.maskedLightPlaneNormal;
-				projectedLights = Resources.maskedProjectedLights;
-				dynamicLightSampler = Resources.maskedDynamicLightTexture;
-				clipPlaneUniform = Resources.maskedClipPlane;
-				clipPlaneEnabledUniform = Resources.maskedClipPlaneEnabled;
-			}
-			else if (batch.palette)
-			{
-				viewProjection = Resources.paletteViewProjection;
-				textureUniform = Resources.paletteTextureUniform;
-				brightmapUniform = Resources.paletteBrightmapUniform;
-				useBrightmap = Resources.paletteUseBrightmap;
-				brightmapDesaturation = Resources.paletteBrightmapDesaturation;
-				useTexture = Resources.paletteUseTexture;
-				model = Resources.paletteModel;
-				textureTransform = Resources.paletteTextureTransform;
-				cameraPosition = Resources.paletteCameraPosition;
-				objectColor = Resources.paletteObjectColor;
-				materialFlags = Resources.paletteMaterialFlags;
-				fuzzTime = Resources.paletteFuzzTime;
-				lightPositionRadius = Resources.paletteLightPositionRadius;
-				lightColor = Resources.paletteLightColor;
-				lightCounts = Resources.paletteLightCounts;
-				lightPlaneNormal = Resources.paletteLightPlaneNormal;
-				projectedLights = Resources.paletteProjectedLights;
-				dynamicLightSampler = Resources.paletteDynamicLightTexture;
-				clipPlaneUniform = Resources.paletteClipPlane;
-				clipPlaneEnabledUniform = Resources.paletteClipPlaneEnabled;
-			}
+			const FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
+			const GLint viewProjection = uniforms.viewProjection;
+			const GLint textureUniform = uniforms.textureUniform;
+			const GLint brightmapUniform = uniforms.brightmapUniform;
+			const GLint useBrightmap = uniforms.useBrightmap;
+			const GLint brightmapDesaturation = uniforms.brightmapDesaturation;
+			const GLint useTexture = uniforms.useTexture;
+			const GLint model = uniforms.model;
+			const GLint textureTransform = uniforms.textureTransform;
+			const GLint cameraPosition = uniforms.cameraPosition;
+			const GLint objectColor = uniforms.objectColor;
+			const GLint materialFlags = uniforms.materialFlags;
+			const GLint fuzzTime = uniforms.fuzzTime;
+			const GLint alphaCutoff = uniforms.alphaCutoff;
+			const GLint fogColor = uniforms.fogColor;
+			const GLint fogDensity = uniforms.fogDensity;
+			const GLint lightDataSampler = uniforms.lightDataSampler;
+			const GLint lightDataOffset = uniforms.lightDataOffset;
+			const GLint lightCounts = uniforms.lightCounts;
+			const GLint lightPlaneNormal = uniforms.lightPlaneNormal;
+			const GLint projectedLights = uniforms.projectedLights;
+			const GLint dynamicLightSampler = uniforms.dynamicLightSampler;
+			const GLint clipPlaneUniform = uniforms.clipPlaneUniform;
+			const GLint clipPlaneEnabledUniform = uniforms.clipPlaneEnabledUniform;
+			if (fogColor >= 0) glUniform4f(fogColor, batch.fogColor[0], batch.fogColor[1], batch.fogColor[2], 1.0f);
+			if (fogDensity >= 0) glUniform1f(fogDensity, batch.fogDensity / 64000.0f);
 			static const GLfloat identity[16] =
 			{
 				1.0f, 0.0f, 0.0f, 0.0f,
@@ -4985,22 +4643,15 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glUniform3f(cameraPosition, batch.hud ? 0.0f : view.cameraPosition[0],
 					batch.hud ? 0.0f : view.cameraPosition[1], batch.hud ? 0.0f : view.cameraPosition[2]);
 			if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
-			if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags));
-			if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, Resources.frame / 35.0f);
+			if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags |
+		(gl_fogmode == 2 ? GLES_MATERIAL_RADIAL_FOG : 0)));
+			if (setStaticUniforms && fuzzTime >= 0) glUniform1f(fuzzTime, gl_frameMS / 1000.0f);
 			if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, view.clipPlane);
 			if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, view.clipPlaneEnabled ? 1 : 0);
-			if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ||
-				(IsNativeDecal(batch) && (batch.materialFlags & GLES_MATERIAL_RED_IS_ALPHA) != 0) ? 0.0f :
-				(batch.alphaCutoff > 0.0f ? batch.alphaCutoff : 0.5f));
-			const GLfloat *lightPositions = NULL;
-			const GLfloat *lightColors = NULL;
-			unsigned int lightNormalCount = 0;
-			unsigned int lightSubtractiveCount = 0;
-			unsigned int lightCount = 0;
-			GetNativeLightUpload(batch, 0, GLES_MAX_LIGHTS, lightPositions, lightColors, lightNormalCount,
-				lightSubtractiveCount, lightCount);
-			uploadOpaqueLights(batch, program, lightPositionRadius, lightColor, lightCounts,
-				lightPositions, lightColors, lightNormalCount, lightSubtractiveCount, lightCount);
+			if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ? 0.0f : batch.alphaCutoff);
+			const unsigned int lightCount = batch.lightCount;
+			uploadOpaqueLights(batch, program, lightDataSampler, lightDataOffset, lightCounts,
+				batch.lightNormalCount, batch.lightSubtractiveCount, lightCount);
 			if (lightPlaneNormal >= 0)
 				glUniform3fv(lightPlaneNormal, 1, batch.lightPlaneNormal);
 			const bool useProjectedLights = dynamicLightTexture != 0 && lightCount > 0 &&
@@ -5018,7 +4669,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			bindOpaqueTexture(1, batch.brightmap != 0 ? batch.brightmap : Resources.checkerTexture,
 				NativeSamplerForBatch(batch));
 			bindOpaqueTexture(2, useProjectedLights ? dynamicLightTexture : Resources.checkerTexture,
-				Resources.sceneSampler);
+				Resources.sceneSamplers[3]);
 			if (!activeTextureKnown || activeTextureUnit != 0)
 			{
 				glActiveTexture(GL_TEXTURE0);
@@ -5030,11 +4681,6 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			SetNativeDecalDepthBias(batch, true);
 			ProfileDrawElements(GL_TRIANGLES, batch.indexCount, NativeSceneIndexType(),
 				NativeSceneIndexOffset(batch.firstIndex));
-			DrawNativeLightOverflow(batch, dynamicLightTexture, program, lightPositionRadius,
-				lightColor, lightCounts, projectedLights, batch.indexCount, batch.firstIndex,
-				batch.flood || batch.model ? GL_LEQUAL : GL_LESS, true, !batch.flood);
-			if (batch.lightCount > GLES_MAX_LIGHTS)
-				lightUniformStateKnown = false;
 			SetNativeDecalDepthBias(batch, false);
 			if (batch.flood)
 			{
@@ -5055,7 +4701,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				glDisable(GL_STENCIL_TEST);
 			}
 			opaqueStaticUniformProgram = program;
-			opaqueStaticUniformsKnown = batch.lightCount <= GLES_MAX_LIGHTS;
+			opaqueStaticUniformsKnown = true;
 		}
 		if (Profile.active)
 			Profile.worldMilliseconds += ProfileMilliseconds(worldStart);
@@ -5081,7 +4727,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		{
 			const FSceneBatch &batch = Resources.sceneBatches[drawOrder.indices[orderIndex]];
 			if (batch.wipeOverlay || batch.skyMask || batch.portalMask || batch.portalId >= 0 ||
-				(!batch.translucent && !batch.hud && !IsNativeDecal(batch)))
+				(!batch.sourceOrdered && !batch.translucent && !batch.hud && !IsNativeDecal(batch)))
 				continue;
 			if (batch.hud && !hudViewportReady)
 			{
@@ -5116,7 +4762,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		if (Resources.sceneUseTexture >= 0) glUniform1i(Resources.sceneUseTexture, 0);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, Resources.checkerTexture);
-		glBindSampler(0, Resources.checkerSampler);
+		glBindSampler(0, Resources.worldSamplers[0]);
 		glBindVertexArray(Resources.vertexArray);
 		ProfileDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(0));
 		ProfileDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void *>(6 * sizeof(GLushort)));
@@ -5158,7 +4804,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		I_FatalError("Zandronum GLES host did not supply a presentation target.");
 	present.target = Resources.sceneTarget;
 	present.wipe = gl_GLESInternalWipeGetBindings();
-	present.sceneSampler = Resources.sceneSampler;
+	present.sceneSampler = Resources.sceneSamplers[3];
 	present.stateWidth = present.presentationTarget.renderWidth;
 	present.stateHeight = present.presentationTarget.renderHeight;
 	present.gamma = static_cast<float>(Gamma);
@@ -5212,7 +4858,7 @@ void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilli
 			"portal_targets=%u camera=%u/%u realloc=%u bytes=%zu/%zu index_type=%u resolves=%u readbacks=%u wipes=%u; "
 			"binds=%u/%u tex=%u/%u active_tex=%u/%u samp=%u/%u sky_upload=%u/%u "
 			"state=%u/%u bridge=%u/%u portal_state=%u/%u portal_tex=%u/%u portal_uniform=%u/%u "
-			"lights=%u/%u light_select=%u/%u overflow=%u glow=%u/%u "
+			"lights=%u/%u light_select=%u/%u glow=%u/%u "
 			"material=%u/%u uploads=%u; presented=%s",
 			Resources.frame, Profile.collectionMilliseconds, Profile.orderingMilliseconds,
 			Profile.uploadMilliseconds, Profile.worldMilliseconds, Profile.portalSkyMilliseconds,
@@ -5246,7 +4892,6 @@ void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilli
 			Profile.portalUniformSets, Profile.portalUniformSkips,
 			Resources.sceneLightUniformUploads, Resources.sceneLightUniformUploadSkips,
 			Profile.lightSelectionRequests, Profile.lightSelectionReuses,
-			Profile.overflowPasses,
 			Resources.sceneGlowUniformUploads, Resources.sceneGlowUniformUploadSkips,
 			Profile.materialHits, Profile.materialMisses, Profile.materialUploads,
 			presented ? "ok" : "failed");
@@ -5262,11 +4907,6 @@ void gl_GLES_RecordProfileDraw(bool triangleStrip, int indexCount)
 		Profile.triangles += indexCount > 2 ? static_cast<unsigned int>(indexCount - 2) : 0;
 	else
 		Profile.triangles += static_cast<unsigned int>(indexCount / 3);
-}
-
-void gl_GLES_RecordProfileOverflow()
-{
-	if (Profile.active) ++Profile.overflowPasses;
 }
 
 void gl_GLES_RecordProfileState(bool skipped)
@@ -5437,13 +5077,12 @@ void gl_GLES_PrintStartupLog()
 		context.isGLES ? "OpenGL ES" : "desktop OpenGL",
 		Capabilities.majorVersion, Capabilities.minorVersion, Capabilities.maxTextureSize,
 		Capabilities.maxTextureUnits, Capabilities.maxFragmentUniformVectors, Capabilities.extensionCount);
-	Printf("GLES core: buffers=%s, arrays=%s, uniform-buffers=%s, framebuffers=%s, depth-stencil=%s, buffer-mapping=%s.\n",
+	Printf("GLES core: buffers=%s, arrays=%s, uniform-buffers=%s, framebuffers=%s, depth-stencil=%s.\n",
 		Capabilities.hasVertexBuffers ? "yes" : "no",
 		Capabilities.hasVertexArrays ? "yes" : "no",
 		Capabilities.hasUniformBuffers ? "yes" : "no",
 		Capabilities.hasFramebuffers ? "yes" : "no",
-		Capabilities.hasDepthStencil ? "yes" : "no",
-		Capabilities.hasBufferMapping ? "yes" : "deferred");
+		Capabilities.hasDepthStencil ? "yes" : "no");
 	Printf("GLES optional: ETC2=%s, anisotropy=%s, ASTC=%s, debug=%s, multiview=%s.\n",
 		Capabilities.hasEtc2Compression ? "yes" : "no",
 		Capabilities.hasAnisotropicFiltering ? "yes" : "no",
@@ -5464,12 +5103,9 @@ void gl_GLES_ResetState(int width, int height)
 	gl_GLESInternalResetState(width, height);
 }
 
-bool gl_GLES_ApplyRenderState(int srcBlend, int dstBlend, int alphaFunc,
-	float alphaThreshold, bool alphaTest, int blendEquation, bool fogEnabled,
-	bool textureEnabled, int textureMode)
+bool gl_GLES_ApplyBlendState(int srcBlend, int dstBlend, int blendEquation)
 {
-	return gl_GLESInternalApplyRenderState(gl_GLES_CanUseResources(), srcBlend, dstBlend,
-		alphaFunc, alphaThreshold, alphaTest, blendEquation, fogEnabled, textureEnabled, textureMode);
+	return gl_GLESInternalApplyBlendState(gl_GLES_CanUseResources(), srcBlend, dstBlend, blendEquation);
 }
 
 void gl_GLES_GenerateMipmap()

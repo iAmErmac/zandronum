@@ -2,10 +2,13 @@
 #define ZANDRONUM_GL_GLES_SHADER_H
 
 #include "gl/system/gl_gles_api.h"
+#include <string>
+
+std::string gl_GLES_LowerMaterialShader(const char *source);
 
 GLuint gl_GLES_CompileShader(GLenum type, const char *source, const char *label,
 	char *log, int logSize);
 GLuint gl_GLES_LinkProgram(const char *vertexSource, const char *fragmentSource,
-	const char *label, char *log, int logSize);
+	const char *label, char *log, int logSize, bool clampDepth = false);
 
 #endif

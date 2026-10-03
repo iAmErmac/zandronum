@@ -393,7 +393,7 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		double top = parms.y - parms.top * yscale;
 		double right = left + parms.destwidth;
 		double bottom = top + parms.destheight;
-		float u1 = 0.0f, v1 = 0.0f, u2 = 1.0f, v2 = 1.0f;
+		float u1 = 0.0f, v1 = 0.0f, u2 = 1.0f, v2 = img->bHasCanvas ? -1.0f : 1.0f;
 		if (parms.windowleft > 0.0 || parms.windowright < parms.texwidth)
 		{
 			const float texWidth = parms.texwidth > 0.0 ? static_cast<float>(parms.texwidth) : 1.0f;
@@ -453,7 +453,7 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 			GLTranslationPalette *palette = static_cast<GLTranslationPalette *>(parms.remap->GetNative());
 			if (palette != NULL) translation = -palette->GetIndex();
 		}
-		const bool alphaChannel = parms.alphaChannel;
+		const bool alphaChannel = !img->bHasCanvas && parms.alphaChannel;
 		const unsigned int texture = nativeMaterial->BindNative(alphaChannel ? CM_SHADE : CM_DEFAULT,
 			alphaChannel ? 0 : translation, false, false);
 		int textureMode = 0;
@@ -470,15 +470,13 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		else if (parms.alpha < FRACUNIT || parms.style.BlendOp != STYLEOP_None) blendMode = GLES_BLEND_ALPHA;
 		const bool customBlend = blendMode != GLES_BLEND_OPAQUE &&
 			(parms.style.BlendOp < STYLEOP_Fuzz || parms.style.BlendOp > STYLEOP_FuzzOrRevSub);
-		unsigned int materialFlags = 0;
+		unsigned int materialFlags = img->bHasCanvas || textureMode == TM_OPAQUE ?
+			GLES_MATERIAL_OPAQUE_TEXTURE : 0;
 		if (alphaChannel) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
-		if (parms.style.Flags & STYLEF_RedIsAlpha) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
-		if (parms.style.Flags & STYLEF_InvertOverlay) materialFlags |= GLES_MATERIAL_INVERT;
-		if (parms.style.Flags & STYLEF_FadeToBlack) materialFlags |= GLES_MATERIAL_FADE_TO_BLACK;
-		if (parms.style.Flags & STYLEF_InvertSource) materialFlags |= GLES_MATERIAL_INVERT_SOURCE;
-		if (parms.style.Flags & STYLEF_ColorIsFixed) materialFlags |= GLES_MATERIAL_COLOR_FIXED;
+		if (!img->bHasCanvas && (parms.style.Flags & STYLEF_RedIsAlpha)) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
+		if (!img->bHasCanvas && (parms.style.Flags & STYLEF_ColorIsFixed)) materialFlags |= GLES_MATERIAL_COLOR_FIXED;
 		gl_GLES_AddHUDQuad(positions, texcoords, color, FIXED2FLOAT(parms.alpha),
-			parms.masked != 0, texture, blendMode, materialFlags, customBlend,
+			false, texture, blendMode, materialFlags, customBlend,
 			sourceBlend, destinationBlend);
 		if (colorOverlay != 0 && APART(colorOverlay) != 0)
 		{

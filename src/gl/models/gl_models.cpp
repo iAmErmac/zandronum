@@ -82,6 +82,7 @@ CVAR(Bool, gl_interpolate_model_frames, true, CVAR_ARCHIVE)
 CVAR(Bool, gl_light_models, true, CVAR_ARCHIVE)
 // [BB] Allow the user disable the use of any kind of models.
 CVAR(Bool, gl_use_models, true, CVAR_ARCHIVE)
+EXTERN_CVAR(Bool, gl_spritebrightfog)
 EXTERN_CVAR(Int, gl_fogmode)
 EXTERN_CVAR(Bool, gl_dynlight_shader)
 
@@ -117,9 +118,13 @@ public:
 			return;
 		FMaterial *material = FMaterial::ValidateTexture(skin);
 		if (material == NULL) return;
-		const unsigned int texture = material->BindNative(Colormap, Translation, false);
-		const unsigned int brightmap = gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
-			material->BindNativeBrightmap(false) : 0;
+		const unsigned int texture = material->BindNative(Colormap, Translation, true);
+		const bool allowBrightmap = Sprite->hw_styleflags == STYLEHW_Solid || gl_spritebrightfog ||
+			(gl_isBlack(Sprite->Colormap.FadeColor) && !(level.flags & LEVEL_HASFADETABLE) &&
+			 Sprite->RenderStyle.BlendOp == STYLEOP_Add);
+		const unsigned int brightmap = allowBrightmap && Colormap < CM_FIRSTSPECIALCOLORMAP &&
+			gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+			material->BindNativeBrightmap(true) : 0;
 		if (texture == 0) return;
 		static FGLESModelScratch scratch;
 		std::vector<float> &worldPositions = scratch.worldPositions;
@@ -155,6 +160,10 @@ public:
 				}
 			}
 		}
+		FColormap nativeColormap = Sprite->Colormap;
+		if (gl_spritebrightfog && Sprite->fullbright) nativeColormap.FadeColor = 0;
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(Sprite->lightlevel, getExtraLight(), &nativeColormap);
+		int nativeLightLevel = Sprite->lightlevel;
 		float color[3];
 		gl_GetLightColor(Sprite->lightlevel, getExtraLight(), &Sprite->Colormap,
 			color + 0, color + 1, color + 2);
@@ -167,49 +176,68 @@ public:
 				Sprite->actor->z + (Sprite->actor->height >> 1), Sprite->actor->subsector,
 				Sprite->Colormap.colormap, dynamicLight))
 			{
-				color[0] = clamp<float>(color[0] + dynamicLight[0], 0.0f, 1.0f);
-				color[1] = clamp<float>(color[1] + dynamicLight[1], 0.0f, 1.0f);
-				color[2] = clamp<float>(color[2] + dynamicLight[2], 0.0f, 1.0f);
+				if (lighting.software != 0.0f)
+					memcpy(lighting.dynamic, dynamicLight, sizeof(lighting.dynamic));
+				else
+				{
+					color[0] = clamp<float>(color[0] + dynamicLight[0], 0.0f, 1.0f);
+					color[1] = clamp<float>(color[1] + dynamicLight[1], 0.0f, 1.0f);
+					color[2] = clamp<float>(color[2] + dynamicLight[2], 0.0f, 1.0f);
+					nativeLightLevel = gl_GetSpriteLightLevel(color[0], color[1], color[2]);
+					lighting = gl_GetShaderLightParameters(nativeLightLevel, getExtraLight(), &nativeColormap);
+				}
 			}
 		}
 		float nativeAlpha = Sprite->trans;
+		float nativeShadowCutoff = 0.0f;
 		if (Sprite->RenderStyle.BlendOp == STYLEOP_Shadow)
 		{
-			// Model shadows use the same fixed tint and opacity as sprite shadows.
-			color[0] = 0.2f * Sprite->ThingColor.r / 255.0f;
-			color[1] = 0.2f * Sprite->ThingColor.g / 255.0f;
-			color[2] = 0.2f * Sprite->ThingColor.b / 255.0f;
-			nativeAlpha = 0.33f;
+			const float shadowLightLevel = lighting.level;
+			lighting = FShaderLightParameters();
+			if (glset.lightmode == 8)
+			{
+				lighting.level = shadowLightLevel;
+				lighting.software = 1.0f;
+			}
+			const float dx = FIXED2FLOAT(viewx) - Sprite->x;
+			const float dy = FIXED2FLOAT(viewy) - Sprite->y;
+			gl_GetShadowParameters(Sprite->lightlevel, &nativeColormap, sqrtf(dx * dx + dy * dy),
+				&nativeAlpha, &nativeShadowCutoff);
+			color[0] = color[1] = color[2] = 0.2f;
 		}
-		else
+		else if (glset.lightmode != 8 ||
+			(gl_light_sprites && gl_lights && GLRenderer->mLightCount > 0 && !Sprite->fullbright))
 		{
 			color[0] *= Sprite->ThingColor.r / 255.0f;
 			color[1] *= Sprite->ThingColor.g / 255.0f;
 			color[2] *= Sprite->ThingColor.b / 255.0f;
 		}
-		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
-		float fogDensity = 0.0f;
-		const bool fog = !gl_fixedcolormap &&
-			(!gl_isBlack(Sprite->Colormap.FadeColor) || (level.flags & LEVEL_HASFADETABLE) != 0);
-		if (fog)
+		float fogColor[3];
+		float fogDensity;
+		const int nativeFogLevel = gl_isBlack(nativeColormap.FadeColor) ? nativeLightLevel : Sprite->foglevel;
+		bool additiveFog = Sprite->RenderStyle.BlendOp == STYLEOP_Shadow ||
+			(Sprite->RenderStyle.BlendOp == STYLEOP_Add && Sprite->RenderStyle.DestAlpha == STYLEALPHA_One);
+		FColormap fogColormap = nativeColormap;
+		if (Sprite->RenderStyle.Flags & STYLEF_FadeToBlack)
 		{
-			PalEntry fade = Sprite->Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fade = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(Sprite->lightlevel, fade);
-				gl_ModifyColor(fade.r, fade.g, fade.b, Sprite->Colormap.colormap);
-			}
-			fogColor[0] = fade.r / 255.0f;
-			fogColor[1] = fade.g / 255.0f;
-			fogColor[2] = fade.b / 255.0f;
+			fogColormap.FadeColor = 0;
+			additiveFog = true;
 		}
-		const bool nativeFuzz = Sprite->nativeFuzz || Sprite->RenderStyle.BlendOp == STYLEOP_Fuzz;
-		EGLESBlendMode blendMode = nativeFuzz ? GLES_BLEND_FUZZ : GLES_BLEND_ALPHA;
+		if (Sprite->RenderStyle.Flags & STYLEF_InvertOverlay)
+		{
+			fogColormap.FadeColor = fogColormap.FadeColor.InverseColor();
+			additiveFog = false;
+		}
+		if (Sprite->RenderStyle.Flags & (STYLEF_FadeToBlack | STYLEF_InvertOverlay))
+		{
+			const FShaderLightParameters fogLighting = gl_GetShaderLightParameters(nativeFogLevel, getExtraLight(), &fogColormap);
+			lighting.factor = fogLighting.factor;
+			lighting.distance = fogLighting.distance;
+			if (lighting.software != 0.0f) lighting.level = fogLighting.level;
+		}
+		const bool fog = gl_GetFogParameters(nativeFogLevel, &fogColormap,
+			additiveFog, fogColor, &fogDensity);
+		EGLESBlendMode blendMode = GLES_BLEND_ALPHA;
 		if (Sprite->RenderStyle.BlendOp == STYLEOP_Add && Sprite->RenderStyle.DestAlpha == STYLEALPHA_One)
 			blendMode = GLES_BLEND_ADD;
 		else if (Sprite->RenderStyle.BlendOp == STYLEOP_Sub)
@@ -225,20 +253,17 @@ public:
 		int blendEquation = GL_FUNC_ADD;
 		gl_GetRenderStyle(Sprite->RenderStyle, false, false, &textureMode, &sourceBlend,
 			&destinationBlend, &blendEquation);
-		const bool customBlend = blendMode != GLES_BLEND_OPAQUE && !nativeFuzz;
+		const bool customBlend = blendMode != GLES_BLEND_OPAQUE;
 		gl_GLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
-			indices, indexCount, color, nativeAlpha, material->isMasked(), fog, texture,
+			indices, indexCount, color, nativeAlpha, Sprite->hw_styleflags != STYLEHW_NoAlphaTest, fog, texture,
 			fogColor, fogDensity, blendMode,
-			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
-			((Sprite->RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0),
+			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0),
 			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
 			(Colormap >= CM_DESAT0 && Colormap <= CM_DESAT31) ? Colormap : 0,
-			!(Sprite->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
-			sourceBlend, destinationBlend);
+			!(Sprite->actor->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
+			sourceBlend, destinationBlend, &lighting,
+			Sprite->RenderStyle.BlendOp == STYLEOP_Shadow ?
+				nativeShadowCutoff / nativeAlpha * gl_mask_sprite_threshold : gl_mask_sprite_threshold);
 	}
 };
 

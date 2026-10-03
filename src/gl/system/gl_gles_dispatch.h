@@ -46,6 +46,7 @@
 #define glPixelStorei gl_GLES_GetProcTable().PixelStorei
 #define glReadPixels gl_GLES_GetProcTable().ReadPixels
 #define glSamplerParameteri gl_GLES_GetProcTable().SamplerParameteri
+#define glSamplerParameterf gl_GLES_GetProcTable().SamplerParameterf
 #define glScissor gl_GLES_GetProcTable().Scissor
 #define glStencilFunc gl_GLES_GetProcTable().StencilFunc
 #define glStencilMask gl_GLES_GetProcTable().StencilMask

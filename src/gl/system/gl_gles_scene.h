@@ -5,16 +5,16 @@
 
 #include "gl/system/gl_gles_api.h"
 
-enum { GLES_MAX_LIGHTS = 32 };
-
 struct FGLESSceneOrderRecord
 {
 	size_t batchIndex;
 	bool included;
+	bool sourceOrdered;
 	bool hud;
 	bool flood;
 	bool flat;
 	bool translucent;
+	bool decal;
 	float sortDepth;
 };
 
@@ -38,38 +38,6 @@ struct FGLESSceneLightSelection
 	unsigned int subtractiveCount;
 };
 
-struct FGLESSceneLightUpload
-{
-	const GLfloat *positions;
-	const GLfloat *colors;
-	unsigned int lightCount;
-	unsigned int normalCount;
-	unsigned int subtractiveCount;
-};
-
-struct FGLESSceneLightPass
-{
-	FGLESSceneLightSelection selection;
-	float planeNormal[3];
-	GLuint dynamicLightTexture;
-	GLuint checkerTexture;
-	GLuint program;
-	GLint positionUniform;
-	GLint colorUniform;
-	GLint countsUniform;
-	GLint lightOnlyUniform;
-	GLint projectedUniform;
-	GLint depthFunction;
-	bool depthStateKnown;
-	bool depthWrite;
-	GLsizei indexCount;
-	size_t firstIndex;
-	GLenum indexType;
-	size_t indexStride;
-	bool translucent;
-	int blendMode;
-};
-
 FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRecord *records,
 	size_t recordCount, FGLESSceneOrderSlot slot);
 bool gl_GLESInternalSceneCanAppend(size_t currentVertexCount, size_t currentIndexCount,
@@ -81,8 +49,7 @@ void gl_GLESInternalSceneInvalidateBuffers();
 void gl_GLESInternalSceneClearLights();
 bool gl_GLESInternalSceneAppendLights(const float *lightData,
 	const unsigned int *lightCounts, FGLESSceneLightSelection *selection);
-void gl_GLESInternalSceneGetLightUpload(const FGLESSceneLightSelection &selection,
-	unsigned int firstLight, unsigned int maxLightCount, FGLESSceneLightUpload *upload);
-void gl_GLESInternalSceneDrawLightOverflow(const FGLESSceneLightPass &pass);
+bool gl_GLESInternalSceneUploadLights();
+void gl_GLESInternalSceneDeleteLights();
 
 #endif

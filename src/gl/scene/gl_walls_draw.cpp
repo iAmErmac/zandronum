@@ -257,29 +257,14 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 	if (gl_GLES_IsActive())
 	{
 		if (light != NULL) return;
+		const FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rellight + getExtraLight(), &Colormap);
 		float color[3];
 		gl_GetLightColor(lightlevel, rellight + getExtraLight(), &Colormap,
 			color + 0, color + 1, color + 2);
-		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
-		float fogDensity = 0.0f;
-		const bool nativeFog = (flags & GLWF_FOGGY) != 0 && !gl_fixedcolormap;
-		if (nativeFog)
-		{
-			PalEntry fog = Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(lightlevel, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-			}
-			fogColor[0] = fog.r / 255.0f;
-			fogColor[1] = fog.g / 255.0f;
-			fogColor[2] = fog.b / 255.0f;
-		}
+		float fogColor[3];
+		float fogDensity;
+		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap,
+			RenderStyle == STYLE_Add, fogColor, &fogDensity);
 		const float positions[12] =
 		{
 			glseg.x1, zbottom[0], glseg.y1,
@@ -292,18 +277,6 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			tcs[0].u, tcs[0].v, tcs[1].u, tcs[1].v,
 			tcs[2].u, tcs[2].v, tcs[3].u, tcs[3].v
 		};
-		if (gltexture != NULL && gltexture->tex->bHasCanvas)
-		{
-			// Canvas walls use finite targets; normalize their V span before clamped sampling.
-			float minimumV = texcoords[1];
-			for (int vertex = 1; vertex < 4; ++vertex)
-				minimumV = std::min(minimumV, texcoords[vertex * 2 + 1]);
-			if (minimumV != 0.0f)
-			{
-				for (int vertex = 0; vertex < 4; ++vertex)
-					texcoords[vertex * 2 + 1] -= minimumV;
-			}
-		}
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
 		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			gltexture->BindNativeBrightmap(true) : 0;
@@ -318,12 +291,17 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			zceil[1] - ztop[1], ztop[1] - zfloor[1],
 			zceil[1] - zbottom[1], zbottom[1] - zfloor[1]
 		};
+		const unsigned int materialFlags =
+			((flags & GLT_CLAMPX) ? GLES_MATERIAL_CLAMP_X : 0) |
+			((flags & GLT_CLAMPY) ? GLES_MATERIAL_CLAMP_Y : 0);
 		gl_GLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
-			texture, gltexture != NULL && gltexture->isMasked(), nativeFog, true, fogColor, fogDensity,
-			blendMode, 0, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
+			texture, gltexture != NULL && gltexture->isMasked() &&
+				type != RENDERWALL_TOP && type != RENDERWALL_M1S && type != RENDERWALL_BOTTOM,
+			nativeFog, true, fogColor, fogDensity,
+			blendMode, materialFlags, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
 			Colormap.colormap : 0, glowing ? topglowcolor : NULL, glowing ? bottomglowcolor : NULL,
-			glowing ? glowDistances : NULL);
+			glowing ? glowDistances : NULL, &lighting);
 		vertexcount += 4;
 		return;
 	}
@@ -390,19 +368,9 @@ void GLWall::RenderFogBoundary()
 		OVERRIDE_FOGMODE_IF_NECESSARY
 		if (!gl_fogmode || gl_fixedcolormap != 0) return;
 
-		PalEntry fog = Colormap.FadeColor;
+		float fogColor[3];
 		float fogDensity = 0.0f;
-		if (level.flags & LEVEL_HASFADETABLE)
-		{
-			fog = 0x808080;
-			fogDensity = 70.0f;
-		}
-		else
-		{
-			fogDensity = gl_GetFogDensity(lightlevel, fog);
-			gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-		}
-		const float fogColor[3] = { fog.r / 255.0f, fog.g / 255.0f, fog.b / 255.0f };
+		gl_GetFogParameters(lightlevel, &Colormap, false, fogColor, &fogDensity);
 		const float color[3] = { 1.0f, 1.0f, 1.0f };
 		const float positions[12] =
 		{
@@ -493,25 +461,10 @@ void GLWall::RenderMirrorSurface()
 		gl_GetLightColor(lightlevel, 0, &Colormap, color + 0, color + 1, color + 2);
 		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
 		float fogDensity = 0.0f;
-		const bool nativeFog = gl_fogmode != 0 && ((level.flags & LEVEL_HASFADETABLE) || !gl_fixedcolormap);
-		if (nativeFog)
-		{
-			PalEntry fog = Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(lightlevel, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-			}
-			// Additive mirror fog uses black to avoid applying the scene fog color twice.
-			fogColor[0] = 0.0f;
-			fogColor[1] = 0.0f;
-			fogColor[2] = 0.0f;
-		}
+		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap, true, fogColor, &fogDensity);
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, 0, &Colormap);
+		// The sphere-map effect omits software lighting.
+		lighting.software = 0.0f;
 		const float positions[12] =
 		{
 			glseg.x1, zbottom[0], glseg.y1,
@@ -520,7 +473,8 @@ void GLWall::RenderMirrorSurface()
 			glseg.x2, zbottom[1], glseg.y2
 		};
 		gl_GLES_AddWall(positions, NULL, color, 0.1f, texture, false, nativeFog, false,
-			fogColor, fogDensity, GLES_BLEND_ADD, GLES_MATERIAL_SPHERE_MAP);
+			fogColor, fogDensity, GLES_BLEND_ADD, GLES_MATERIAL_SPHERE_MAP,
+			NULL, NULL, 0, 0, NULL, NULL, NULL, &lighting);
 		if (seg->sidedef->AttachedDecals) DoDrawDecals();
 		return;
 	}
@@ -633,6 +587,22 @@ void GLWall::Draw(int pass)
 {
 	FLightNode * node;
 	int rel;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive() && pass == GLPASS_TRANSLUCENT)
+	{
+		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
+		if (type == RENDERWALL_MIRRORSURFACE) RenderMirrorSurface();
+		else if (type == RENDERWALL_FOGBOUNDARY) RenderFogBoundary();
+		else
+		{
+			const int savedRelativeLight = rellight;
+			rellight = 0;
+			RenderWall(5, NULL);
+			rellight = savedRelativeLight;
+		}
+		return;
+	}
+#endif
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive() && pass != GLPASS_ALL)
 		nativeLightCounts[0] = nativeLightCounts[1] = nativeLightCounts[2] = 0;

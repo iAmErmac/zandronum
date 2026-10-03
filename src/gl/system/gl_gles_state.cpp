@@ -9,7 +9,6 @@
 
 namespace
 {
-	bool StateWarningLogged = false;
 	bool BlendStateKnown = false;
 	GLenum CachedSourceBlend = 0;
 	GLenum CachedDestinationBlend = 0;
@@ -22,6 +21,7 @@ void gl_GLESInternalResetState(int width, int height)
 	glViewport(0, 0, width, height);
 	glScissor(0, 0, width, height);
 	glDisable(GL_SCISSOR_TEST);
+	if (gl_GLES_GetContextInfo().hasDepthClamp) glDisable(GL_DEPTH_CLAMP);
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_TRUE);
 	glDepthFunc(GL_LESS);
@@ -56,17 +56,11 @@ void gl_GLESInternalInvalidateStateCache()
 
 void gl_GLESInternalStateContextLost()
 {
-	StateWarningLogged = false;
 	gl_GLESInternalInvalidateStateCache();
 }
 
-bool gl_GLESInternalApplyRenderState(bool resourcesAvailable, int srcBlend, int dstBlend,
-	int alphaFunc, float alphaThreshold, bool alphaTest, int blendEquation,
-	bool fogEnabled, bool textureEnabled, int textureMode)
+bool gl_GLESInternalApplyBlendState(bool resourcesAvailable, int srcBlend, int dstBlend, int blendEquation)
 {
-	(void)alphaFunc;
-	(void)alphaThreshold;
-	(void)textureMode;
 	if (!resourcesAvailable) return false;
 	const GLenum requestedSourceBlend = static_cast<GLenum>(srcBlend);
 	const GLenum requestedDestinationBlend = static_cast<GLenum>(dstBlend);
@@ -88,14 +82,6 @@ bool gl_GLESInternalApplyRenderState(bool resourcesAvailable, int srcBlend, int 
 		CachedBlendEquation = requestedBlendEquation;
 		BlendStateKnown = true;
 		gl_GLES_RecordProfileState(false);
-	}
-	if (alphaTest || fogEnabled || !textureEnabled)
-	{
-		if (developer && !StateWarningLogged)
-		{
-			StateWarningLogged = true;
-			DPrintf("Zandronum GLES state request is consumed by the native shader variants; alpha, fog, and texture flags remain submission semantics.\n");
-		}
 	}
 	// Keep the error drain out of normal render-state traffic; scene boundaries
 	// perform the regular GLES check, while developer mode retains this local

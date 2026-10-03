@@ -55,7 +55,7 @@
 #include "gl/shaders/gl_shader.h"
 #include "gl/textures/gl_material.h"
 
-#if defined(ZANDRONUM_GLES_BACKEND)
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
 #endif
 
@@ -74,6 +74,9 @@ CUSTOM_CVAR (Bool, gl_lights, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOIN
 
 CUSTOM_CVAR (Bool, gl_dynlight_shader, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG | CVAR_NOINITCALL)
 {
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
 	if (self && (gl.maxuniforms < 1024 || gl.shadermodel < 4)) self = false;
 }
 

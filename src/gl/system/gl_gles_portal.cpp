@@ -11,6 +11,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <vector>
+#include "tables.h"
 
 #include "gl/data/gl_data.h"
 #include "gl/renderer/gl_renderer.h"
@@ -164,7 +165,7 @@ namespace
 			return true;
 		char log[1024] = {};
 		Portal.compositeProgram = gl_GLES_LinkProgram(PortalVertexSource, PortalFragmentSource,
-			"portal FBO composite", log, sizeof(log));
+			"portal FBO composite", log, sizeof(log), true);
 		if (Portal.compositeProgram == 0)
 		{
 			gl_GLES_Report("portal", log);
@@ -181,7 +182,7 @@ namespace
 	GLsizei BuildSkyGeometry(FMaterial *material, float xOffset, float yOffset, bool mirrored,
 		float cameraX, float cameraY, float cameraZ)
 	{
-		const float radius = 10000.0f;
+		const fixed_t radius = 10000 << FRACBITS;
 		const int rows = 4;
 		const int columns = 4 * std::max(gl_sky_detail > 0 ? gl_sky_detail : 1, 1);
 		std::vector<FSkyVertex> &vertices = Portal.skyVertices;
@@ -235,15 +236,14 @@ namespace
 		const float rotationSin = sinf(rotation);
 		auto addVertex = [&](int row, int column, bool lower)
 		{
-			const float side = 1.04719755f * (rows - row) / rows;
-			const float ringRadius = radius * cosf(side);
-			float ringHeight = radius * sinf(side);
+			const angle_t side = (ANGLE_180 / 3) * (rows - row) / rows;
+			const fixed_t ringRadius = FixedMul(radius, finecosine[side >> ANGLETOFINESHIFT]);
+			float ringHeight = FIXED2FLOAT(FixedMul(radius, finesine[side >> ANGLETOFINESHIFT]));
 			if (lower) ringHeight = -ringHeight;
-			ringHeight *= verticalScale;
 			if (row != rows) ringHeight += 300.0f;
-			const float angle = 6.28318531f * column / columns;
-			const float localX = -ringRadius * cosf(angle);
-			const float localZ = ringRadius * sinf(angle);
+			const angle_t angle = static_cast<angle_t>(column / static_cast<float>(columns) * ANGLE_MAX);
+			const float localX = -FIXED2FLOAT(FixedMul(ringRadius, finecosine[angle >> ANGLETOFINESHIFT]));
+			const float localZ = FIXED2FLOAT(FixedMul(ringRadius, finesine[angle >> ANGLETOFINESHIFT]));
 			const float sourceU = -timesRepeat * column / columns;
 			const float u = mirrored ? -sourceU : sourceU;
 			const float v = lower ? (1.0f + (rows - row) / static_cast<float>(rows)) :
@@ -252,10 +252,10 @@ namespace
 			const float rotatedZ = -rotationSin * localX + rotationCos * localZ;
 			FSkyVertex vertex = {};
 			vertex.x = skyCenter[0] + rotatedX;
-			vertex.y = skyCenter[1] + ringHeight - 1.0f;
+			vertex.y = skyCenter[1] + (ringHeight - 1.0f) * verticalScale;
 			vertex.z = skyCenter[2] + rotatedZ;
 			vertex.u = u;
-			vertex.v = v * textureVScale + textureVOffset;
+			vertex.v = (v + textureVOffset) * textureVScale;
 			vertex.r = vertex.g = vertex.b = 1.0f;
 			vertex.a = row == 0 ? 0.0f : 1.0f;
 			vertices.push_back(vertex);
@@ -265,11 +265,11 @@ namespace
 			FGLESSkyPrimitiveRange &cap = lower ? Portal.sky.lowerCap : Portal.sky.upperCap;
 			FGLESSkyPrimitiveRange *strips = lower ? Portal.sky.lowerStrips : Portal.sky.upperStrips;
 			const int capRow = material == nullptr ? 0 : 1;
-			const float capSide = 1.04719755f * (rows - capRow) / rows;
-			const float capHeight = radius * sinf(capSide) * verticalScale;
+			const angle_t capSide = (ANGLE_180 / 3) * (rows - capRow) / rows;
+			const float capHeight = FIXED2FLOAT(FixedMul(radius, finesine[capSide >> ANGLETOFINESHIFT]));
 			FSkyVertex capCenter = {};
 			capCenter.x = skyCenter[0];
-			capCenter.y = skyCenter[1] + (lower ? -capHeight : capHeight) + 300.0f - 1.0f;
+			capCenter.y = skyCenter[1] + ((lower ? -capHeight : capHeight) + 300.0f - 1.0f) * verticalScale;
 			capCenter.z = skyCenter[2];
 			capCenter.r = capCenter.g = capCenter.b = capCenter.a = 1.0f;
 			const GLushort capCenterVertex = static_cast<GLushort>(vertices.size());

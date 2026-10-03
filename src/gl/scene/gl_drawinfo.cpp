@@ -1081,23 +1081,8 @@ void FDrawInfo::DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, boo
 		gl_GetLightColor(lightlevel, rel, &Colormap, color + 0, color + 1, color + 2);
 		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
 		float fogDensity = 0.0f;
-		if (!gl_fixedcolormap && (gl_CheckFog(&Colormap, lightlevel) || (level.flags & LEVEL_HASFADETABLE)))
-		{
-			PalEntry fog = Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(lightlevel, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-			}
-			fogColor[0] = fog.r / 255.0f;
-			fogColor[1] = fog.g / 255.0f;
-			fogColor[2] = fog.b / 255.0f;
-		}
+		gl_GetFogParameters(lightlevel, &Colormap, false, fogColor, &fogDensity);
+		const FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rel, &Colormap);
 
 		const float fviewx = FIXED2FLOAT(viewx);
 		const float fviewy = FIXED2FLOAT(viewy);
@@ -1159,7 +1144,7 @@ void FDrawInfo::DrawFloodedPlane(wallseg * ws, float planez, sector_t * sec, boo
 		};
 		const unsigned int texture = gltexture->BindNative(Colormap.colormap, 0, true);
 		gl_GLES_AddFloodPlane(wallPositions, positions, texcoords, color, texture,
-			fogDensity > 0.0f, fogColor, fogDensity);
+			fogDensity > 0.0f, fogColor, fogDensity, &lighting);
 		return;
 	}
 #endif

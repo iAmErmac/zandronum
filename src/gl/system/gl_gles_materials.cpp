@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "gl/renderer/gl_renderer.h"
+#include "gl/renderer/gl_colormap.h"
 #include "gl/system/gl_cvars.h"
 #include "gl/system/gl_gles_dispatch.h"
 
@@ -64,6 +65,7 @@ namespace
 	std::vector<FGLESMaterialTexture> MaterialTextures;
 	std::unordered_map<FGLESMaterialKey, size_t, FGLESMaterialKeyHash> MaterialTextureIndices;
 	std::unordered_map<GLuint, unsigned int> MaterialFlagsByTexture;
+	std::unordered_map<GLuint, FGLESMaterialEffect> MaterialEffectsByTexture;
 	constexpr size_t MaterialFlagCacheSize = 256;
 	struct FMaterialFlagCacheEntry
 	{
@@ -108,6 +110,7 @@ namespace
 		if (texture != 0)
 		{
 			MaterialFlagsByTexture.erase(texture);
+			MaterialEffectsByTexture.erase(texture);
 			InvalidateMaterialFlagCache(texture);
 		}
 	}
@@ -141,7 +144,7 @@ GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, i
 
 GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	const unsigned char *pixels, int width, int height, bool repeat, int colormap,
-	int translation, bool allowhires, bool palette)
+	int translation, bool allowhires, bool palette, bool noFilter)
 {
 	if (!resourcesAvailable || key == NULL || pixels == NULL || width <= 0 || height <= 0)
 		return 0;
@@ -221,7 +224,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	int filterIndex = gl_texture_filter;
 	if (filterIndex < 0 || filterIndex > 5) filterIndex = 0;
 	const TexFilter_s &filter = TexFilter[filterIndex];
-	const bool useMipmaps = repeat && filter.mipmapping;
+	const bool useMipmaps = repeat;
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
 		useMipmaps ? filter.minfilter : filter.magfilter);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter.magfilter);
@@ -231,7 +234,8 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 		entry->pixels.data());
 	if (useMipmaps) glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
-	MaterialFlagsByTexture[entry->texture] = entry->palette ? GLES_TEXTURE_FLAG_PALETTE : 0;
+	MaterialFlagsByTexture[entry->texture] = (entry->palette ? GLES_TEXTURE_FLAG_PALETTE : 0) |
+		(noFilter ? GLES_TEXTURE_FLAG_NOFILTER : 0);
 	if (gl_GLES_CheckErrors("material texture upload") != GL_NO_ERROR)
 	{
 		RemoveMaterialTextureIndex(entry->texture);
@@ -253,14 +257,23 @@ unsigned int gl_GLESInternalGetMaterialFlags(GLuint texture)
 	return flags;
 }
 
+void gl_GLESInternalSetMaterialEffect(GLuint texture, int shaderIndex, float speed, int colormap)
+{
+	if (texture != 0 && (shaderIndex != 0 || colormap != CM_DEFAULT))
+		MaterialEffectsByTexture[texture] = { shaderIndex, speed, colormap };
+	else
+		MaterialEffectsByTexture.erase(texture);
+}
+
+FGLESMaterialEffect gl_GLESInternalGetMaterialEffect(GLuint texture)
+{
+	const auto found = MaterialEffectsByTexture.find(texture);
+	return found != MaterialEffectsByTexture.end() ? found->second : FGLESMaterialEffect{};
+}
+
 bool gl_GLESInternalIsPaletteTexture(GLuint texture)
 {
 	return (gl_GLESInternalGetMaterialFlags(texture) & GLES_TEXTURE_FLAG_PALETTE) != 0;
-}
-
-bool gl_GLESInternalIsFramebufferTexture(GLuint texture)
-{
-	return (gl_GLESInternalGetMaterialFlags(texture) & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
 }
 
 void gl_GLESInternalMarkMaterialFramebufferContent(const void *key, int colormap,
@@ -298,6 +311,7 @@ void gl_GLESInternalInvalidateMaterials()
 	for (size_t i = 0; i < MaterialTextures.size(); ++i)
 		MaterialTextures[i].texture = 0;
 	MaterialFlagsByTexture.clear();
+	MaterialEffectsByTexture.clear();
 	ClearMaterialFlagCache();
 }
 
@@ -307,6 +321,7 @@ void gl_GLESInternalClearMaterials(bool contextAvailable)
 	MaterialTextures.clear();
 	MaterialTextureIndices.clear();
 	MaterialFlagsByTexture.clear();
+	MaterialEffectsByTexture.clear();
 	ClearMaterialFlagCache();
 }
 

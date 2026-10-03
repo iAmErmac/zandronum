@@ -144,6 +144,13 @@ void GLWall::PutWall(bool translucent)
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
+		if (translucent)
+		{
+			viewdistance = P_AproxDistance(((seg->linedef->v1->x + seg->linedef->v2->x) >> 1) - viewx,
+				((seg->linedef->v1->y + seg->linedef->v2->y) >> 1) - viewy);
+			gl_drawinfo->drawlists[GLDL_TRANSLUCENT].AddWall(this);
+			return;
+		}
 		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
 		// Special portal surfaces need their own target; ordinary walls can be
 		// collected directly while the scene is traversed.
@@ -170,7 +177,8 @@ void GLWall::PutWall(bool translucent)
 		else if (passflag[type] != 4)
 		{
 			RenderWall(3, NULL);
-			if (type != RENDERWALL_FFBLOCK && seg != NULL && seg->sidedef != NULL && seg->sidedef->AttachedDecals != NULL)
+			if ((type != RENDERWALL_FFBLOCK || gltexture != NULL) &&
+				seg != NULL && seg->sidedef != NULL && seg->sidedef->AttachedDecals != NULL)
 			{
 				DoDrawDecals();
 			}

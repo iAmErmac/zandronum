@@ -22,6 +22,10 @@ namespace
 		const float *sourceData;
 		FGLESSceneLightSelection selection;
 	};
+	GLuint SceneLightTexture = 0;
+	GLsizei SceneLightTextureWidth = 0;
+	GLsizei SceneLightTextureHeight = 0;
+	std::vector<GLfloat> SceneLightTexels;
 	std::vector<GLfloat> SceneLightPositionStream;
 	std::vector<GLfloat> SceneLightColorStream;
 	std::vector<FSceneLightSelectionCacheEntry> SceneLightSelections;
@@ -81,7 +85,7 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 	for (size_t i = 0; i < recordCount; ++i)
 	{
 		if (records[i].included &&
-			(records[i].hud || records[i].flood || records[i].translucent))
+			(records[i].hud || records[i].flood || records[i].translucent || records[i].sourceOrdered))
 		{
 			requiresOrdering = true;
 			break;
@@ -114,7 +118,9 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 		{
 			const auto opaqueEnd = std::stable_partition(surfaceFirst, surfaceLast,
 				[](const FGLESSceneOrderRecord *record) { return !record->translucent; });
-			std::stable_sort(opaqueEnd, surfaceLast,
+			const auto decalEnd = std::stable_partition(opaqueEnd, surfaceLast,
+				[](const FGLESSceneOrderRecord *record) { return record->decal; });
+			std::stable_sort(decalEnd, surfaceLast,
 				[](const FGLESSceneOrderRecord *left, const FGLESSceneOrderRecord *right)
 				{
 					return left->sortDepth > right->sortDepth;
@@ -123,10 +129,12 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 		orderSurfaceGroup(first, wallEnd);
 		orderSurfaceGroup(wallEnd, last);
 	};
-	const auto nonFloodEnd = std::stable_partition(included.begin(), nonHudEnd,
+	const auto sourceOrderStart = std::stable_partition(included.begin(), nonHudEnd,
+		[](const FGLESSceneOrderRecord *record) { return !record->sourceOrdered; });
+	const auto nonFloodEnd = std::stable_partition(included.begin(), sourceOrderStart,
 		[](const FGLESSceneOrderRecord *record) { return !record->flood; });
 	orderFloodGroup(included.begin(), nonFloodEnd);
-	orderFloodGroup(nonFloodEnd, nonHudEnd);
+	orderFloodGroup(nonFloodEnd, sourceOrderStart);
 	drawOrder->reserve(included.size());
 	for (size_t i = 0; i < included.size(); ++i)
 		drawOrder->push_back(included[i]->batchIndex);
@@ -186,6 +194,8 @@ void gl_GLESInternalSceneInvalidateBuffers()
 {
 	SceneVertexBufferCapacity = 0;
 	SceneIndexBufferCapacity = 0;
+	SceneLightTexture = 0;
+	SceneLightTextureWidth = SceneLightTextureHeight = 0;
 }
 
 void gl_GLESInternalSceneClearLights()
@@ -258,136 +268,53 @@ bool gl_GLESInternalSceneAppendLights(const float *lightData,
 	return true;
 }
 
-void gl_GLESInternalSceneGetLightUpload(const FGLESSceneLightSelection &selection,
-	unsigned int firstLight, unsigned int maxLightCount, FGLESSceneLightUpload *upload)
+bool gl_GLESInternalSceneUploadLights()
 {
-	if (upload == nullptr) return;
-	*upload = {};
-	const size_t storedLightCount = std::min(SceneLightPositionStream.size(),
-		SceneLightColorStream.size()) / 4;
-	if (selection.streamOffset > storedLightCount || firstLight > selection.lightCount)
+	const size_t lightCount = SceneLightPositionStream.size() / 4;
+	const size_t texelCount = std::max<size_t>(2, lightCount * 2);
+	const int maximumSize = gl_GLES_GetContextInfo().maxTextureSize;
+	if (maximumSize <= 0) return false;
+	const size_t width = std::min<size_t>(maximumSize, 1024);
+	const size_t height = (texelCount + width - 1) / width;
+	if (maximumSize <= 0 || height > static_cast<size_t>(maximumSize) ||
+		lightCount > static_cast<size_t>(std::numeric_limits<GLint>::max()) / 2 ||
+		SceneLightColorStream.size() != SceneLightPositionStream.size())
 	{
-		ReportSceneLightFailure("native selected-light batch range is outside the frame stream");
-		return;
+		ReportSceneLightFailure("native light data exceeds the texture address range");
+		return false;
 	}
-	const size_t batchOffset = selection.streamOffset + firstLight;
-	const size_t available = storedLightCount - batchOffset;
-	const size_t remaining = selection.lightCount - firstLight;
-	const size_t requested = std::min<size_t>(remaining, maxLightCount);
-	upload->lightCount = static_cast<unsigned int>(std::min<size_t>(
-		std::min<size_t>(requested, GLES_MAX_LIGHTS), available));
-	if (available < remaining)
-		ReportSceneLightFailure("native selected-light stream is shorter than a batch range; missing lights were omitted");
-	upload->normalCount = std::min(selection.normalCount, firstLight + upload->lightCount);
-	upload->normalCount = upload->normalCount > firstLight ? upload->normalCount - firstLight : 0;
-	upload->subtractiveCount = std::min(selection.subtractiveCount,
-		firstLight + upload->lightCount);
-	upload->subtractiveCount = upload->subtractiveCount > firstLight ?
-		upload->subtractiveCount - firstLight : 0;
-	if (upload->lightCount > 0)
+	SceneLightTexels.resize(width * height * 4);
+	for (size_t light = 0; light < lightCount; ++light)
 	{
-		const size_t floatOffset = batchOffset * 4;
-		upload->positions = &SceneLightPositionStream[floatOffset];
-		upload->colors = &SceneLightColorStream[floatOffset];
+		memcpy(&SceneLightTexels[light * 8], &SceneLightPositionStream[light * 4], 4 * sizeof(GLfloat));
+		memcpy(&SceneLightTexels[light * 8 + 4], &SceneLightColorStream[light * 4], 4 * sizeof(GLfloat));
 	}
+	glActiveTexture(GL_TEXTURE3);
+	if (SceneLightTexture == 0) glGenTextures(1, &SceneLightTexture);
+	glBindTexture(GL_TEXTURE_2D, SceneLightTexture);
+	glBindSampler(3, 0);
+	if (SceneLightTextureWidth != width || SceneLightTextureHeight < height)
+	{
+		SceneLightTextureWidth = static_cast<GLsizei>(width);
+		SceneLightTextureHeight = static_cast<GLsizei>(height);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, SceneLightTextureWidth,
+			SceneLightTextureHeight, 0, GL_RGBA, GL_FLOAT, nullptr);
+	}
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(width),
+		static_cast<GLsizei>(height), GL_RGBA, GL_FLOAT, SceneLightTexels.data());
+	glActiveTexture(GL_TEXTURE0);
+	return gl_GLES_CheckErrors("scene light upload") == GL_NO_ERROR;
 }
 
-void gl_GLESInternalSceneDrawLightOverflow(const FGLESSceneLightPass &pass)
+void gl_GLESInternalSceneDeleteLights()
 {
-	if (pass.selection.lightCount <= GLES_MAX_LIGHTS) return;
-	const GLint lightOnlyMode = pass.lightOnlyUniform;
-	if (lightOnlyMode < 0)
-	{
-		ReportSceneLightFailure("native light-overflow shader is missing its light-only control");
-		return;
-	}
-	if (pass.positionUniform < 0 || pass.colorUniform < 0 || pass.countsUniform < 0)
-	{
-		ReportSceneLightFailure("native light-overflow shader is missing a required light uniform");
-		return;
-	}
-
-	GLint depthFunction = pass.depthFunction;
-	GLboolean depthWrite = pass.depthWrite ? GL_TRUE : GL_FALSE;
-	if (!pass.depthStateKnown)
-	{
-		glGetIntegerv(GL_DEPTH_FUNC, &depthFunction);
-		glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWrite);
-	}
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_ONE, GL_ONE);
-	glDepthMask(GL_FALSE);
-	glDepthFunc(depthWrite ? GL_EQUAL : depthFunction);
-
-	const auto drawRange = [&](unsigned int first, unsigned int end, GLint mode, GLenum equation)
-	{
-		while (first < end)
-		{
-			FGLESSceneLightUpload upload = {};
-			gl_GLESInternalSceneGetLightUpload(pass.selection, first, end - first, &upload);
-			if (upload.lightCount == 0) break;
-			glUniform4fv(pass.positionUniform, upload.lightCount, upload.positions);
-			glUniform4fv(pass.colorUniform, upload.lightCount, upload.colors);
-			glUniform3i(pass.countsUniform, static_cast<GLint>(upload.normalCount),
-				static_cast<GLint>(upload.subtractiveCount),
-				static_cast<GLint>(upload.lightCount));
-			glUniform1i(lightOnlyMode, mode);
-			const bool projected = pass.dynamicLightTexture != 0 &&
-				(pass.planeNormal[0] != 0.0f || pass.planeNormal[1] != 0.0f ||
-				pass.planeNormal[2] != 0.0f);
-			if (pass.projectedUniform >= 0)
-				glUniform1i(pass.projectedUniform, projected ? 1 : 0);
-			glActiveTexture(GL_TEXTURE2);
-			glBindTexture(GL_TEXTURE_2D,
-				projected ? pass.dynamicLightTexture : pass.checkerTexture);
-			glActiveTexture(GL_TEXTURE0);
-			glBlendEquation(equation);
-			gl_GLES_RecordProfileOverflow();
-			gl_GLES_RecordProfileDraw(false, pass.indexCount);
-			const GLenum indexType = pass.indexType != 0 ? pass.indexType : GL_UNSIGNED_INT;
-			const size_t indexStride = pass.indexStride != 0 ? pass.indexStride : sizeof(GLuint);
-			glDrawElements(GL_TRIANGLES, pass.indexCount, indexType,
-				reinterpret_cast<const void *>(pass.firstIndex * indexStride));
-			first += upload.lightCount;
-		}
-	};
-
-	const unsigned int normalEnd = std::min(pass.selection.normalCount,
-		pass.selection.lightCount);
-	const unsigned int subtractiveEnd = std::min(pass.selection.subtractiveCount,
-		pass.selection.lightCount);
-	const unsigned int firstOverflow = GLES_MAX_LIGHTS;
-	drawRange(firstOverflow, normalEnd, 1, GL_FUNC_ADD);
-	drawRange(std::max(firstOverflow, normalEnd), subtractiveEnd, 2,
-		GL_FUNC_REVERSE_SUBTRACT);
-	drawRange(std::max(firstOverflow, subtractiveEnd), pass.selection.lightCount, 3,
-		GL_FUNC_ADD);
-
-	glUniform1i(lightOnlyMode, 0);
-	glDepthFunc(depthFunction);
-	glDepthMask(depthWrite);
-	if (pass.translucent)
-	{
-		glEnable(GL_BLEND);
-		GLenum equation = GL_FUNC_ADD;
-		if (pass.blendMode == GLES_BLEND_SUBTRACT) equation = GL_FUNC_SUBTRACT;
-		else if (pass.blendMode == GLES_BLEND_REVERSE_SUBTRACT)
-			equation = GL_FUNC_REVERSE_SUBTRACT;
-		glBlendEquation(equation);
-		const bool additive = pass.blendMode == GLES_BLEND_ADD ||
-			pass.blendMode == GLES_BLEND_SUBTRACT ||
-			pass.blendMode == GLES_BLEND_REVERSE_SUBTRACT;
-		if (pass.blendMode == GLES_BLEND_FUZZ)
-			glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
-		else if (pass.blendMode == GLES_BLEND_MULTIPLY)
-			glBlendFunc(GL_DST_COLOR, GL_ZERO);
-		else glBlendFunc(GL_SRC_ALPHA, additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
-	}
-	else
-	{
-		glDisable(GL_BLEND);
-		glBlendEquation(GL_FUNC_ADD);
-	}
+	if (SceneLightTexture != 0) glDeleteTextures(1, &SceneLightTexture);
+	SceneLightTexture = 0;
+	SceneLightTextureWidth = SceneLightTextureHeight = 0;
 }
 
 #endif

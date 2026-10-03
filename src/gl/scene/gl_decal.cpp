@@ -194,6 +194,9 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 	}
 	
 	float red, green, blue;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	float nativeDynamicLight[3] = {};
+#endif
 	
 	if (decal->RenderStyle.Flags & STYLEF_RedIsAlpha)
 	{
@@ -223,7 +226,12 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 			}
 			else
 			{
-				gl_RenderState.SetDynLight(result[0], result[1], result[2]);
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+				if (gl_GLES_IsActive())
+					memcpy(nativeDynamicLight, result, sizeof(nativeDynamicLight));
+				else
+#endif
+					gl_RenderState.SetDynLight(result[0], result[1], result[2]);
 			}
 		}
 
@@ -381,26 +389,17 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		{
 			gl_GetLightColor(light, rel, &p, color + 0, color + 1, color + 2);
 		}
-		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
-		float fogDensity = 0.0f;
-		const bool nativeFog = (flags & GLWF_FOGGY) != 0 && !gl_fixedcolormap;
-		if (nativeFog)
-		{
-			PalEntry fog = Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(light, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-			}
-			fogColor[0] = fog.r / 255.0f;
-			fogColor[1] = fog.g / 255.0f;
-			fogColor[2] = fog.b / 255.0f;
-		}
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(light, rel, &Colormap);
+		memcpy(lighting.dynamic, nativeDynamicLight, sizeof(lighting.dynamic));
+		const FShaderLightParameters wallLighting = gl_GetShaderLightParameters(lightlevel,
+			(type == RENDERWALL_MIRRORSURFACE ? 0 : rellight) + getExtraLight(), &Colormap);
+		lighting.factor = wallLighting.factor;
+		lighting.distance = wallLighting.distance;
+		float fogColor[3];
+		float fogDensity;
+		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap,
+			type == RENDERWALL_MIRRORSURFACE ||
+			(decal->RenderStyle.BlendOp == STYLEOP_Add && decal->RenderStyle.DestAlpha == STYLEALPHA_One), fogColor, &fogDensity);
 		const unsigned int textureHandle = tex->BindNative(p.colormap, decal->Translation, false);
 		const unsigned int brightmapHandle = gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			tex->BindNativeBrightmap(false) : 0;
@@ -421,35 +420,24 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 			tex->RemapNativeTexCoords(&texcoords[i], &texcoords[i + 1]);
 		}
 		const bool masked = textureHandle != 0 && (tex->isMasked() || decal->RenderStyle.SrcAlpha == STYLEALPHA_One);
-		const bool nativeFuzz = decal->RenderStyle.BlendOp == STYLEOP_Fuzz;
-		const bool sourceAlphaBlend = decal->RenderStyle.SrcAlpha == STYLEALPHA_Src;
-		EGLESBlendMode blendMode = nativeFuzz ? GLES_BLEND_FUZZ :
-			(sourceAlphaBlend || a < 0.999f) ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
-		switch (decal->RenderStyle.BlendOp)
-		{
-		case STYLEOP_Add:
-			if (decal->RenderStyle.DestAlpha == STYLEALPHA_One) blendMode = GLES_BLEND_ADD;
-			break;
-		case STYLEOP_Sub:
-			blendMode = GLES_BLEND_SUBTRACT;
-			break;
-		case STYLEOP_RevSub:
-			blendMode = GLES_BLEND_REVERSE_SUBTRACT;
-			break;
-		default:
-			break;
-		}
+		int textureMode, sourceBlend, destinationBlend, blendEquation;
+		gl_GetRenderStyle(decal->RenderStyle, false, false, &textureMode,
+			&sourceBlend, &destinationBlend, &blendEquation);
+		EGLESBlendMode blendMode = sourceBlend == GL_ONE && destinationBlend == GL_ZERO && a >= 0.999f ?
+			GLES_BLEND_OPAQUE : GLES_BLEND_ALPHA;
+		if (blendEquation == GL_FUNC_SUBTRACT) blendMode = GLES_BLEND_SUBTRACT;
+		else if (blendEquation == GL_FUNC_REVERSE_SUBTRACT) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
+		else if (destinationBlend == GL_ONE) blendMode = GLES_BLEND_ADD;
 		gl_GLES_AddWall(positions, texcoords, color, a, textureHandle, masked,
 			nativeFog, false, fogColor, fogDensity, blendMode,
-			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
 			GLES_MATERIAL_DECAL |
+			(type == RENDERWALL_MIRRORSURFACE ? GLES_MATERIAL_MIRROR_DECAL : 0) |
 			((decal->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
-			((decal->RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
-			((decal->RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
-			((decal->RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
 			((decal->RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0),
 			NULL, NULL, brightmapHandle,
-			(p.colormap >= CM_DESAT0 && p.colormap <= CM_DESAT31) ? p.colormap : 0);
+			(p.colormap >= CM_DESAT0 && p.colormap <= CM_DESAT31) ? p.colormap : 0, NULL, NULL, NULL, &lighting,
+			decal->RenderStyle.SrcAlpha == STYLEALPHA_One ? gl_mask_threshold : 0.0f,
+			blendMode != GLES_BLEND_OPAQUE, sourceBlend, destinationBlend);
 		rendered_decals++;
 		return;
 	}

@@ -19,6 +19,7 @@ struct FGLESContextInfo
 	const char *shadingLanguageVersion;
 	bool isGLES;
 	bool hasDepthStencil;
+	bool hasDepthClamp;
 	bool hasMultisample;
 	bool hasDebugLabels;
 	bool hasAnisotropicFiltering;

@@ -955,39 +955,47 @@ void FMaterial::Precache()
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool allowhires) const
 {
+	const int effect = mShaderIndex == 1 || mShaderIndex == 2 || mShaderIndex >= FIRST_USER_SHADER ? mShaderIndex : 0;
 	if (translation <= 0) translation = -translation;
 	else translation = GLTranslationPalette::GetInternalTranslation(translation);
-	if (tex != NULL && !tex->bHasCanvas && !tex->bWarped)
+	if (tex != NULL && !tex->bHasCanvas)
 	{
 		const GLuint cachedTexture = gl_GLESInternalFindStaticMaterialTexture(this,
 			cm, translation, repeat, allowhires);
-		if (cachedTexture != 0) return cachedTexture;
+		if (cachedTexture != 0)
+		{
+			gl_GLESInternalSetMaterialEffect(cachedTexture, effect, tex->gl_info.shaderspeed, cm);
+			return cachedTexture;
+		}
 	}
 	int width = 0;
 	int height = 0;
 	// Sprite materials keep a one-pixel transparent border in their UV and size
 	// metadata. Keep the native upload dimensions in step with that contract.
-	const bool expand = tex->UseType == FTexture::TEX_Sprite ||
-		tex->UseType == FTexture::TEX_SkinSprite || tex->UseType == FTexture::TEX_Decal;
+	const bool expand = tex->gl_info.mExpanded;
 	if (tex->bHasCanvas)
 	{
 		const unsigned int texture = gl_GLES_EnsureMaterialTexture(this,
-			TextureWidth(GLUSE_TEXTURE), TextureHeight(GLUSE_TEXTURE), repeat,
-			cm, translation, allowhires);
+			TextureWidth(GLUSE_TEXTURE), TextureHeight(GLUSE_TEXTURE), true,
+			CM_DEFAULT, 0, true);
 		// A visible canvas texture must be rendered again on the next frame.
 		static_cast<FCanvasTexture *>(tex)->NeedUpdate();
+		gl_GLESInternalSetMaterialEffect(texture, effect, tex->gl_info.shaderspeed, cm);
 		return texture;
 	}
-	const int nativeWarp = tex->bWarped && (mShaderIndex == 1 || mShaderIndex == 2) ? mShaderIndex : 0;
-	unsigned char *pixels = CreateTexBuffer(cm, translation, width, height, expand, allowhires, nativeWarp);
+	const bool shaderColormap = cm >= CM_DESAT1 && cm < CM_MAXCOLORMAP;
+	unsigned char *pixels = CreateTexBuffer(shaderColormap ? CM_DEFAULT : cm,
+		translation, width, height, expand, allowhires, 0);
 	if (pixels == NULL || width <= 0 || height <= 0)
 	{
 		delete[] pixels;
 		return 0;
 	}
+	mBaseLayer->tex->ProcessData(pixels, width, height, !repeat);
 	const unsigned int texture = gl_GLES_BindMaterial(this, pixels, width, height,
-		repeat, cm, translation, allowhires);
+		repeat, cm, translation, allowhires, !repeat && tex->gl_info.bNoFilter);
 	delete[] pixels;
+	gl_GLESInternalSetMaterialEffect(texture, effect, tex->gl_info.shaderspeed, cm);
 	return texture;
 }
 
@@ -1001,9 +1009,7 @@ void FMaterial::RemapNativeTexCoords(float *u, float *v) const
 	const float paddedHeight = static_cast<float>(FHardwareTexture::GetTexDimension(Height[GLUSE_PATCH]));
 	FTexture *nativeTexture = mBaseLayer != NULL && mBaseLayer->hirestexture != NULL ?
 		mBaseLayer->hirestexture : tex;
-	const bool expanded = nativeTexture == tex &&
-		(tex->UseType == FTexture::TEX_Sprite || tex->UseType == FTexture::TEX_SkinSprite ||
-		 tex->UseType == FTexture::TEX_Decal);
+	const bool expanded = nativeTexture == tex && tex->gl_info.mExpanded;
 	const int nativeTextureWidth = nativeTexture != NULL ? nativeTexture->GetWidth() + (expanded ? 2 : 0) : 1;
 	const int nativeTextureHeight = nativeTexture != NULL ? nativeTexture->GetHeight() + (expanded ? 2 : 0) : 1;
 	const float nativeWidth = static_cast<float>(std::max(1, nativeTextureWidth));

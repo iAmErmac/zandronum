@@ -27,6 +27,19 @@ typedef ptrdiff_t GLsizeiptr;
 #define APIENTRY
 #endif
 
+#ifndef GL_DEPTH_CLAMP
+#define GL_DEPTH_CLAMP 0x864F
+#endif
+
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
+
+#ifndef GL_RGBA32F
+#define GL_RGBA32F 0x8814
+#endif
+
 #ifndef GL_DRAW_FRAMEBUFFER
 #define GL_DRAW_FRAMEBUFFER 0x8CA9
 #endif
@@ -261,6 +274,7 @@ using FGLESBlendEquation = void (APIENTRY *)(GLenum);
 using FGLESBindSampler = void (APIENTRY *)(GLuint, GLuint);
 using FGLESGenSamplers = void (APIENTRY *)(GLsizei, GLuint *);
 using FGLESDeleteSamplers = void (APIENTRY *)(GLsizei, const GLuint *);
+using FGLESSamplerParameterf = void (APIENTRY *)(GLuint, GLenum, GLfloat);
 using FGLESSamplerParameteri = void (APIENTRY *)(GLuint, GLenum, GLint);
 using FGLESBufferSubData = void (APIENTRY *)(GLenum, ptrdiff_t, ptrdiff_t, const void *);
 using FGLESClearDepthf = void (APIENTRY *)(GLfloat);
@@ -351,6 +365,7 @@ struct FGLESProcTable
 	FGLESGenSamplers GenSamplers;
 	FGLESDeleteSamplers DeleteSamplers;
 	FGLESSamplerParameteri SamplerParameteri;
+	FGLESSamplerParameterf SamplerParameterf;
 	FGLESBufferSubData BufferSubData;
 	FGLESClearDepthf ClearDepthf;
 	FGLESClearStencil ClearStencil;

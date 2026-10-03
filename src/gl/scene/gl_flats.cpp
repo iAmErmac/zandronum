@@ -324,27 +324,13 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			texcoords.push_back(v);
 		}
 		if (positions.size() < 9) return;
+		const FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, getExtraLight(), &Colormap);
 		float color[3];
 		gl_GetLightColor(lightlevel, getExtraLight(), &Colormap, color + 0, color + 1, color + 2);
-		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
-		float fogDensity = 0.0f;
-		if (foggy && !gl_fixedcolormap)
-		{
-			PalEntry fog = Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(lightlevel, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-			}
-			fogColor[0] = fog.r / 255.0f;
-			fogColor[1] = fog.g / 255.0f;
-			fogColor[2] = fog.b / 255.0f;
-		}
+		float fogColor[3];
+		float fogDensity;
+		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap,
+			renderstyle == STYLE_Add, fogColor, &fogDensity);
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
 		if (gltexture != NULL && texture == 0) return;
 		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
@@ -353,10 +339,12 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			(alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
 		gl_GLES_AddFlat(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(positions.size() / 3), color, alpha, texture,
-			gltexture != NULL && gltexture->isMasked(), fogDensity > 0.0f, true, fogColor, fogDensity,
+			gltexture != NULL && gltexture->isMasked() &&
+				((renderflags & SSRF_RENDER3DPLANES) || stack || blendMode != GLES_BLEND_OPAQUE),
+			fogDensity > 0.0f, true, fogColor, fogDensity,
 			blendMode, 0, nativeFlatLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeFlatLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
-			Colormap.colormap : 0);
+			Colormap.colormap : 0, &lighting);
 		return;
 	}
 #endif
@@ -503,7 +491,7 @@ void GLFlat::Draw(int pass)
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		DrawSubsectors(pass, false);
+		DrawSubsectors(pass, pass == GLPASS_TRANSLUCENT);
 		return;
 	}
 #endif
@@ -625,6 +613,13 @@ inline void GLFlat::PutFlat(bool fog)
 			if (developer)
 				DPrintf("GLES flat skipped sky texture in sector %d (%s).\n",
 					sector != NULL ? sector->sectornum : -1, ceiling ? "ceiling" : "floor");
+			return;
+		}
+		if (gl_fixedcolormap) Colormap.GetFixedColormap();
+		if (renderstyle != STYLE_Translucent || alpha < 1.f - FLT_EPSILON || fog)
+		{
+			const int list = (renderflags & SSRF_RENDER3DPLANES) ? GLDL_TRANSLUCENT : GLDL_TRANSLUCENTBORDER;
+			gl_drawinfo->drawlists[list].AddFlat(this);
 			return;
 		}
 		if (gl_GLES_IsFlatCollectionDeferred())

@@ -444,6 +444,10 @@ void FGLRenderer::CreateScene()
 		gl_GLES_SetFlatCollectionDeferred(false);
 		gl_GLES_EmitFlatTasks();
 		gl_drawinfo->DrawUnhandledMissingTextures();
+		gl_GLES_SetSourceOrder(true);
+		gl_drawinfo->drawlists[GLDL_TRANSLUCENTBORDER].Draw(GLPASS_TRANSLUCENT);
+		gl_drawinfo->drawlists[GLDL_TRANSLUCENT].DrawSorted();
+		gl_GLES_SetSourceOrder(false);
 		ProcessAll.Unclock();
 		return;
 	}

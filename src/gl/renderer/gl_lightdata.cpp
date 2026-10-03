@@ -84,6 +84,14 @@ CVAR(Bool, gl_brightfog, false, CVAR_ARCHIVE);
 //
 //==========================================================================
 
+bool gl_SupportsDoomLighting()
+{
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return true;
+#endif
+	return gl.shadermodel >= 4;
+}
+
 bool gl_BrightmapsActive()
 {
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
@@ -140,6 +148,9 @@ CUSTOM_CVAR(Int,gl_fogmode,1,CVAR_ARCHIVE|CVAR_NOINITCALL)
 {
 	if (self>2) self=2;
 	if (self<0) self=0;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive()) return;
+#endif
 	if (self == 2 && gl.shadermodel < 4) self = 1;
 }
 
@@ -148,14 +159,14 @@ CUSTOM_CVAR(Int, gl_lightmode, 3 ,CVAR_ARCHIVE|CVAR_NOINITCALL)
 	int newself = self;
 	if (newself > 4) newself=8;	// use 8 for software lighting to avoid conflicts with the bit mask
 	if (newself < 0) newself=0;
-	if ((newself == 2 || newself == 8) && gl.shadermodel < 4) newself = 3;
+	if ((newself == 2 || newself == 8) && !gl_SupportsDoomLighting()) newself = 3;
 	if (self != newself) self = newself;
 
 	// [BB] Enforce Doom lighting if requested by the dmflags.
 	// [EP] Honor the MAPINFO lightmode option if present.
 	if ( zadmflags & ZADF_FORCE_VIDEO_DEFAULTS )
 		glset.lightmode = (( IsLightmodeValid() == false ) ||
-			( ( glset.map_lightmode == 2 || glset.map_lightmode == 8 ) && gl.shadermodel < 4 )) ? 3 : glset.map_lightmode;
+			( ( glset.map_lightmode == 2 || glset.map_lightmode == 8 ) && !gl_SupportsDoomLighting() )) ? 3 : glset.map_lightmode;
 	else
 		glset.lightmode = newself;
 }
@@ -561,37 +572,59 @@ bool gl_CheckFog(sector_t *frontsector, sector_t *backsector)
 //
 //==========================================================================
 
-void gl_SetShaderLight(float level, float olight)
+static FShaderLightParameters CalcNearLightParameters(float light, float original)
 {
-#if 1 //ndef _DEBUG
-	const float MAXDIST = 256.f;
-	const float THRESHOLD = 96.f;
-	const float FACTOR = 0.75f;
-#else
-	const float MAXDIST = 256.f;
-	const float THRESHOLD = 96.f;
-	const float FACTOR = 2.75f;
-#endif
-
-	if (level > 0)
+	FShaderLightParameters params = {};
+	params.factor = 1.0f;
+	if (light > 0.0f)
 	{
-		float lightdist, lightfactor;
-			
-		if (olight < THRESHOLD)
-		{
-			lightdist = (MAXDIST/2) + (olight * MAXDIST / THRESHOLD / 2);
-			olight = THRESHOLD;
-		}
-		else lightdist = MAXDIST;
+		params.distance = original < 96.0f ? 128.0f + original * 256.0f / 96.0f / 2.0f : 256.0f;
+		if (original < 96.0f) original = 96.0f;
+		params.factor = 1.0f + (original / light - 1.0f) * 0.75f;
+		if (params.factor == 1.0f) params.distance = 0.0f;
+	}
+	return params;
+}
 
-		lightfactor = 1.f + ((olight/level) - 1.f) * FACTOR;
-		if (lightfactor == 1.f) lightdist = 0.f;	// save some code in the shader
-		gl_RenderState.SetLightParms(lightfactor, lightdist);
-	}
-	else
+FShaderLightParameters gl_GetShaderLightParameters(int lightlevel, int rellight, const FColormap *cm)
+{
+	FShaderLightParameters params = {};
+	float fogcolor[3], density;
+	const bool fog = gl_GetFogParameters(lightlevel, cm, false, fogcolor, &density);
+	if (glset.lightmode == 8)
 	{
-		gl_RenderState.SetLightParms(1.f, 0.f);
+		params.software = 1.0f;
+		params.level = gl_fixedcolormap ? 1.0f : gl_CalcLightLevel(lightlevel, rellight, false) / 255.0f;
+		if (glset.brightfog && fog && (fogcolor[0] != 0.0f || fogcolor[1] != 0.0f || fogcolor[2] != 0.0f))
+			params.level = 1.0f;
 	}
+	else if (glset.lightmode == 2 && fog && cm != NULL && gl_isBlack(cm->FadeColor) &&
+		fogcolor[0] == 0.0f && fogcolor[1] == 0.0f && fogcolor[2] == 0.0f &&
+		!(level.flags & LEVEL_HASFADETABLE))
+	{
+		const FShaderLightParameters nearLight = CalcNearLightParameters(gl_CalcLightLevel(lightlevel, rellight, false), lightlevel);
+		params.factor = nearLight.factor;
+		params.distance = nearLight.distance;
+	}
+	return params;
+}
+
+void gl_GetShadowParameters(int lightlevel, const FColormap *cm, float distance, float *alpha, float *cutoff)
+{
+	float factor = 1.0f;
+	if (cm != NULL && !gl_isBlack(cm->FadeColor))
+	{
+		const int density = cm->FadeColor.a ? cm->FadeColor.a : clamp<int>(255 - lightlevel, 60, 255);
+		factor = 0.05f + exp(-density * distance / 62500.f);
+	}
+	*alpha = 0.44f * factor;
+	*cutoff = 0.1f * factor;
+}
+
+void gl_SetShaderLight(float light, float original)
+{
+	const FShaderLightParameters nearLight = CalcNearLightParameters(light, original);
+	gl_RenderState.SetLightParms(nearLight.factor, nearLight.distance);
 }
 
 
@@ -600,6 +633,32 @@ void gl_SetShaderLight(float level, float olight)
 // Sets the fog for the current polygon
 //
 //==========================================================================
+
+bool gl_GetFogParameters(int lightlevel, const FColormap *cm, bool additive, float *color, float *density)
+{
+	OVERRIDE_FOGMODE_IF_NECESSARY
+	PalEntry fogcolor = 0;
+	*density = 0.0f;
+	if (level.flags & LEVEL_HASFADETABLE)
+	{
+		fogcolor = 0x808080;
+		*density = 70.0f;
+	}
+	else if (cm != NULL && gl_fixedcolormap == 0)
+	{
+		fogcolor = cm->FadeColor;
+		*density = gl_GetFogDensity(lightlevel, fogcolor);
+	}
+	if (GLPortal::inskybox) *density *= 1.5f;
+	if (gl_fogmode == 0) *density = 0.0f;
+	if (additive) fogcolor = 0;
+	if (cm != NULL && cm->colormap != CM_DEFAULT)
+		gl_ModifyColor(fogcolor.r, fogcolor.g, fogcolor.b, cm->colormap);
+	color[0] = fogcolor.r / 255.0f;
+	color[1] = fogcolor.g / 255.0f;
+	color[2] = fogcolor.b / 255.0f;
+	return *density > 0.0f;
+}
 
 void gl_SetFog(int lightlevel, int rellight, const FColormap *cmap, bool isadditive)
 {

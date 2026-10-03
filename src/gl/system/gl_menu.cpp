@@ -9,6 +9,9 @@
 #include "gl/system/gl_cvars.h"
 #include "gl/renderer/gl_renderer.h"
 #include "menu/menu.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#endif
 
 
 
@@ -59,6 +62,11 @@ CUSTOM_CVAR (Float, vid_contrast, 1.f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
 // when they are actually valid.
 void gl_SetupMenu()
 {
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool nativeGLES = gl_GLES_IsActive();
+#else
+	const bool nativeGLES = false;
+#endif
 	if (gl.shadermodel < 4)
 	{
 		// Radial fog and Doom lighting are not available in SM < 4 cards
@@ -70,7 +78,7 @@ void gl_SetupMenu()
 			for(int i = (*opt)->mValues.Size()-1; i>=0; i--)
 			{
 				// Delete 'Doom' lighting mode
-				if ((*opt)->mValues[i].Value == 2.0 || (*opt)->mValues[i].Value == 8.0)
+				if (!nativeGLES && ((*opt)->mValues[i].Value == 2.0 || (*opt)->mValues[i].Value == 8.0))
 				{
 					(*opt)->mValues.Delete(i);
 				}
@@ -83,7 +91,7 @@ void gl_SetupMenu()
 			for(int i = (*opt)->mValues.Size()-1; i>=0; i--)
 			{
 				// Delete 'Radial' fog mode
-				if ((*opt)->mValues[i].Value == 2.0)
+				if ((*opt)->mValues[i].Value == 2.0 && !nativeGLES)
 				{
 					(*opt)->mValues.Delete(i);
 				}
@@ -91,9 +99,9 @@ void gl_SetupMenu()
 		}
 
 		// disable features that don't work without shaders.
-		if (gl_lightmode == 2 || gl_lightmode == 8) gl_lightmode = 3;
-		if (gl_fogmode == 2) gl_fogmode = 1;
-		if (gl_dynlight_shader) gl_dynlight_shader = false;
+		if (!nativeGLES && (gl_lightmode == 2 || gl_lightmode == 8)) gl_lightmode = 3;
+		if (gl_fogmode == 2 && !nativeGLES) gl_fogmode = 1;
+		if (gl_dynlight_shader && !nativeGLES) gl_dynlight_shader = false;
 	}
 
 	if (gl.shadermodel != 3)

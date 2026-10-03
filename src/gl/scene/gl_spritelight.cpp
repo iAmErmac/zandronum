@@ -151,6 +151,15 @@ bool gl_GetSpriteLight(AActor *self, fixed_t x, fixed_t y, fixed_t z, subsector_
 //
 //==========================================================================
 
+int gl_GetSpriteLightLevel(float red, float green, float blue)
+{
+	const float lightlevel = red * 77 + green * 143 + blue * 35;
+	if (lightlevel == 0) return 0;
+	if ((glset.lightmode & 2) && lightlevel < 192.f)
+		return xs_CRoundToInt(192.f - (192.f - lightlevel) / 1.95f);
+	return xs_CRoundToInt(lightlevel);
+}
+
 static int gl_SetSpriteLight(AActor *self, fixed_t x, fixed_t y, fixed_t z, subsector_t * subsec, 
                               int lightlevel, int rellight, FColormap * cm, float alpha, 
 							  PalEntry ThingColor, bool weapon)
@@ -186,7 +195,7 @@ static int gl_SetSpriteLight(AActor *self, fixed_t x, fixed_t y, fixed_t z, subs
 		g = clamp<float>(result[1]+g, 0, 1.0f);
 		b = clamp<float>(result[2]+b, 0, 1.0f);
 
-		float dlightlevel = r*77 + g*143 + b*35;
+		const int dlightlevel = gl_GetSpriteLightLevel(r, g, b);
 
 		r *= ThingColor.r/255.f;
 		g *= ThingColor.g/255.f;
@@ -199,16 +208,7 @@ static int gl_SetSpriteLight(AActor *self, fixed_t x, fixed_t y, fixed_t z, subs
 		glColor4f(r, g, b, alpha);
 #endif
 
-		if (dlightlevel == 0) return 0;
-
-		if (glset.lightmode&2 && dlightlevel<192.f) 
-		{
-			return xs_CRoundToInt(192.f - (192.f - dlightlevel) / 1.95f);
-		}
-		else
-		{
-			return xs_CRoundToInt(dlightlevel);
-		}
+		return dlightlevel;
 	}
 }
 
@@ -253,7 +253,7 @@ void gl_GetSpriteLighting(FRenderStyle style, AActor *thing, FColormap *cm, PalE
 	// This doesn't work like in the software renderer.
 	if (style.Flags & STYLEF_InvertSource)
 	{
-		int gray = (cm->LightColor.r*77 + cm->LightColor.g*143 + cm->LightColor.b*36)>>8;
+		int gray = cm->LightColor.r;
 		cm->LightColor.r = cm->LightColor.g = cm->LightColor.b = gray;
 	}
 }

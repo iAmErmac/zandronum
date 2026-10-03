@@ -73,7 +73,7 @@ EXTERN_CVAR (Bool, r_deathcamera)
 //
 //==========================================================================
 
-void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader, float nativeAlpha, unsigned int nativeMaterialFlags, uint32 nativeStyle)
+void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed_t sy, int cm_index, bool hudModelStep, int OverrideShader, float nativeAlpha, unsigned int nativeMaterialFlags, uint32 nativeStyle, const float *nativeColor)
 {
 	float			fU1,fV1;
 	float			fU2,fV2;
@@ -184,6 +184,11 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		const float texcoords[8] = { nativeLeft, 0.0f, nativeLeft, 1.0f,
 			nativeRight, 1.0f, nativeRight, 0.0f };
 		const unsigned int texture = tex->BindNative(cm_index, 0, false);
+		const unsigned int brightmap = nativeColor != NULL && OverrideShader == 0 &&
+			(nativeMaterialFlags & GLES_MATERIAL_FUZZ) == 0 && cm_index < CM_FIRSTSPECIALCOLORMAP &&
+			gl_BrightmapsActive() ? tex->BindNativeBrightmap(false) : 0;
+		const int brightmapDesaturation = cm_index >= CM_DESAT1 && cm_index <= CM_DESAT31 ?
+			cm_index - CM_DESAT0 : 0;
 		FRenderStyle style = {};
 		style.AsDWORD = nativeStyle;
 		int textureMode = 0;
@@ -200,11 +205,11 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 			blendMode = GLES_BLEND_OPAQUE;
 		const bool customBlend = blendMode != GLES_BLEND_OPAQUE && blendMode != GLES_BLEND_FUZZ;
 		const bool masked = tex->isMasked() && !tex->GetTransparent() &&
-			OverrideShader == 0;
+			OverrideShader == 0 && (nativeMaterialFlags & GLES_MATERIAL_FUZZ) == 0;
 		const float alphaCutoff = masked ? nativeAlpha * gl_mask_sprite_threshold : 0.5f;
-		gl_GLES_AddHUDQuad(positions, texcoords, NULL, nativeAlpha,
+		gl_GLES_AddHUDQuad(positions, texcoords, nativeColor, nativeAlpha,
 			masked, texture, blendMode, nativeMaterialFlags, customBlend, sourceBlend,
-			destinationBlend, alphaCutoff);
+			destinationBlend, alphaCutoff, brightmap, brightmapDesaturation);
 		return;
 	}
 #endif
@@ -469,14 +474,48 @@ void FGLRenderer::DrawPlayerSprites(sector_t * viewsector, bool hudModelStep)
 			unsigned int nativeMaterialFlags = 0;
 			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 			nativeMaterialFlags =
-				(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
-				((vis.RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
-				((vis.RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
-				((vis.RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
-				((vis.RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0);
+				(nativeFuzz ? GLES_MATERIAL_FUZZ | (static_cast<unsigned int>(gl_fuzztype) << GLES_MATERIAL_FUZZ_SHIFT) : 0) |
+				((vis.RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0);
 			#endif
-			DrawPSprite (player,psp,interpolatedPos.X, interpolatedPos.Y, cm.colormap, hudModelStep, OverrideShader, trans, nativeMaterialFlags,
-				vis.RenderStyle.AsDWORD);
+			float nativeColor[3] = { 1.0f, 1.0f, 1.0f };
+			float nativeAlpha = trans;
+			#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (nativeGLES)
+			{
+				PalEntry nativeTint = 0xffffff;
+				gl_GetSpriteLighting(vis.RenderStyle, playermo, &cmc, nativeTint);
+				if (vis.RenderStyle.Flags & STYLEF_ColorIsFixed)
+					gl_ModifyColor(nativeTint.r, nativeTint.g, nativeTint.b, cmc.colormap);
+				if (vis.RenderStyle.BlendOp == STYLEOP_Shadow)
+				{
+					for (int channel = 0; channel < 3; ++channel)
+						nativeColor[channel] = 0.2f;
+					nativeColor[0] *= nativeTint.r / 255.0f;
+					nativeColor[1] *= nativeTint.g / 255.0f;
+					nativeColor[2] *= nativeTint.b / 255.0f;
+					nativeAlpha = 0.33f;
+				}
+				else
+				{
+					gl_GetLightColor(statebright[i] ? 255 : lightlevel, 0, &cmc,
+						&nativeColor[0], &nativeColor[1], &nativeColor[2], true);
+					if (gl_light_sprites && gl_lights && mLightCount && !statebright[i])
+					{
+						float dynamicLight[3];
+						if (gl_GetSpriteLight(playermo, playermo->x, playermo->y,
+							playermo->z + (playermo->height >> 1), playermo->subsector,
+							cmc.colormap, dynamicLight))
+							for (int channel = 0; channel < 3; ++channel)
+								nativeColor[channel] = clamp<float>(nativeColor[channel] + dynamicLight[channel], 0.0f, 1.0f);
+					}
+					nativeColor[0] *= nativeTint.r / 255.0f;
+					nativeColor[1] *= nativeTint.g / 255.0f;
+					nativeColor[2] *= nativeTint.b / 255.0f;
+				}
+			}
+			#endif
+			DrawPSprite (player,psp,interpolatedPos.X, interpolatedPos.Y, cm.colormap, hudModelStep, OverrideShader, nativeAlpha, nativeMaterialFlags,
+				vis.RenderStyle.AsDWORD, nativeColor);
 		}
 	}
 	gl_RenderState.EnableBrightmap(false);

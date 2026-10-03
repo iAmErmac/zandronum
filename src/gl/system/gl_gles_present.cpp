@@ -63,7 +63,7 @@ namespace
 		"uniform float u_brightness;\n"
 		"uniform float u_contrast;\n"
 		"vec4 wipe_color() { vec4 wipeCurrent; vec4 wipeStart; vec4 wipeEnd; float wipeProgress; float wipeColumn; vec4 wipePacked; float wipeFall; float wipeFallUv; float wipeBurn; wipeCurrent = texture(u_texture, v_uv); wipeStart = texture(u_wipe_start, v_uv); wipeEnd = texture(u_wipe_end, v_uv); wipeProgress = clamp(u_wipe_progress, 0.0, 1.0); if (!u_wipe_active) return wipeCurrent; if (u_wipe_type == 1) { wipeColumn = floor(clamp(v_uv.x, 0.0, 0.999999) * 320.0); wipePacked = texture(u_wipe_mask, vec2((wipeColumn + 0.5) / 320.0, 0.5)); wipeFall = (floor(wipePacked.r * 255.0 + 0.5) + floor(wipePacked.g * 255.0 + 0.5) * 256.0) / 65535.0 * 200.0; wipeFallUv = wipeFall / 200.0; if (v_uv.y <= 1.0 - wipeFallUv) return texture(u_wipe_start, vec2(v_uv.x, clamp(v_uv.y + wipeFallUv, 0.0, 1.0))); return wipeEnd; } if (u_wipe_type == 2) { wipeBurn = texture(u_wipe_mask, v_uv).r; return mix(wipeStart, wipeEnd, wipeBurn); } return mix(wipeStart, wipeEnd, wipeProgress); }\n"
-		"void main() { vec4 color = wipe_color(); color.rgb = max((color.rgb - 0.5) * u_contrast + 0.5 + u_brightness * 0.5, vec3(0.0)); color.rgb = pow(color.rgb, vec3(1.0 / max(u_gamma, 0.1))); frag_color = color; }\n";
+		"void main() { vec4 color = wipe_color(); color.rgb = max((color.rgb - 0.5) * u_contrast + 0.5 + u_brightness * 0.5, vec3(0.0)); color.rgb = pow(color.rgb, vec3(1.0 / max(u_gamma, 0.1))); frag_color = vec4(color.rgb, 1.0); }\n";
 
 	static const char *FillVertexSource =
 		"#version 320 es\n"
@@ -173,8 +173,7 @@ bool gl_GLESInternalPresent(const FGLESPresentConfig &config)
 	glScissor(0, 0, config.presentationTarget.renderWidth, config.presentationTarget.renderHeight);
 	glDisable(GL_SCISSOR_TEST);
 	glDisable(GL_DEPTH_TEST);
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_BLEND);
 	glUseProgram(Presenter.program);
 	if (Presenter.texture >= 0) glUniform1i(Presenter.texture, 0);
 	if (Presenter.textureTransform >= 0)
@@ -227,7 +226,6 @@ FGLESViewArea gl_GLESInternalComputeViewArea(int fullWidth, int fullHeight,
 {
 	FGLESViewArea area = {};
 	const int renderHeight = screenBlocks >= 10 ? fullHeight : (screenBlocks * fullHeight / 10) & ~7;
-	const int renderWidth = screenBlocks >= 10 ? fullWidth : screenBlocks * fullWidth / 10;
 	const int bars = (trueHeight - fullHeight) / 2;
 	area.x = viewX;
 	area.y = viewY;
@@ -236,7 +234,7 @@ FGLESViewArea gl_GLESInternalComputeViewArea(int fullWidth, int fullHeight,
 	area.renderX = viewX;
 	area.renderY = trueHeight - bars -
 		(renderHeight + viewY - ((renderHeight - viewHeight) / 2));
-	area.renderWidth = renderWidth;
+	area.renderWidth = viewWidth;
 	area.renderHeight = renderHeight;
 	area.scissorX = viewX;
 	area.scissorY = trueHeight - bars - (viewHeight + viewY);

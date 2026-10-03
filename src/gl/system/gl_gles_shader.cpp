@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string>
 #include <string.h>
+#include <ctype.h>
 
 #include "gl/system/gl_gles_context.h"
 
@@ -95,9 +96,34 @@ GLuint gl_GLES_CompileShader(GLenum type, const char *source, const char *label,
 }
 
 GLuint gl_GLES_LinkProgram(const char *vertexSource, const char *fragmentSource,
-	const char *label, char *log, int logSize)
+	const char *label, char *log, int logSize, bool clampDepth)
 {
 	ResetLog(log, logSize);
+	std::string depthVertex;
+	std::string depthFragment;
+	if (clampDepth && !gl_GLES_GetContextInfo().hasDepthClamp)
+	{
+		// Interpolating clip Z and W preserves depth while removing near/far clipping.
+		depthVertex = vertexSource;
+		depthFragment = fragmentSource;
+		depthVertex.insert(depthVertex.find("void main()"), "out highp vec2 v_clip_depth;\n");
+		depthVertex.insert(depthVertex.rfind('}'), "v_clip_depth = gl_Position.zw; gl_Position.z = 0.0; ");
+		const std::string precision = "precision highp float;\n";
+		const size_t precisionEnd = depthFragment.find(precision) + precision.size();
+		depthFragment.insert(precisionEnd,
+			"in highp vec2 v_clip_depth;\n"
+			"uniform vec4 u_depth_bias;\n"
+			"float zandronum_window_depth() { return mix(gl_DepthRange.near, gl_DepthRange.far, clamp(0.5 * v_clip_depth.x / v_clip_depth.y + 0.5, 0.0, 1.0)); }\n");
+		const std::string originalDepth = "gl_FragCoord.z";
+		for (size_t position = depthFragment.find(originalDepth); position != std::string::npos;
+			position = depthFragment.find(originalDepth, position))
+			depthFragment.replace(position, originalDepth.size(), "zandronum_window_depth()");
+		const std::string mainStart = "void main() {";
+		depthFragment.insert(depthFragment.find(mainStart) + mainStart.size(),
+			" float window_depth = zandronum_window_depth(); gl_FragDepth = window_depth + u_depth_bias.x * max(abs(dFdx(window_depth)), abs(dFdy(window_depth))) + u_depth_bias.y / 16777216.0; ");
+		vertexSource = depthVertex.c_str();
+		fragmentSource = depthFragment.c_str();
+	}
 	const GLuint vertex = gl_GLES_CompileShader(GL_VERTEX_SHADER, vertexSource, label, log, logSize);
 	if (vertex == 0) return 0;
 	const GLuint fragment = gl_GLES_CompileShader(GL_FRAGMENT_SHADER, fragmentSource, label, log, logSize);
@@ -137,4 +163,37 @@ GLuint gl_GLES_LinkProgram(const char *vertexSource, const char *fragmentSource,
 		return 0;
 	}
 	return program;
+}
+
+std::string gl_GLES_LowerMaterialShader(const char *source)
+{
+	std::string result;
+	for (size_t offset = 0; source[offset] != '\0';)
+	{
+		const size_t first = offset;
+		if (source[offset] == '/' && source[offset + 1] == '/')
+		{
+			while (source[offset] != '\0' && source[offset] != '\n') ++offset;
+		}
+		else if (source[offset] == '/' && source[offset + 1] == '*')
+		{
+			offset += 2;
+			while (source[offset] != '\0' && !(source[offset] == '*' && source[offset + 1] == '/')) ++offset;
+			if (source[offset] != '\0') offset += 2;
+		}
+		else if (isalpha(static_cast<unsigned char>(source[offset])) || source[offset] == '_')
+		{
+			while (isalnum(static_cast<unsigned char>(source[offset])) || source[offset] == '_') ++offset;
+			const std::string token(source + first, offset - first);
+			if (token == "gl_TexCoord") result += "zandronum_texcoord";
+			else if (token == "gl_Color") result += "v_color";
+			else if (token == "gl_FragColor") result += "frag_color";
+			else if (token == "texture2D") result += "texture";
+			else result += token;
+			continue;
+		}
+		else ++offset;
+		result.append(source + first, offset - first);
+	}
+	return result;
 }

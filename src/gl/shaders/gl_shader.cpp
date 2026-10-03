@@ -495,6 +495,12 @@ static const FDefaultShader defaultshaders[]=
 
 static TArray<FString> usershaders;
 
+const char *gl_GetUserShaderPath(int shaderIndex)
+{
+	const unsigned int index = static_cast<unsigned int>(shaderIndex - FIRST_USER_SHADER);
+	return index < usershaders.Size() ? usershaders[index].GetChars() : NULL;
+}
+
 struct FEffectShader
 {
 	const char *ShaderName;

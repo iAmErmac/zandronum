@@ -170,7 +170,7 @@ public:
 	#endif
 };
 
-#define FIRST_USER_SHADER 12
+#include "gl/shaders/gl_shaderdefs.h"
 
 
 #endif

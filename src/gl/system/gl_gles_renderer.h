@@ -6,6 +6,7 @@
 #include "v_palette.h"
 
 class FMaterial;
+struct FShaderLightParameters;
 
 struct FGLESNativeCapabilities
 {
@@ -25,7 +26,6 @@ struct FGLESNativeCapabilities
 	bool hasUniformBuffers;
 	bool hasFramebuffers;
 	bool hasDepthStencil;
-	bool hasBufferMapping;
 	bool hasAnisotropicFiltering;
 	bool hasAstcCompression;
 	bool hasEtc2Compression;
@@ -47,15 +47,20 @@ enum EGLESBlendMode
 enum EGLESMaterialFlags
 {
 	GLES_MATERIAL_RED_IS_ALPHA = 1,
-	GLES_MATERIAL_INVERT = 2,
-	GLES_MATERIAL_FADE_TO_BLACK = 4,
+	GLES_MATERIAL_OPAQUE_TEXTURE = 4,
 	GLES_MATERIAL_FUZZ = 8,
 	GLES_MATERIAL_COLOR_OVERLAY = 16,
-	GLES_MATERIAL_INVERT_SOURCE = 32,
 	GLES_MATERIAL_COLOR_FIXED = 64,
 	GLES_MATERIAL_DECAL = 128,
 	GLES_MATERIAL_FOG_BOUNDARY = 256,
-	GLES_MATERIAL_SPHERE_MAP = 512
+	GLES_MATERIAL_SPHERE_MAP = 512,
+	GLES_MATERIAL_FUZZ_SHIFT = 10,
+	GLES_MATERIAL_RADIAL_FOG = 8192,
+	GLES_MATERIAL_CLAMP_X = 16384,
+	GLES_MATERIAL_CLAMP_Y = 32768,
+	GLES_MATERIAL_GLOW = 65536,
+	GLES_MATERIAL_MIRROR_DECAL = 131072,
+	GLES_MATERIAL_SPRITE_FOG_LAYER = 262144
 };
 
 bool gl_GLES_CollectCapabilities();
@@ -86,37 +91,43 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *lightData = 0, const unsigned int *lightCounts = 0,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0, const float *topGlowColor = 0,
-	const float *bottomGlowColor = 0, const float *glowDistances = 0);
+	const float *bottomGlowColor = 0, const float *glowDistances = 0,
+	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f, bool customBlend = false,
+	int sourceBlend = 0, int destinationBlend = 0);
 void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *lightData = 0, const unsigned int *lightCounts = 0,
-	unsigned int brightmap = 0, int brightmapDesaturation = 0);
+	unsigned int brightmap = 0, int brightmapDesaturation = 0,
+	const FShaderLightParameters *lighting = 0);
 void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
 	const float *texcoords, const float *color, unsigned int texture, bool fog,
-	const float *fogColor, float fogDensity);
+	const float *fogColor, float fogDensity, const FShaderLightParameters *lighting = 0);
 void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, unsigned int brightmap = 0, int brightmapDesaturation = 0,
-	bool customBlend = false, int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f);
+	bool customBlend = false, int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f,
+	const FShaderLightParameters *lighting = 0);
 void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *normals = 0, unsigned int brightmap = 0,
 	int brightmapDesaturation = 0, bool cullBackFaces = false, bool customBlend = false,
-	int sourceBlend = 0, int destinationBlend = 0);
+	int sourceBlend = 0, int destinationBlend = 0,
+	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f);
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
 	EGLESBlendMode blendMode, unsigned int materialFlags = 0, bool customBlend = false,
-	int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f);
+	int sourceBlend = 0, int destinationBlend = 0, float alphaCutoff = 0.5f,
+	unsigned int brightmap = 0, int brightmapDesaturation = 0);
 void gl_GLES_AddHUDPolygon(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, bool masked,
 	unsigned int texture, bool repeat, EGLESBlendMode blendMode, unsigned int materialFlags = 0);
 void gl_GLES_AddScreenQuad(const float *color, float alpha, EGLESBlendMode blendMode);
 unsigned int gl_GLES_BindMaterial(const void *key, const unsigned char *pixels,
-	int width, int height, bool repeat, int colormap, int translation, bool allowhires);
+	int width, int height, bool repeat, int colormap, int translation, bool allowhires, bool noFilter = false);
 unsigned int gl_GLES_EnsureMaterialTexture(const void *key, int width, int height,
 	bool repeat, int colormap, int translation, bool allowhires);
 void gl_GLES_MarkMaterialFramebufferContent(const void *key, int colormap,
@@ -143,16 +154,13 @@ bool gl_GLES_OnContextRestored(int width, int height);
 const FGLESNativeCapabilities &gl_GLES_GetCapabilities();
 void gl_GLES_PrintStartupLog();
 void gl_GLES_ResetState(int width, int height);
-bool gl_GLES_ApplyRenderState(int srcBlend, int dstBlend, int alphaFunc,
-	float alphaThreshold, bool alphaTest, int blendEquation, bool fogEnabled,
-	bool textureEnabled, int textureMode);
+bool gl_GLES_ApplyBlendState(int srcBlend, int dstBlend, int blendEquation);
 void gl_GLES_RegisterShaderPrograms();
 void gl_GLES_UnregisterShaderPrograms();
 unsigned int gl_GLES_GetShaderProgram(const char *name);
 void gl_GLES_UseProgram(unsigned int handle);
 unsigned int gl_GLES_BindShaderProgram(const char *name, unsigned int fallback);
 void gl_GLES_RecordProfileDraw(bool triangleStrip, int indexCount);
-void gl_GLES_RecordProfileOverflow();
 void gl_GLES_RecordProfileState(bool skipped);
 void gl_GLES_RecordProfilePortalState(bool skipped);
 void gl_GLES_RecordProfilePortalSkyUpload(bool skipped);
@@ -170,5 +178,7 @@ bool gl_GLES_UploadFlatBuffer(unsigned int vbo, unsigned int vao, unsigned int e
 bool gl_GLES_UpdateFlatBuffer(unsigned int vbo, int offset, int size, const void *vertices);
 void gl_GLES_DestroyFlatBufferObjects(unsigned int vbo, unsigned int vao, unsigned int ebo);
 void gl_GLES_BindFlatBuffer(unsigned int vao, unsigned int vbo);
+
+void gl_GLES_SetSourceOrder(bool enabled);
 
 #endif

@@ -106,13 +106,6 @@ extern TArray<spritedef_t> sprites;
 extern TArray<spriteframe_t> SpriteFrames;
 extern TArray<PalEntry> BloodTranslationColors;
 
-enum HWRenderStyle
-{
-	STYLEHW_Normal,			// default
-	STYLEHW_Solid,			// drawn solid (needs special treatment for sprites)
-	STYLEHW_NoAlphaTest,	// disable alpha test
-};
-
 
 void gl_SetRenderStyle(FRenderStyle style, bool drawopaque, bool allowcolorblending)
 {
@@ -147,15 +140,26 @@ void GLSprite::Draw(int pass)
 			gl_RenderModel(this, Colormap.colormap);
 			return;
 		}
+		FColormap nativeColormap = Colormap;
+		if (gl_spritebrightfog && fullbright) nativeColormap.FadeColor = 0;
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, getExtraLight(), &nativeColormap);
+		int nativeLightLevel = lightlevel;
 		float color[3];
 		const bool nativeShadow = RenderStyle.BlendOp == STYLEOP_Shadow;
-		const float nativeAlpha = nativeShadow ? 0.33f : trans;
+		float nativeAlpha = trans;
+		float nativeShadowCutoff = 0.0f;
 		if (nativeShadow)
 		{
-			// Match the source shadow style instead of applying sector lighting.
-			color[0] = 0.2f * ThingColor.r / 255.0f;
-			color[1] = 0.2f * ThingColor.g / 255.0f;
-			color[2] = 0.2f * ThingColor.b / 255.0f;
+			const float shadowLightLevel = lighting.level;
+			lighting = FShaderLightParameters();
+			if (glset.lightmode == 8)
+			{
+				lighting.level = shadowLightLevel;
+				lighting.software = 1.0f;
+			}
+			gl_GetShadowParameters(lightlevel, &nativeColormap,
+				Dist2(FIXED2FLOAT(viewx), FIXED2FLOAT(viewy), x, y), &nativeAlpha, &nativeShadowCutoff);
+			color[0] = color[1] = color[2] = 0.2f;
 		}
 		else
 		{
@@ -176,40 +180,60 @@ void GLSprite::Draw(int pass)
 					if (gl_GetSpriteLight(actor, lightX, lightY, lightZ, lightSubsector,
 						Colormap.colormap, dynamicLight))
 					{
-						color[0] = clamp<float>(color[0] + dynamicLight[0], 0.0f, 1.0f);
-						color[1] = clamp<float>(color[1] + dynamicLight[1], 0.0f, 1.0f);
-						color[2] = clamp<float>(color[2] + dynamicLight[2], 0.0f, 1.0f);
+						if (lighting.software != 0.0f)
+							memcpy(lighting.dynamic, dynamicLight, sizeof(lighting.dynamic));
+						else
+						{
+							color[0] = clamp<float>(color[0] + dynamicLight[0], 0.0f, 1.0f);
+							color[1] = clamp<float>(color[1] + dynamicLight[1], 0.0f, 1.0f);
+							color[2] = clamp<float>(color[2] + dynamicLight[2], 0.0f, 1.0f);
+							nativeLightLevel = gl_GetSpriteLightLevel(color[0], color[1], color[2]);
+							lighting = gl_GetShaderLightParameters(nativeLightLevel, getExtraLight(), &nativeColormap);
+						}
 					}
 				}
 			}
-			color[0] *= ThingColor.r / 255.0f;
-			color[1] *= ThingColor.g / 255.0f;
-			color[2] *= ThingColor.b / 255.0f;
+			const bool tintedLighting = actor != NULL ?
+				gl_light_sprites && gl_lights && GLRenderer->mLightCount > 0 && !fullbright :
+				particle != NULL && gl_light_particles;
+			if (glset.lightmode != 8 || tintedLighting)
+			{
+				color[0] *= ThingColor.r / 255.0f;
+				color[1] *= ThingColor.g / 255.0f;
+				color[2] *= ThingColor.b / 255.0f;
+			}
 		}
-		float fogColor[3] = { 0.0f, 0.0f, 0.0f };
-		float fogDensity = 0.0f;
-		const bool nativeFog = !gl_fixedcolormap &&
-			(!gl_isBlack(Colormap.FadeColor) || (level.flags & LEVEL_HASFADETABLE) != 0);
-		if (nativeFog)
+		float fogColor[3];
+		float fogDensity;
+		const int nativeFogLevel = gl_isBlack(nativeColormap.FadeColor) ? nativeLightLevel : foglevel;
+		bool additiveFog = nativeShadow || (RenderStyle.BlendOp == STYLEOP_Add && RenderStyle.DestAlpha == STYLEALPHA_One);
+		FColormap fogColormap = nativeColormap;
+		if (RenderStyle.Flags & STYLEF_FadeToBlack)
 		{
-			PalEntry fog = Colormap.FadeColor;
-			if (level.flags & LEVEL_HASFADETABLE)
-			{
-				fog = 0x808080;
-				fogDensity = 70.0f;
-			}
-			else
-			{
-				fogDensity = gl_GetFogDensity(lightlevel, fog);
-				gl_ModifyColor(fog.r, fog.g, fog.b, Colormap.colormap);
-			}
-			fogColor[0] = fog.r / 255.0f;
-			fogColor[1] = fog.g / 255.0f;
-			fogColor[2] = fog.b / 255.0f;
+			fogColormap.FadeColor = 0;
+			additiveFog = true;
 		}
+		if (RenderStyle.Flags & STYLEF_InvertOverlay)
+		{
+			fogColormap.FadeColor = fogColormap.FadeColor.InverseColor();
+			additiveFog = false;
+		}
+		if (RenderStyle.Flags & (STYLEF_FadeToBlack | STYLEF_InvertOverlay))
+		{
+			const FShaderLightParameters fogLighting = gl_GetShaderLightParameters(nativeFogLevel, getExtraLight(), &fogColormap);
+			lighting.factor = fogLighting.factor;
+			lighting.distance = fogLighting.distance;
+			if (lighting.software != 0.0f) lighting.level = fogLighting.level;
+		}
+		const bool nativeFog = gl_GetFogParameters(nativeFogLevel, &fogColormap,
+			additiveFog, fogColor, &fogDensity);
 		const unsigned int texture = gltexture != NULL ?
 			gltexture->BindNative(Colormap.colormap, translation, false) : 0;
-		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+		const bool allowBrightmap = pass != GLPASS_TRANSLUCENT || gl_spritebrightfog ||
+			(gl_isBlack(Colormap.FadeColor) && !(level.flags & LEVEL_HASFADETABLE) &&
+			 RenderStyle.BlendOp == STYLEOP_Add);
+		const unsigned int brightmap = allowBrightmap && Colormap.colormap < CM_FIRSTSPECIALCOLORMAP &&
+			gltexture != NULL && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			gltexture->BindNativeBrightmap(false) : 0;
 		const float positions[12] =
 		{
@@ -238,19 +262,17 @@ void GLSprite::Draw(int pass)
 		const bool customBlend = nativeBlend != GLES_BLEND_OPAQUE && nativeBlend != GLES_BLEND_FUZZ;
 		const bool nativeMasked = gltexture != NULL && gltexture->isMasked() &&
 			hw_styleflags != STYLEHW_NoAlphaTest;
-		const float nativeAlphaCutoff = nativeMasked ? nativeAlpha * gl_mask_sprite_threshold : 0.5f;
+		const float nativeAlphaCutoff = nativeMasked ?
+			(nativeShadow ? nativeShadowCutoff / nativeAlpha : nativeAlpha) * gl_mask_sprite_threshold : 0.5f;
 		gl_GLES_AddSprite(positions, texcoords, color, nativeAlpha,
 			nativeMasked,
 			nativeFog, texture, fogColor, fogDensity,
 			nativeBlend,
-			(nativeFuzz ? GLES_MATERIAL_FUZZ : 0) |
+			(nativeFuzz ? GLES_MATERIAL_FUZZ | (static_cast<unsigned int>(gl_fuzztype) << GLES_MATERIAL_FUZZ_SHIFT) : 0) |
 			((RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
-			((RenderStyle.Flags & STYLEF_InvertOverlay) ? GLES_MATERIAL_INVERT : 0) |
-			((RenderStyle.Flags & STYLEF_FadeToBlack) ? GLES_MATERIAL_FADE_TO_BLACK : 0) |
-			((RenderStyle.Flags & STYLEF_InvertSource) ? GLES_MATERIAL_INVERT_SOURCE : 0) |
 			((RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0), brightmap,
 			(Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ? Colormap.colormap : 0,
-			customBlend, sourceBlend, destinationBlend, nativeAlphaCutoff);
+			customBlend, sourceBlend, destinationBlend, nativeAlphaCutoff, &lighting);
 		return;
 	}
 #endif
@@ -539,7 +561,8 @@ inline void GLSprite::PutSprite(bool translucent)
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		Draw(GLPASS_TRANSLUCENT);
+		if (list == GLDL_TRANSLUCENT) gl_drawinfo->drawlists[list].AddSprite(this);
+		else Draw(GLPASS_ALL);
 		return;
 	}
 #endif

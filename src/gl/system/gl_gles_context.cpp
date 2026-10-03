@@ -78,7 +78,8 @@ namespace
 			Procedures.DepthFunc != nullptr && Procedures.DepthMask != nullptr &&
 			Procedures.BlendEquation != nullptr && Procedures.BindSampler != nullptr &&
 			Procedures.GenSamplers != nullptr && Procedures.DeleteSamplers != nullptr &&
-			Procedures.SamplerParameteri != nullptr && Procedures.BufferSubData != nullptr &&
+			Procedures.SamplerParameteri != nullptr && Procedures.SamplerParameterf != nullptr &&
+			Procedures.BufferSubData != nullptr &&
 			Procedures.ClearDepthf != nullptr && Procedures.ClearStencil != nullptr &&
 			Procedures.ColorMask != nullptr && Procedures.CopyTexSubImage2D != nullptr &&
 			Procedures.CullFace != nullptr && Procedures.DepthRangef != nullptr &&
@@ -180,10 +181,12 @@ namespace
 		if (Procedures.GetStringi != nullptr)
 			Procedures.GetIntegerv(GL_NUM_EXTENSIONS, &info.extensionCount);
 		info.hasDepthStencil = true;
+		info.hasDepthClamp = !isGLES || ExtensionPresent("GL_EXT_depth_clamp");
 		info.hasMultisample = Procedures.RenderbufferStorageMultisample != nullptr &&
 			Procedures.BlitFramebuffer != nullptr;
 		info.hasDebugLabels = ExtensionPresent("GL_KHR_debug") || ExtensionPresent("GL_ARB_debug_output");
-		info.hasAnisotropicFiltering = ExtensionPresent("GL_EXT_texture_filter_anisotropic");
+		info.hasAnisotropicFiltering = ExtensionPresent("GL_EXT_texture_filter_anisotropic") ||
+			ExtensionPresent("GL_ARB_texture_filter_anisotropic");
 		info.hasMultiview = ExtensionPresent("GL_OVR_multiview2") ||
 			ExtensionPresent("GL_ANDROID_extension_pack_es31a");
 		if (requireGLES && !isGLES) return false;
@@ -267,6 +270,7 @@ namespace
 		LOAD_GLES_PROCEDURE(GenSamplers);
 		LOAD_GLES_PROCEDURE(DeleteSamplers);
 		LOAD_GLES_PROCEDURE(SamplerParameteri);
+		LOAD_GLES_PROCEDURE(SamplerParameterf);
 		LOAD_GLES_PROCEDURE(BufferSubData);
 		LOAD_GLES_PROCEDURE(ClearDepthf);
 		if (Procedures.ClearDepthf == nullptr)
@@ -364,6 +368,7 @@ namespace
 		Procedures.GenSamplers = &glGenSamplers;
 		Procedures.DeleteSamplers = &glDeleteSamplers;
 		Procedures.SamplerParameteri = &glSamplerParameteri;
+		Procedures.SamplerParameterf = &glSamplerParameterf;
 		Procedures.BufferSubData = &glBufferSubData;
 		Procedures.ClearDepthf = &glClearDepthf;
 		Procedures.ClearStencil = &glClearStencil;

@@ -525,15 +525,14 @@ void FVoxelModel::BuildNativeGeometry()
 			const FVoxelVertex &vertex = *corners[corner];
 			const unsigned int positionOffset = (firstVertex + corner) * 3;
 			const unsigned int textureOffset = (firstVertex + corner) * 2;
-			// KVX data uses the opposite horizontal forward axis from the native model view.
-			mNativePositions[positionOffset + 0] = -vertex.x;
+			mNativePositions[positionOffset + 0] = vertex.x;
 			mNativePositions[positionOffset + 1] = vertex.y;
-			mNativePositions[positionOffset + 2] = -vertex.z;
+			mNativePositions[positionOffset + 2] = vertex.z;
 			mNativeTexcoords[textureOffset + 0] = vertex.u;
 			mNativeTexcoords[textureOffset + 1] = vertex.v;
-			mNativeNormals[positionOffset + 0] = -normal[0];
+			mNativeNormals[positionOffset + 0] = normal[0];
 			mNativeNormals[positionOffset + 1] = normal[1];
-			mNativeNormals[positionOffset + 2] = -normal[2];
+			mNativeNormals[positionOffset + 2] = normal[2];
 		}
 		const unsigned int indexOffset = quad * 6;
 		mNativeIndices[indexOffset + 0] = firstVertex + 0;
@@ -543,7 +542,7 @@ void FVoxelModel::BuildNativeGeometry()
 		mNativeIndices[indexOffset + 4] = firstVertex + 2;
 		mNativeIndices[indexOffset + 5] = firstVertex + 3;
 	}
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#if defined(__ANDROID__)
 	mVertices.Clear();
 	mVertices.ShrinkToFit();
 	mIndices.Clear();
