@@ -140,8 +140,9 @@ void GLSprite::Draw(int pass)
 			gl_RenderModel(this, Colormap.colormap);
 			return;
 		}
+		const bool nativeFullbright = actor != NULL && fullbright;
 		FColormap nativeColormap = Colormap;
-		if (gl_spritebrightfog && fullbright) nativeColormap.FadeColor = 0;
+		if (gl_spritebrightfog && nativeFullbright) nativeColormap.FadeColor = 0;
 		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, getExtraLight(), &nativeColormap);
 		int nativeLightLevel = lightlevel;
 		float color[3];
@@ -166,8 +167,8 @@ void GLSprite::Draw(int pass)
 			gl_GetLightColor(lightlevel, getExtraLight(), &Colormap, color + 0, color + 1, color + 2);
 			const bool allowDynamicLight = actor != NULL ? gl_light_sprites :
 				particle != NULL ? gl_light_particles : false;
-			if (allowDynamicLight && gl_lights && GLRenderer->mLightCount > 0 && !fullbright &&
-				gl_fixedcolormap < CM_FIRSTSPECIALCOLORMAP)
+			if (allowDynamicLight && gl_lights && GLRenderer->mLightCount > 0 && !nativeFullbright &&
+				(particle != NULL || gl_fixedcolormap < CM_FIRSTSPECIALCOLORMAP))
 			{
 				float dynamicLight[3];
 				subsector_t *lightSubsector = actor != NULL ? actor->subsector :

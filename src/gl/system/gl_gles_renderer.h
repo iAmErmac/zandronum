@@ -61,7 +61,8 @@ enum EGLESMaterialFlags
 	GLES_MATERIAL_CLAMP_Y = 32768,
 	GLES_MATERIAL_GLOW = 65536,
 	GLES_MATERIAL_MIRROR_DECAL = 131072,
-	GLES_MATERIAL_SPRITE_FOG_LAYER = 262144
+	GLES_MATERIAL_SPRITE_FOG_LAYER = 262144,
+	GLES_MATERIAL_SMOOTH_LINE = 524288
 };
 
 enum EGLESPrimitiveMode
@@ -155,6 +156,7 @@ void gl_GLES_SetPortalView(float cameraX, float cameraY, float cameraZ,
 void gl_GLES_SetPortalClipPlane(float a, float b, float c, float d);
 void gl_GLES_EndPortalCapture(unsigned int portalId);
 bool gl_GLES_IsActive();
+bool gl_GLES_IsMultisampled();
 bool gl_GLES_IsProfileEnabled();
 void gl_GLES_DesktopProfileBegin();
 void gl_GLES_DesktopProfileEnd();

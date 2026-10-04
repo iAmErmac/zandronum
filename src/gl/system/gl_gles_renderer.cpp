@@ -47,6 +47,7 @@ EXTERN_CVAR(Float, skyoffset)
 EXTERN_CVAR(Float, Gamma)
 EXTERN_CVAR(Float, vid_brightness)
 EXTERN_CVAR(Float, vid_contrast)
+EXTERN_CVAR(Bool, gl_aalines)
 EXTERN_CVAR(Int, gl_vid_multisample)
 EXTERN_CVAR(Bool, gl_no_skyclear)
 EXTERN_CVAR(Int, screenblocks)
@@ -134,6 +135,8 @@ namespace
 		std::vector<size_t> maskBatches;
 		float viewProjection[16];
 		float cameraPosition[3];
+		int colormap;
+		float lightColor[3];
 		GLuint stencilBit;
 		GLuint stencilRef;
 		GLuint stencilMask;
@@ -547,7 +550,7 @@ namespace
 			effect.shaderIndex = 0;
 			effect.speed = 0.0f;
 		}
-		if ((materialFlags & GLES_MATERIAL_COLOR_FIXED) != 0)
+		if ((materialFlags & (GLES_MATERIAL_COLOR_FIXED | GLES_MATERIAL_SPHERE_MAP)) != 0)
 			effect.colormap = CM_DEFAULT;
 		unsigned int timerVariant = ((materialFlags & GLES_MATERIAL_GLOW) != 0 ? 1 : 0) |
 			(effect.colormap >= CM_DESAT1 && effect.colormap <= CM_DESAT31 ? 2 : 0) |
@@ -660,6 +663,7 @@ namespace
 	{
 		record = {};
 		record.portalId = portalId;
+		record.lightColor[0] = record.lightColor[1] = record.lightColor[2] = 1.0f;
 		record.stencilBit = stencilBit;
 		record.stencilRef = stencilBit;
 		record.stencilMask = stencilBit;
@@ -796,7 +800,7 @@ namespace
 			"#define topglowcolor u_glow_top_color\n"
 			"#define bottomglowcolor u_glow_bottom_color\n"
 			"#define glowdist v_glow_distance\n"
-			"#define texturemode ((u_material_flags & 64) != 0 ? 1 : ((u_material_flags & 4) != 0 ? 2 : 0))\n"
+			"#define texturemode ((u_material_flags & (16 | 64)) != 0 ? 1 : ((u_material_flags & 4) != 0 ? 2 : 0))\n"
 			"vec4 zandronum_texcoord[1];\n"
 			"#define tex u_texture\n"
 			"#define texture2 u_brightmap\n"
@@ -806,12 +810,16 @@ namespace
 			"#define dlightcolor u_sprite_light\n"
 			"vec4 getLightColor(float fogdist, float fogfactor) { vec3 color = apply_static_light(v_color.rgb, fogdist); if (fogenabled > 0) color *= fogfactor; return vec4(apply_glow(color), v_color.a); }\n"
 			"vec4 applyFog(vec4 color, float factor) { return vec4(mix(u_fog_color.rgb, color.rgb, factor), color.a); }\n"
-			"vec4 getTexel(vec2 coords) { vec4 value = u_use_texture ? texture(u_texture, coords) : vec4(1.0); if ((u_material_flags & 4) != 0) value.a = 1.0; if ((u_material_flags & 64) != 0) value.rgb = vec3(1.0); return desaturate(value); }\n";
+			"vec4 getTexel(vec2 coords) { vec4 value = u_use_texture ? texture(u_texture, coords) : vec4(1.0); if ((u_material_flags & 4) != 0) value.a = 1.0; if ((u_material_flags & (16 | 64)) != 0) value.rgb = vec3(1.0); return desaturate(value); }\n";
 		const std::string mainStart = "void main() {";
 		fragment.replace(fragment.find(mainStart), mainStart.size(), mainStart + " zandronum_texcoord[0] = vec4(v_uv, 0.0, 1.0);");
 		const std::string original = "vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a));";
 		fragment.replace(fragment.find(original), original.size(),
-			"vec4 color = Process(vec4(lighting, u_material_colormap ? 1.0 : v_color.a));");
+			"vec4 color = Process(vec4((u_material_flags & 16) != 0 ? v_color.rgb : lighting, u_material_colormap ? 1.0 : v_color.a));");
+		const std::string redAlpha = "if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; }";
+		const std::string fixedColor = "if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); }";
+		fragment.erase(fragment.find(redAlpha), redAlpha.size());
+		fragment.erase(fragment.find(fixedColor), fixedColor.size());
 		const std::string earlyTest = "if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard;";
 		const size_t alphaTest = fragment.find(earlyTest);
 		if (alphaTest != std::string::npos)
@@ -830,7 +838,7 @@ namespace
 	}
 
 
-	static FNativeDrawUniforms &BindNativeSkyMaterial(GLuint texture, const float *viewProjection, bool fog = false)
+	static FNativeDrawUniforms &BindNativeSkyMaterial(GLuint texture, const float *viewProjection, bool fog = false, bool opaqueTexture = false, float alphaCutoff = 0.0f)
 	{
 		FSceneBatch batch = {};
 		batch.texture = texture;
@@ -852,10 +860,11 @@ namespace
 		if (uniforms.viewProjection >= 0) glUniformMatrix4fv(uniforms.viewProjection, 1, GL_FALSE, viewProjection);
 		if (uniforms.model >= 0) glUniformMatrix4fv(uniforms.model, 1, GL_FALSE, identity);
 		if (uniforms.textureTransform >= 0) glUniform4f(uniforms.textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
-		if (uniforms.cameraPosition >= 0) glUniform3f(uniforms.cameraPosition, Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+		if (uniforms.cameraPosition >= 0) glUniform3f(uniforms.cameraPosition, Resources.cameraX, Resources.cameraZ, Resources.cameraY);
+		if (uniforms.alphaCutoff >= 0) glUniform1f(uniforms.alphaCutoff, alphaCutoff);
 		if (uniforms.skyDepth >= 0) glUniform1i(uniforms.skyDepth, 1);
 		if (uniforms.skyFog >= 0) glUniform1i(uniforms.skyFog, fog ? 1 : 0);
-		if (uniforms.materialFlags >= 0) glUniform1i(uniforms.materialFlags, 0);
+		if (uniforms.materialFlags >= 0) glUniform1i(uniforms.materialFlags, opaqueTexture ? GLES_MATERIAL_OPAQUE_TEXTURE : 0);
 		if (uniforms.lightCounts >= 0) glUniform3i(uniforms.lightCounts, 0, 0, 0);
 		if (uniforms.projectedLights >= 0) glUniform1i(uniforms.projectedLights, 0);
 		if (uniforms.clipPlaneEnabledUniform >= 0) glUniform1i(uniforms.clipPlaneEnabledUniform, 0);
@@ -1770,6 +1779,7 @@ namespace
 			"uniform vec4 u_static_light;\n"
 			"uniform vec3 u_sprite_light;\n"
 			"uniform bool u_sky_depth;\n"
+			"uniform float u_alpha_cutoff;\n"
 			"uniform highp int u_material_effect;\n"
 			"uniform float u_material_time;\n"
 			"vec2 material_uv(vec2 coords) { const float pi = 3.14159265358979323846; vec2 offset = vec2(0.0); if (u_material_effect == 1) { offset.y = sin(pi * 2.0 * (coords.x + u_material_time * 0.125)) * 0.1; offset.x = sin(pi * 2.0 * (coords.y + u_material_time * 0.125)) * 0.1; } else if (u_material_effect == 2) { float siny = sin(pi * 2.0 * (coords.y * 2.2 + u_material_time * 0.75)) * 0.03; offset.y = siny + sin(pi * 2.0 * (coords.x * 0.75 + u_material_time * 0.75)) * 0.03; offset.x = siny + sin(pi * 2.0 * (coords.x * 1.1 + u_material_time * 0.45)) * 0.02; } return coords + offset; }\n"
@@ -1777,7 +1787,7 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  frag_color = color; }\n";
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_sky_depth && color.a < u_alpha_cutoff) discard; color.rgb += additive;  if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } frag_color = color; }\n";
 		static const char *simpleFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1828,7 +1838,7 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  frag_color = color; }\n";
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } frag_color = color; }\n";
 		static const char *fogFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1873,7 +1883,7 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); frag_color = color; }\n";
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } frag_color = color; }\n";
 		static const char *fogMaskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1919,7 +1929,7 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); frag_color = color; }\n";
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } frag_color = color; }\n";
 		static const char *paletteFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1960,7 +1970,7 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec3 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0).rgb; vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float distanceSquared = dot(delta, delta); float distanceToLight = sqrt(distanceSquared); float amount = clamp(1.0 - distanceToLight / radius, 0.0, 1.0); if (u_projected_lights) { float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); float tangentDistance = sqrt(max(distanceSquared - planeDistance * planeDistance, 0.0)); float projectedAmount = clamp(1.0 - planeDistance / radius, 0.0, 1.0); amount = projectedAmount * texture(u_dynamic_light_texture, vec2(0.5 + tangentDistance / projectedRadius, 0.5)).r; } vec3 contribution = lightColor * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } lighting = u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base; }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  frag_color = color; }\n";
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive;  if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } frag_color = color; }\n";
 		NativeMaterialVertexSource = sceneVertexSource;
 		const char *materialSources[] = { sceneFragmentSource, maskedFragmentSource, paletteFragmentSource, fogFragmentSource, fogMaskedFragmentSource };
 		for (int i = 0; i < 5; ++i) NativeMaterialFragmentSources[i] = materialSources[i];
@@ -2324,6 +2334,8 @@ void gl_GLES_SetSky(FMaterial *material, float xOffset, float yOffset, bool mirr
 	bool sky2, PalEntry fadeColor)
 {
 	if (!gl_GLES_CanUseResources() || material == NULL || Resources.skyMaterial != NULL) return;
+	FNativeSkyRecord *sky = ActiveNativeSkyRecord();
+	if (sky == NULL) return;
 	Resources.skyMaterial = material;
 	Resources.skyXOffset = xOffset;
 	Resources.skyYOffset = yOffset;
@@ -2335,6 +2347,7 @@ void gl_GLES_SetSky(FMaterial *material, float xOffset, float yOffset, bool mirr
 	{
 		const int colormap = gl_fixedcolormap < CM_FIRSTSPECIALCOLORMAP + SpecialColormaps.Size() ?
 			gl_fixedcolormap : CM_DEFAULT;
+		sky->colormap = colormap;
 		if (colormap != CM_DEFAULT)
 		{
 			ModifyPalette(&Resources.skyUpperCapColor, &Resources.skyUpperCapColor, colormap, 1);
@@ -2342,6 +2355,9 @@ void gl_GLES_SetSky(FMaterial *material, float xOffset, float yOffset, bool mirr
 		}
 		float red, green, blue;
 		gl_GetLightColor(255, 0, NULL, &red, &green, &blue);
+		sky->lightColor[0] = red;
+		sky->lightColor[1] = green;
+		sky->lightColor[2] = blue;
 		Resources.skyUpperCapColor.r = static_cast<unsigned char>(Resources.skyUpperCapColor.r * red);
 		Resources.skyUpperCapColor.g = static_cast<unsigned char>(Resources.skyUpperCapColor.g * green);
 		Resources.skyUpperCapColor.b = static_cast<unsigned char>(Resources.skyUpperCapColor.b * blue);
@@ -3240,7 +3256,7 @@ static void DrawNativePortalBatch(const FSceneBatch &batch, GLuint dynamicLightT
 	if (setStaticUniforms && model >= 0) glUniformMatrix4fv(model, 1, GL_FALSE, identity);
 	if (setStaticUniforms && textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 	if (cameraPosition >= 0) glUniform3f(cameraPosition, batch.hud ? 0.0f : view.cameraPosition[0],
-		batch.hud ? 0.0f : view.cameraPosition[1], batch.hud ? 0.0f : view.cameraPosition[2]);
+		batch.hud ? 0.0f : view.cameraPosition[2], batch.hud ? 0.0f : view.cameraPosition[1]);
 	if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 	if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags |
 		(gl_fogmode == 2 ? GLES_MATERIAL_RADIAL_FOG : 0)));
@@ -3331,7 +3347,7 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 	if (Resources.sceneModel >= 0) glUniformMatrix4fv(Resources.sceneModel, 1, GL_FALSE, identity);
 	if (Resources.sceneTextureTransform >= 0) glUniform4f(Resources.sceneTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 	if (Resources.sceneCameraPosition >= 0)
-		glUniform3f(Resources.sceneCameraPosition, view.cameraPosition[0], view.cameraPosition[1], view.cameraPosition[2]);
+		glUniform3f(Resources.sceneCameraPosition, view.cameraPosition[0], view.cameraPosition[2], view.cameraPosition[1]);
 	if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 	if (Resources.sceneSkyDepth >= 0) glUniform1i(Resources.sceneSkyDepth, 0);
 	if (Resources.sceneSkyFog >= 0) glUniform1i(Resources.sceneSkyFog, 0);
@@ -3359,7 +3375,8 @@ static bool DrawNativePortalMask(const FSceneBatch &batch, GLuint stencilBit, bo
 	return true;
 }
 
-static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2, bool fliptop, const float *viewProjection)
+static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2, bool fliptop,
+	const FNativeSkyRecord &sky, const float *viewProjection)
 {
 	if (material == NULL || material->tex == NULL || !material->tex->gl_info.bSkybox) return false;
 	FSkyBox *skybox = static_cast<FSkyBox *>(material->tex);
@@ -3376,7 +3393,7 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 		if (skybox->faces[sourceFace] == NULL) continue;
 		FMaterial *faceMaterial = FMaterial::ValidateTexture(skybox->faces[sourceFace]);
 		if (faceMaterial == NULL) continue;
-		const GLuint texture = faceMaterial->BindNative(CM_DEFAULT, 0, false);
+		const GLuint texture = faceMaterial->BindNative(sky.colormap, 0, false);
 		if (texture == 0) continue;
 		FNativeDrawUniforms *skyUniforms = &BindNativeSkyMaterial(texture, viewProjection);
 		glActiveTexture(GL_TEXTURE0);
@@ -3391,7 +3408,8 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 				glUniform4f(skyUniforms->textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 		}
 		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
-		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		if (skyUniforms->objectColor >= 0)
+			glUniform4f(skyUniforms->objectColor, sky.lightColor[0], sky.lightColor[1], sky.lightColor[2], 1.0f);
 		const FGLESSkyPrimitiveRange range = gl_GLESInternalPortalSkyboxFace(face);
 		ProfileDrawElements(GL_TRIANGLES, range.indexCount, GL_UNSIGNED_SHORT,
 			reinterpret_cast<const void *>(range.firstIndex * sizeof(GLushort)));
@@ -3428,7 +3446,7 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	if (target.skyMaterial->tex->gl_info.bSkybox)
 	{
 		if (DrawNativeSkyboxLayer(target.skyMaterial, target.skyXOffset, target.sky2,
-			static_cast<FSkyBox *>(target.skyMaterial->tex)->fliptop, target.sky.viewProjection))
+			static_cast<FSkyBox *>(target.skyMaterial->tex)->fliptop, target.sky, target.sky.viewProjection))
 		{
 			// The skybox uses its own VAO; reflected scene batches use the scene stream.
 			glBindVertexArray(Resources.sceneVertexArray);
@@ -3442,7 +3460,7 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 	{
 		if (material == NULL || material->tex == NULL) return false;
 		const bool caps = drawCaps;
-		const GLuint texture = material->BindNative(CM_DEFAULT, 0, true);
+		const GLuint texture = material->BindNative(target.sky.colormap, 0, true);
 		if (texture == 0) return false;
 		skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection);
 		gl_GLESInternalPortalUploadSkyGeometry(material, xOffset, yOffset, mirrored,
@@ -3460,9 +3478,10 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 		}
-		skyUniforms = &BindNativeSkyMaterial(texture, target.sky.viewProjection);
+		skyUniforms = &BindNativeSkyMaterial(texture, target.sky.viewProjection, false, caps, caps ? 0.0f : 0.05f);
 		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
-		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		if (skyUniforms->objectColor >= 0)
+			glUniform4f(skyUniforms->objectColor, target.sky.lightColor[0], target.sky.lightColor[1], target.sky.lightColor[2], 1.0f);
 		for (int row = 0; row < 4; ++row)
 			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
@@ -3476,9 +3495,10 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 			ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 		}
-		skyUniforms = &BindNativeSkyMaterial(texture, target.sky.viewProjection);
+		skyUniforms = &BindNativeSkyMaterial(texture, target.sky.viewProjection, false, caps, caps ? 0.0f : 0.05f);
 		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
-		if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+		if (skyUniforms->objectColor >= 0)
+			glUniform4f(skyUniforms->objectColor, target.sky.lightColor[0], target.sky.lightColor[1], target.sky.lightColor[2], 1.0f);
 		for (int row = 0; row < 4; ++row)
 			ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 				reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
@@ -3494,7 +3514,7 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 		gl_GLESInternalPortalUploadSkyGeometry(NULL, 0.0f, 0.0f, false,
 			Resources.cameraX, Resources.cameraY, Resources.cameraZ);
 		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
-		skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection, true);
+		skyUniforms = &BindNativeSkyMaterial(0, target.sky.viewProjection, true, false, 0.05f);
 		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 0);
 		if (skyUniforms->objectColor >= 0)
 			glUniform4f(skyUniforms->objectColor, target.skyFogColor.r / 255.0f,
@@ -3780,7 +3800,7 @@ static void DrawNativePortalTargets(GLuint dynamicLightTexture)
 				else ++opaqueWalls;
 			}
 			DPrintf("Zandronum GLES portal target %u (parent %d): mask=%u skyMask=%u walls=%u flats=%u "
-				"floods=%u translucent=%u models=%u batches=[%u,%u).\\n",
+				"floods=%u translucent=%u models=%u batches=[%u,%u).\n",
 				target.id, target.parentId, static_cast<unsigned int>(target.maskBatches.size()), skyMasks,
 				opaqueWalls, opaqueFlats, floods, translucent, sprites,
 				static_cast<unsigned int>(target.firstBatch), static_cast<unsigned int>(targetEndBatch));
@@ -3912,6 +3932,12 @@ unsigned int gl_GLES_BeginPortalCapture()
 	target.firstBatch = Resources.sceneBatches.size();
 	target.endBatch = target.firstBatch;
 	ResetNativeSkyRecord(target.sky, static_cast<int>(target.id), NativePortalSkyStencilBit(target.stencilSlot));
+	const FNativeSkyRecord *parentSky = ActiveNativeSkyRecord();
+	if (parentSky != NULL)
+	{
+		target.sky.colormap = parentSky->colormap;
+		memcpy(target.sky.lightColor, parentSky->lightColor, sizeof(target.sky.lightColor));
+	}
 	memcpy(target.savedViewProjection, Resources.viewProjection, sizeof(target.savedViewProjection));
 	memcpy(target.savedCameraPosition, &Resources.cameraX, sizeof(target.savedCameraPosition));
 	target.savedCameraYaw = Resources.cameraYaw;
@@ -3923,11 +3949,11 @@ unsigned int gl_GLES_BeginPortalCapture()
 	target.savedSkyXOffset = Resources.skyXOffset;
 	target.savedSkyYOffset = Resources.skyYOffset;
 	target.savedSkyLayerMaterial = Resources.skyLayerMaterial;
-		target.savedSkyLayerXOffset = Resources.skyLayerXOffset;
-		target.savedSkyLayerYOffset = Resources.skyLayerYOffset;
-		target.savedSkyMirrored = Resources.skyMirrored;
-		target.savedSkyLayerMirrored = Resources.skyLayerMirrored;
-		target.savedSky2 = Resources.sky2;
+	target.savedSkyLayerXOffset = Resources.skyLayerXOffset;
+	target.savedSkyLayerYOffset = Resources.skyLayerYOffset;
+	target.savedSkyMirrored = Resources.skyMirrored;
+	target.savedSkyLayerMirrored = Resources.skyLayerMirrored;
+	target.savedSky2 = Resources.sky2;
 	target.savedSkyUpperCapColor = Resources.skyUpperCapColor;
 	target.savedSkyLowerCapColor = Resources.skyLowerCapColor;
 	target.savedSkyFogColor = Resources.skyFogColor;
@@ -4174,8 +4200,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		if (!BootstrapPauseLogged)
 		{
 			BootstrapPauseLogged = true;
-		if (developer)
-			DPrintf("GLES rendering paused while the host surface is unavailable.\n");
+			if (developer)
+				DPrintf("GLES rendering paused while the host surface is unavailable.\n");
 		}
 		return;
 	}
@@ -4195,6 +4221,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		I_FatalError("Zandronum GLES active render target has invalid size %dx%d.", width, height);
 	}
 	gl_GLES_BindRenderTarget(activeTarget);
+	bool sceneResolved = false;
 	if (gl_GLES_GetContextInfo().hasDepthClamp) glEnable(GL_DEPTH_CLAMP);
 	SetNativeFullViewport(activeTarget->renderWidth, activeTarget->renderHeight);
 	glEnable(GL_DEPTH_TEST);
@@ -4321,9 +4348,9 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			if (material->tex->gl_info.bSkybox)
 			{
 				FSkyBox *skybox = static_cast<FSkyBox *>(material->tex);
-				return DrawNativeSkyboxLayer(material, xOffset, Resources.sky2, skybox->fliptop, Resources.viewProjection);
+				return DrawNativeSkyboxLayer(material, xOffset, Resources.sky2, skybox->fliptop, Resources.outerSky, Resources.viewProjection);
 			}
-			const GLuint skyTexture = material->BindNative(CM_DEFAULT, 0, true);
+			const GLuint skyTexture = material->BindNative(Resources.outerSky.colormap, 0, true);
 			if (skyTexture == 0) return false;
 			skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection);
 			gl_GLESInternalPortalUploadSkyGeometry(material, xOffset, yOffset,
@@ -4342,9 +4369,10 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyUpperCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperCap().firstIndex * sizeof(GLushort)));
 			}
-			skyUniforms = &BindNativeSkyMaterial(skyTexture, Resources.viewProjection);
+			skyUniforms = &BindNativeSkyMaterial(skyTexture, Resources.viewProjection, false, caps, caps ? 0.0f : 0.05f);
 			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
-			if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+			if (skyUniforms->objectColor >= 0)
+				glUniform4f(skyUniforms->objectColor, Resources.outerSky.lightColor[0], Resources.outerSky.lightColor[1], Resources.outerSky.lightColor[2], 1.0f);
 			for (int row = 0; row < 4; ++row)
 				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyUpperStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyUpperStrip(row).firstIndex * sizeof(GLushort)));
@@ -4358,9 +4386,10 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				ProfileDrawElements(GL_TRIANGLES, gl_GLESInternalPortalSkyLowerCap().indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerCap().firstIndex * sizeof(GLushort)));
 			}
-			skyUniforms = &BindNativeSkyMaterial(skyTexture, Resources.viewProjection);
+			skyUniforms = &BindNativeSkyMaterial(skyTexture, Resources.viewProjection, false, caps, caps ? 0.0f : 0.05f);
 			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 1);
-			if (skyUniforms->objectColor >= 0) glUniform4f(skyUniforms->objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
+			if (skyUniforms->objectColor >= 0)
+				glUniform4f(skyUniforms->objectColor, Resources.outerSky.lightColor[0], Resources.outerSky.lightColor[1], Resources.outerSky.lightColor[2], 1.0f);
 			for (int row = 0; row < 4; ++row)
 				ProfileDrawElements(GL_TRIANGLE_STRIP, gl_GLESInternalPortalSkyLowerStrip(row).indexCount, GL_UNSIGNED_SHORT,
 					reinterpret_cast<const void *>(gl_GLESInternalPortalSkyLowerStrip(row).firstIndex * sizeof(GLushort)));
@@ -4377,7 +4406,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			gl_GLESInternalPortalUploadSkyGeometry(NULL, 0.0f, 0.0f, false,
 				Resources.cameraX, Resources.cameraY, Resources.cameraZ);
 			glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
-			skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection, true);
+			skyUniforms = &BindNativeSkyMaterial(0, Resources.viewProjection, true, false, 0.05f);
 			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, 0);
 			if (skyUniforms->objectColor >= 0)
 				glUniform4f(skyUniforms->objectColor, Resources.skyFogColor.r / 255.0f,
@@ -4592,7 +4621,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				if (Resources.sceneModel >= 0) glUniformMatrix4fv(Resources.sceneModel, 1, GL_FALSE, identity);
 				if (Resources.sceneTextureTransform >= 0) glUniform4f(Resources.sceneTextureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 				if (Resources.sceneCameraPosition >= 0)
-					glUniform3f(Resources.sceneCameraPosition, Resources.cameraX, Resources.cameraY, Resources.cameraZ);
+					glUniform3f(Resources.sceneCameraPosition, Resources.cameraX, Resources.cameraZ, Resources.cameraY);
 				if (Resources.sceneObjectColor >= 0) glUniform4f(Resources.sceneObjectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 				if (Resources.sceneMaterialFlags >= 0) glUniform1i(Resources.sceneMaterialFlags, 0);
 				if (Resources.sceneTextureUniform >= 0) glUniform1i(Resources.sceneTextureUniform, 0);
@@ -4736,7 +4765,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			if (setStaticUniforms && textureTransform >= 0) glUniform4f(textureTransform, 1.0f, 1.0f, 0.0f, 0.0f);
 			if (cameraPosition >= 0)
 				glUniform3f(cameraPosition, batch.hud ? 0.0f : view.cameraPosition[0],
-					batch.hud ? 0.0f : view.cameraPosition[1], batch.hud ? 0.0f : view.cameraPosition[2]);
+					batch.hud ? 0.0f : view.cameraPosition[2], batch.hud ? 0.0f : view.cameraPosition[1]);
 			if (setStaticUniforms && objectColor >= 0) glUniform4f(objectColor, 1.0f, 1.0f, 1.0f, 1.0f);
 			if (materialFlags >= 0) glUniform1i(materialFlags, static_cast<GLint>(batch.materialFlags |
 		(gl_fogmode == 2 ? GLES_MATERIAL_RADIAL_FOG : 0)));
@@ -4826,6 +4855,18 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				continue;
 			if (batch.hud && !hudViewportReady)
 			{
+				if (!gl_aalines && activeTarget->sampleCount > 1)
+				{
+					// GLES multisample rasterization follows the bound render target.
+					const auto hudResolveStart = Profile.active ? std::chrono::steady_clock::now() :
+						std::chrono::steady_clock::time_point();
+					if (!gl_GLES_ResolveRenderTarget(activeTarget))
+						I_FatalError("Zandronum GLES scene resolve failed.");
+					if (Profile.active)
+						Profile.resolveMilliseconds += ProfileMilliseconds(hudResolveStart);
+					glBindFramebuffer(GL_FRAMEBUFFER, activeTarget->resolveFramebuffer);
+					sceneResolved = true;
+				}
 				SetNativeHUDViewport(activeTarget->renderWidth, activeTarget->renderHeight);
 				hudViewportReady = true;
 			}
@@ -4882,7 +4923,7 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			Resources.sceneGlowUniformUploads, Resources.sceneGlowUniformUploadSkips);
 	const auto resolveStart = Profile.active ? std::chrono::steady_clock::now() :
 		std::chrono::steady_clock::time_point();
-	if (!gl_GLES_ResolveRenderTarget(activeTarget))
+	if (!sceneResolved && !gl_GLES_ResolveRenderTarget(activeTarget))
 		I_FatalError("Zandronum GLES scene resolve failed.");
 	if (Profile.active)
 		Profile.resolveMilliseconds += ProfileMilliseconds(resolveStart);
@@ -5184,6 +5225,13 @@ void gl_GLES_EndWipeOverlay()
 bool gl_GLES_IsActive()
 {
 	return NativeBackendEnabled;
+}
+
+bool gl_GLES_IsMultisampled()
+{
+	const FGLESTargetDescriptor &target = NativeActiveTarget != NULL ?
+		*NativeActiveTarget : Resources.sceneTarget;
+	return target.sampleCount > 1;
 }
 
 bool gl_GLES_CanUseResources()

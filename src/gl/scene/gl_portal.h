@@ -120,9 +120,6 @@ protected:
 	virtual bool IsSky() { return false; }
 	virtual bool NeedCap() { return true; }
 	virtual bool NeedDepthBuffer() { return true; }
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return false; }
-	#endif
 	void ClearScreen();
 	virtual const char *GetName() = 0;
 	void SaveMapSection();
@@ -186,9 +183,6 @@ protected:
 	virtual void DrawContents();
 	virtual void * GetSource() const { return linedef; }
 	virtual const char *GetName();
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return true; }
-	#endif
 
 public:
 	
@@ -212,9 +206,6 @@ protected:
 	virtual void * GetSource() const { return origin; }
 	virtual bool IsSky() { return true; } // later!
 	virtual const char *GetName();
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return true; }
-	#endif
 
 public:
 
@@ -237,9 +228,6 @@ protected:
 	virtual bool IsSky() { return true; }
 	virtual bool NeedDepthBuffer() { return false; }
 	virtual const char *GetName();
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return true; }
-	#endif
 
 public:
 
@@ -262,9 +250,6 @@ protected:
 	virtual void * GetSource() const { return origin; }
 	virtual bool IsSky() { return true; }	// although this isn't a real sky it can be handled as one.
 	virtual const char *GetName();
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return true; }
-	#endif
 	FPortal *origin;
 
 public:
@@ -287,9 +272,6 @@ protected:
 	virtual void DrawContents();
 	virtual void * GetSource() const { return origin; }
 	virtual const char *GetName();
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return true; }
-	#endif
 	secplane_t * origin;
 
 public:
@@ -312,9 +294,6 @@ protected:
 	virtual bool NeedDepthBuffer() { return false; }
 	virtual bool NeedCap() { return false; }
 	virtual const char *GetName();
-	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	virtual bool SupportsNativeCapture() const { return true; }
-	#endif
 
 public:
 	

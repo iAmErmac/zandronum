@@ -115,6 +115,7 @@ unsigned int gl_GLES_BindShaderProgram(const char *name, unsigned int fallback)
 }
 #endif
 
+EXTERN_CVAR(Bool, gl_aalines)
 EXTERN_CVAR(Bool, gl_render_segs)
 
 //-----------------------------------------------------------------------------
@@ -617,6 +618,42 @@ void FGLRenderer::DrawLine(int x1, int y1, int x2, int y2, int palcolor, uint32 
 			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
 		const float height = screen != NULL && screen->GetHeight() > 0 ?
 			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		if (gl_aalines && !gl_GLES_IsMultisampled())
+		{
+			const float dx = static_cast<float>(x2) - x1;
+			const float dy = static_cast<float>(y2) - y1;
+			const float length = sqrtf(dx * dx + dy * dy);
+			if (length == 0.0f) return;
+			const float tx = dx / length;
+			const float ty = dy / length;
+			const bool reverseNormal = fabsf(dx) >= fabsf(dy) ? dx < 0.0f : dy > 0.0f;
+			const float edge = reverseNormal ? -1.5f : 1.5f;
+			const float nx = -ty * edge;
+			const float ny = tx * edge;
+			const float pixelPositions[8] =
+			{
+				x1 - tx - nx, y1 - ty - ny,
+				x1 - tx + nx, y1 - ty + ny,
+				x2 + tx + nx, y2 + ty + ny,
+				x2 + tx - nx, y2 + ty - ny
+			};
+			float quad[12];
+			for (int i = 0; i < 4; ++i)
+			{
+				quad[i * 3] = 2.0f * pixelPositions[i * 2] / width - 1.0f;
+				quad[i * 3 + 1] = 1.0f - 2.0f * pixelPositions[i * 2 + 1] / height;
+				quad[i * 3 + 2] = 0.0f;
+			}
+			const float texcoords[8] =
+			{
+				-1.0f / length, -1.5f, -1.0f / length, 1.5f,
+				1.0f + 1.0f / length, 1.5f, 1.0f + 1.0f / length, -1.5f
+			};
+			const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
+			gl_GLES_AddHUDPrimitive(quad, texcoords, 4, rgb, 1.0f, false, 0, false,
+				GLES_BLEND_ALPHA, GLES_MATERIAL_SMOOTH_LINE);
+			return;
+		}
 		const float positions[6] =
 		{
 			2.0f * x1 / width - 1.0f, 1.0f - 2.0f * y1 / height, 0.0f,
