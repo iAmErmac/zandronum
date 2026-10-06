@@ -717,11 +717,6 @@ namespace
 		glDrawElements(mode, count, type, indices);
 	}
 
-	static bool IsPaletteTexture(GLuint texture)
-	{
-		return gl_GLESInternalIsPaletteTexture(texture);
-	}
-
 	static GLuint NativeSamplerForBatch(const FSceneBatch &batch)
 	{
 		unsigned int clamp = batch.repeat ? 0 : 3;
@@ -838,11 +833,15 @@ namespace
 	}
 
 
-	static FNativeDrawUniforms &BindNativeSkyMaterial(GLuint texture, const float *viewProjection, bool fog = false, bool opaqueTexture = false, float alphaCutoff = 0.0f)
+	static FNativeDrawUniforms &BindNativeSkyMaterial(GLuint texture, const float *viewProjection, bool fog = false, bool opaqueTexture = false, float alphaCutoff = 0.0f, bool clampToEdge = false)
 	{
 		FSceneBatch batch = {};
 		batch.texture = texture;
 		batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
+		batch.repeat = true;
+		batch.cameraTexture = (gl_GLESInternalGetMaterialFlags(texture) & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
+		batch.materialFlags = clampToEdge ? GLES_MATERIAL_CLAMP_X | GLES_MATERIAL_CLAMP_Y : 0;
+		glBindSampler(0, NativeSamplerForBatch(batch));
 		batch.lighting.level = batch.lighting.factor = 1.0f;
 		const GLuint program = ResolveNativeMaterialProgram(Resources.sceneProgram, batch);
 		BindNativeProgram(program, program == Resources.sceneProgram ? "gles/opaque" : NULL);
@@ -2704,7 +2703,9 @@ void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositio
 	batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 	batch.fog = fog;
 	batch.repeat = true;
-	batch.palette = IsPaletteTexture(texture);
+	const unsigned int textureFlags = gl_GLESInternalGetMaterialFlags(texture);
+	batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
+	batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
 	batch.flood = true;
 	if (lighting != NULL) batch.lighting = *lighting;
 	batch.floodWallFirstIndex = wallIndex;
@@ -2769,7 +2770,9 @@ void gl_GLES_AddHUDPrimitive(const float *positions, const float *texcoords,
 	batch.masked = masked;
 	batch.translucent = alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE;
 	batch.repeat = repeat;
-	batch.palette = IsPaletteTexture(texture);
+	const unsigned int textureFlags = gl_GLESInternalGetMaterialFlags(texture);
+	batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
+	batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
 	batch.hud = true;
 	batch.blendMode = blendMode;
 	batch.materialFlags = materialFlags;
@@ -3393,13 +3396,11 @@ static bool DrawNativeSkyboxLayer(FMaterial *material, float xOffset, bool sky2,
 		if (skybox->faces[sourceFace] == NULL) continue;
 		FMaterial *faceMaterial = FMaterial::ValidateTexture(skybox->faces[sourceFace]);
 		if (faceMaterial == NULL) continue;
-		const GLuint texture = faceMaterial->BindNative(sky.colormap, 0, false);
+		const GLuint texture = faceMaterial->BindNative(sky.colormap, 0, true);
 		if (texture == 0) continue;
-		FNativeDrawUniforms *skyUniforms = &BindNativeSkyMaterial(texture, viewProjection);
+		FNativeDrawUniforms *skyUniforms = &BindNativeSkyMaterial(texture, viewProjection, false, false, 0.0f, true);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture);
-		// Skybox faces use the source renderer's clamped edge sampling.
-		glBindSampler(0, Resources.sceneSamplers[3]);
 		if (skyUniforms->textureTransform >= 0)
 		{
 			if (threeFace && face < 4)
@@ -3468,7 +3469,6 @@ static void DrawNativePortalSky(const FNativePortalTarget &target, GLuint stenci
 		glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture);
-		glBindSampler(0, Resources.worldSamplers[0]);
 		if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, caps ? 0 : 1);
 		if (caps)
 		{
@@ -4359,7 +4359,6 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			glBindVertexArray(gl_GLESInternalPortalSkyVertexArray());
 			glActiveTexture(GL_TEXTURE0);
 			glBindTexture(GL_TEXTURE_2D, skyTexture);
-			glBindSampler(0, Resources.worldSamplers[0]);
 			if (skyUniforms->useTexture >= 0) glUniform1i(skyUniforms->useTexture, caps ? 0 : 1);
 			if (caps)
 			{

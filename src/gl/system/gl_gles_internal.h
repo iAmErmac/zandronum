@@ -36,6 +36,7 @@ GLuint gl_GLESInternalFindMaterialTexture(const void *key, int colormap, int tra
 	bool repeat, bool allowhires, int width, int height);
 GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, int translation,
 	bool repeat, bool allowhires);
+void gl_GLESInternalInvalidateMaterial(const void *key);
 GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	const unsigned char *pixels, int width, int height, bool repeat, int colormap,
 	int translation, bool allowhires, bool palette, bool noFilter = false, bool noCompression = false);
@@ -54,7 +55,6 @@ struct FGLESMaterialEffect
 };
 void gl_GLESInternalSetMaterialEffect(GLuint texture, int shaderIndex, float speed, int colormap);
 FGLESMaterialEffect gl_GLESInternalGetMaterialEffect(GLuint texture);
-bool gl_GLESInternalIsPaletteTexture(GLuint texture);
 void gl_GLESInternalMarkMaterialFramebufferContent(const void *key, int colormap,
 	int translation, bool repeat, bool allowhires);
 void gl_GLESInternalDeleteMaterialTextures();

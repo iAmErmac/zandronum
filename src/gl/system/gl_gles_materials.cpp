@@ -6,6 +6,7 @@
 #include <GLES3/gl32.h>
 #endif
 #include <string.h>
+#include <stdint.h>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -31,6 +32,7 @@ namespace
 		bool palette;
 		bool framebufferContent;
 		GLuint texture;
+		uint64_t revision;
 		GLenum internalFormat;
 		std::vector<unsigned char> pixels;
 	};
@@ -65,6 +67,7 @@ namespace
 
 	std::vector<FGLESMaterialTexture> MaterialTextures;
 	std::unordered_map<FGLESMaterialKey, size_t, FGLESMaterialKeyHash> MaterialTextureIndices;
+	std::unordered_map<const void *, uint64_t> MaterialRevisions;
 	std::unordered_map<GLuint, unsigned int> MaterialFlagsByTexture;
 	std::unordered_map<GLuint, FGLESMaterialEffect> MaterialEffectsByTexture;
 	constexpr size_t MaterialFlagCacheSize = 256;
@@ -106,6 +109,12 @@ namespace
 		return &MaterialTextures[found->second];
 	}
 
+	uint64_t MaterialRevision(const void *key)
+	{
+		const auto found = MaterialRevisions.find(key);
+		return found != MaterialRevisions.end() ? found->second : 0;
+	}
+
 	void RemoveMaterialTextureIndex(GLuint texture)
 	{
 		if (texture != 0)
@@ -135,12 +144,18 @@ GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, i
 {
 	const FGLESMaterialTexture *entry = FindMaterialEntry(
 		MakeMaterialKey(key, colormap, translation, repeat, allowhires));
-	if (entry != nullptr && entry->texture != 0 && !entry->framebufferContent)
+	if (entry != nullptr && entry->texture != 0 && !entry->framebufferContent &&
+		entry->revision == MaterialRevision(key))
 	{
 		gl_GLES_RecordProfileMaterial(true, false);
 		return entry->texture;
 	}
 	return 0;
+}
+
+void gl_GLESInternalInvalidateMaterial(const void *key)
+{
+	++MaterialRevisions[key];
 }
 
 unsigned int gl_GLES_GetTextureFormat(bool fullPrecision)
@@ -164,6 +179,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	FGLESMaterialTexture *entry = FindMaterialEntry(materialKey);
 	if (entry != NULL)
 	{
+		entry->revision = MaterialRevision(key);
 		if (entry->framebufferContent && entry->texture != 0 && entry->width == width && entry->height == height)
 		{
 			gl_GLES_RecordProfileMaterial(true, false);
@@ -192,6 +208,7 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 		MaterialTextureIndices.emplace(materialKey, MaterialTextures.size() - 1);
 		entry = &MaterialTextures.back();
 	}
+	entry->revision = MaterialRevision(key);
 	if (entry->width != width || entry->height != height || entry->internalFormat != internalFormat)
 	{
 		if (entry->texture != 0)
@@ -283,11 +300,6 @@ FGLESMaterialEffect gl_GLESInternalGetMaterialEffect(GLuint texture)
 	return found != MaterialEffectsByTexture.end() ? found->second : FGLESMaterialEffect{};
 }
 
-bool gl_GLESInternalIsPaletteTexture(GLuint texture)
-{
-	return (gl_GLESInternalGetMaterialFlags(texture) & GLES_TEXTURE_FLAG_PALETTE) != 0;
-}
-
 void gl_GLESInternalMarkMaterialFramebufferContent(const void *key, int colormap,
 	int translation, bool repeat, bool allowhires)
 {
@@ -332,6 +344,7 @@ void gl_GLESInternalClearMaterials(bool contextAvailable)
 	if (contextAvailable) gl_GLESInternalDeleteMaterialTextures();
 	MaterialTextures.clear();
 	MaterialTextureIndices.clear();
+	MaterialRevisions.clear();
 	MaterialFlagsByTexture.clear();
 	MaterialEffectsByTexture.clear();
 	ClearMaterialFlagCache();

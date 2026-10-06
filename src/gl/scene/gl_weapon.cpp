@@ -196,6 +196,11 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
 		int blendEquation = GL_FUNC_ADD;
 		gl_GetRenderStyle(style, false, false, &textureMode, &sourceBlend, &destinationBlend, &blendEquation);
+		if (textureMode == TM_MASK)
+			nativeMaterialFlags |= GLES_MATERIAL_COLOR_FIXED;
+		else if (textureMode == TM_INVERT && OverrideShader == 0 && brightmap == 0 &&
+			cm_index == CM_DEFAULT && !tex->tex->bWarped && tex->tex->gl_info.shaderindex < FIRST_USER_SHADER)
+			nativeMaterialFlags |= GLES_MATERIAL_INVERT_TEXTURE;
 		EGLESBlendMode blendMode = GLES_BLEND_ALPHA;
 		if ((nativeMaterialFlags & GLES_MATERIAL_FUZZ) != 0) blendMode = GLES_BLEND_FUZZ;
 		else if (style.BlendOp == STYLEOP_Sub) blendMode = GLES_BLEND_SUBTRACT;

@@ -960,6 +960,8 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 	else translation = GLTranslationPalette::GetInternalTranslation(translation);
 	if (tex != NULL && !tex->bHasCanvas)
 	{
+		if (!mBaseLayer->tex->bWarped && mBaseLayer->tex->CheckModified())
+			gl_GLESInternalInvalidateMaterial(this);
 		const GLuint cachedTexture = gl_GLESInternalFindStaticMaterialTexture(this,
 			cm, translation, repeat, allowhires);
 		if (cachedTexture != 0)

@@ -401,7 +401,8 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 			type == RENDERWALL_MIRRORSURFACE ||
 			(decal->RenderStyle.BlendOp == STYLEOP_Add && decal->RenderStyle.DestAlpha == STYLEALPHA_One), fogColor, &fogDensity);
 		const unsigned int textureHandle = tex->BindNative(p.colormap, decal->Translation, false);
-		const unsigned int brightmapHandle = gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+		const unsigned int brightmapHandle = type == RENDERWALL_MIRRORSURFACE &&
+			p.colormap < CM_FIRSTSPECIALCOLORMAP && gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			tex->BindNativeBrightmap(false) : 0;
 		const float positions[12] =
 		{

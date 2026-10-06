@@ -365,19 +365,19 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 		double right = left + parms.destwidth;
 		double bottom = top + parms.destheight;
 		float u1 = 0.0f, v1 = 0.0f, u2 = 1.0f, v2 = img->bHasCanvas ? -1.0f : 1.0f;
-		if (parms.windowleft > 0.0 || parms.windowright < parms.texwidth)
-		{
-			const float texWidth = parms.texwidth > 0.0 ? static_cast<float>(parms.texwidth) : 1.0f;
-			left += parms.windowleft * xscale;
-			right -= (parms.texwidth - parms.windowright) * xscale;
-			u1 = static_cast<float>(parms.windowleft) / texWidth;
-			u2 = static_cast<float>(parms.windowright) / texWidth;
-		}
 		if (parms.flipX)
 		{
 			const float swap = u1;
 			u1 = u2;
 			u2 = swap;
+		}
+		if (parms.windowleft > 0.0 || parms.windowright < parms.texwidth)
+		{
+			const float texWidth = parms.texwidth > 0.0 ? static_cast<float>(parms.texwidth) : 1.0f;
+			left += parms.windowleft * xscale;
+			right -= (parms.texwidth - parms.windowright) * xscale;
+			u1 += static_cast<float>(parms.windowleft) / texWidth;
+			u2 -= static_cast<float>(parms.texwidth - parms.windowright) / texWidth;
 		}
 		const double clipLeft = std::max(left, static_cast<double>(parms.lclip));
 		const double clipTop = std::max(top, static_cast<double>(parms.uclip));
@@ -444,8 +444,6 @@ void FGLRenderer::DrawTexture(FTexture *img, DCanvas::DrawParms &parms)
 			GLES_MATERIAL_OPAQUE_TEXTURE : 0;
 		if (!img->bHasCanvas && (textureMode == TM_INVERT || textureMode == TM_INVERTOPAQUE))
 			materialFlags |= GLES_MATERIAL_INVERT_TEXTURE;
-		if (alphaChannel) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
-		if (!img->bHasCanvas && (parms.style.Flags & STYLEF_RedIsAlpha)) materialFlags |= GLES_MATERIAL_RED_IS_ALPHA;
 		if (!img->bHasCanvas && (parms.style.Flags & STYLEF_ColorIsFixed)) materialFlags |= GLES_MATERIAL_COLOR_FIXED;
 		gl_GLES_AddHUDQuad(positions, texcoords, color, FIXED2FLOAT(parms.alpha),
 			false, texture, blendMode, materialFlags, customBlend,
@@ -692,10 +690,10 @@ void FGLRenderer::DrawPixel(int x1, int y1, int palcolor, uint32 color)
 			static_cast<float>(screen->GetWidth()) : static_cast<float>(SCREENWIDTH);
 		const float height = screen != NULL && screen->GetHeight() > 0 ?
 			static_cast<float>(screen->GetHeight()) : static_cast<float>(SCREENHEIGHT);
+		const float offset = gl_aalines && gl_GLES_IsMultisampled() ? 0.0f : 0.5f;
 		const float positions[3] =
 		{
-			// Center the point in the pixel selected by the desktop 2D projection.
-			2.0f * (x1 + 0.5f) / width - 1.0f, 1.0f - 2.0f * (y1 - 0.5f) / height, 0.0f
+			2.0f * (x1 + offset) / width - 1.0f, 1.0f - 2.0f * (y1 - offset) / height, 0.0f
 		};
 		const float rgb[3] = { p.r / 255.0f, p.g / 255.0f, p.b / 255.0f };
 		gl_GLES_AddHUDPrimitive(positions, NULL, 1, rgb, 1.0f, false, 0, false,
@@ -804,7 +802,7 @@ void FGLRenderer::FlatFill (int left, int top, int right, int bottom, FTexture *
 		const float texcoords[8] = { u1, v1, u1, v2, u2, v2, u2, v1 };
 		const unsigned int nativeTexture = nativeMaterial->BindNative(CM_DEFAULT, 0, true);
 		gl_GLES_AddHUDPrimitive(positions, texcoords, 4, NULL, 1.0f,
-			nativeMaterial->isMasked(), nativeTexture, true, GLES_BLEND_OPAQUE);
+			nativeMaterial->isMasked(), nativeTexture, true, GLES_BLEND_ALPHA);
 		return;
 	}
 #endif
@@ -971,7 +969,7 @@ void FGLRenderer::FillSimplePoly(FTexture *texture, FVector2 *points, int npoint
 		const unsigned int nativeTexture = nativeMaterial->BindNative(cm.colormap, 0, true);
 		gl_GLES_AddHUDPrimitive(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(npoints), color, 1.0f, nativeMaterial->isMasked(),
-			nativeTexture, true, GLES_BLEND_OPAQUE);
+			nativeTexture, true, GLES_BLEND_ALPHA);
 		return;
 	}
 #endif
