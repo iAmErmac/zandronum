@@ -47,6 +47,7 @@
 #include "gl/system/gl_interface.h"
 #include "gl/system/gl_cvars.h"
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include <vector>
 #include "gl/system/gl_gles_renderer.h"
 #include "gl/system/gl_gles_scene.h"
 #endif
@@ -165,6 +166,14 @@ void GLWall::SetupLights(bool collect)
 		// Iterate through all dynamic lights which touch this wall and render them
 		while (node)
 		{
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (projected && node->lightsource->owned && node->lightsource->target != NULL &&
+				!node->lightsource->target->IsVisibleToPlayer())
+			{
+				node = node->nextLight;
+				continue;
+			}
+#endif
 			if (!(node->lightsource->flags2&MF2_DORMANT))
 			{
 				iter_dlight++;
@@ -254,6 +263,107 @@ void GLWall::SetupLights(bool collect)
 // everything goes through here
 //
 //==========================================================================
+
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+static void BuildNativeWallEdges(const GLWall &wall, const texcoord *tcs, bool glow,
+	std::vector<float> &positions, std::vector<float> &texcoords,
+	std::vector<float> &glowDistances, std::vector<unsigned int> &indices)
+{
+	// Keep the four corners first for lighting-plane and sort calculations.
+	std::vector<unsigned int> perimeter;
+	auto append = [&](float x, float y, float z, float u, float v, float top, float bottom)
+	{
+		perimeter.push_back(static_cast<unsigned int>(positions.size() / 3));
+		positions.push_back(x); positions.push_back(y); positions.push_back(z);
+		texcoords.push_back(u); texcoords.push_back(v);
+		glowDistances.push_back(glow ? top : 0.0f);
+		glowDistances.push_back(glow ? bottom : 0.0f);
+	};
+	perimeter.push_back(0);
+	if (wall.glseg.fracleft == 0 && wall.vertexes[0] != NULL)
+	{
+		const vertex_t *vertex = wall.vertexes[0];
+		const float height = wall.ztop[0] - wall.zbottom[0];
+		const float u = height ? (tcs[1].u - tcs[0].u) / height : 0.0f;
+		const float v = height ? (tcs[1].v - tcs[0].v) / height : 0.0f;
+		int index = 0;
+		while (index < vertex->numheights && vertex->heightlist[index] <= wall.zbottom[0]) ++index;
+		while (index < vertex->numheights && vertex->heightlist[index] < wall.ztop[0])
+		{
+			const float y = vertex->heightlist[index++];
+			append(wall.glseg.x1, y, wall.glseg.y1,
+				u * (y - wall.ztop[0]) + tcs[1].u, v * (y - wall.ztop[0]) + tcs[1].v,
+				wall.zceil[0] - y, y - wall.zfloor[0]);
+		}
+	}
+	perimeter.push_back(1);
+	const side_t *side = wall.seg->sidedef;
+	const float width = wall.glseg.fracright - wall.glseg.fracleft;
+	if (!(wall.flags & GLWall::GLWF_NOSPLITUPPER) && side->numsegs > 1)
+	{
+		const float u = (tcs[2].u - tcs[1].u) / width;
+		const float v = (tcs[2].v - tcs[1].v) / width;
+		const float top = (wall.ztop[1] - wall.ztop[0]) / width;
+		const float ceiling = (wall.zceil[1] - wall.zceil[0]) / width;
+		const float floor = (wall.zfloor[1] - wall.zfloor[0]) / width;
+		for (int index = 0; index < side->numsegs - 1; ++index)
+		{
+			const seg_t *segment = side->segs[index];
+			if (segment->sidefrac <= wall.glseg.fracleft) continue;
+			if (segment->sidefrac >= wall.glseg.fracright) break;
+			const float fraction = segment->sidefrac - wall.glseg.fracleft;
+			append(segment->v2->fx, wall.ztop[0] + top * fraction, segment->v2->fy,
+				tcs[1].u + u * fraction, tcs[1].v + v * fraction,
+				wall.zceil[0] - wall.ztop[0] + (ceiling - top) * fraction,
+				wall.ztop[0] - wall.zfloor[0] + (top - floor) * fraction);
+		}
+	}
+	perimeter.push_back(2);
+	if (wall.glseg.fracright == 1 && wall.vertexes[1] != NULL)
+	{
+		const vertex_t *vertex = wall.vertexes[1];
+		const float height = wall.ztop[1] - wall.zbottom[1];
+		const float u = height ? (tcs[2].u - tcs[3].u) / height : 0.0f;
+		const float v = height ? (tcs[2].v - tcs[3].v) / height : 0.0f;
+		int index = vertex->numheights - 1;
+		while (index > 0 && vertex->heightlist[index] >= wall.ztop[1]) --index;
+		while (index > 0 && vertex->heightlist[index] > wall.zbottom[1])
+		{
+			const float y = vertex->heightlist[index--];
+			append(wall.glseg.x2, y, wall.glseg.y2,
+				u * (y - wall.ztop[1]) + tcs[2].u, v * (y - wall.ztop[1]) + tcs[2].v,
+				wall.zceil[1] - y, y - wall.zfloor[1]);
+		}
+	}
+	perimeter.push_back(3);
+	if (!(wall.flags & GLWall::GLWF_NOSPLITLOWER) && side->numsegs > 1)
+	{
+		const float u = (tcs[3].u - tcs[0].u) / width;
+		const float v = (tcs[3].v - tcs[0].v) / width;
+		const float bottom = (wall.zbottom[1] - wall.zbottom[0]) / width;
+		const float ceiling = (wall.zceil[1] - wall.zceil[0]) / width;
+		const float floor = (wall.zfloor[1] - wall.zfloor[0]) / width;
+		for (int index = side->numsegs - 2; index >= 0; --index)
+		{
+			const seg_t *segment = side->segs[index];
+			if (segment->sidefrac >= wall.glseg.fracright) continue;
+			if (segment->sidefrac <= wall.glseg.fracleft) break;
+			const float fraction = segment->sidefrac - wall.glseg.fracleft;
+			append(segment->v2->fx, wall.zbottom[0] + bottom * fraction, segment->v2->fy,
+				tcs[0].u + u * fraction, tcs[0].v + v * fraction,
+				wall.zceil[0] - wall.zbottom[0] + (ceiling - bottom) * fraction,
+				wall.zbottom[0] - wall.zfloor[0] + (bottom - floor) * fraction);
+		}
+	}
+	if (positions.size() == 12) return;
+	for (size_t index = 1; index + 1 < perimeter.size(); ++index)
+	{
+		indices.push_back(0);
+		indices.push_back(perimeter[index]);
+		indices.push_back(perimeter[index + 1]);
+	}
+}
+#endif
 
 void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 {
@@ -348,15 +458,29 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			(gl_GLES_MaskedTextureRGB() ? GLES_MATERIAL_MASK_TEXTURE_RGB : 0) |
 			GLES_MATERIAL_WORLD_SURFACE | ((flags & GLT_CLAMPX) ? GLES_MATERIAL_CLAMP_X : 0) |
 			((flags & GLT_CLAMPY) ? GLES_MATERIAL_CLAMP_Y : 0);
-		gl_GLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
+		std::vector<float> edgePositions, edgeTexcoords, edgeGlowDistances;
+		std::vector<unsigned int> edgeIndices;
+		if (split)
+		{
+			edgePositions.assign(positions, positions + 12);
+			edgeTexcoords.assign(texcoords, texcoords + 8);
+			edgeGlowDistances.assign(glowDistances, glowDistances + 8);
+			BuildNativeWallEdges(*this, tcs, glowing, edgePositions, edgeTexcoords, edgeGlowDistances, edgeIndices);
+		}
+		const bool splitEdges = !edgeIndices.empty();
+		gl_GLES_AddWall(splitEdges ? edgePositions.data() : positions,
+			splitEdges ? edgeTexcoords.data() : texcoords, color, color2 != NULL ? 1.0f : alpha,
 			texture, gltexture != NULL && gltexture->isMasked() &&
 				type != RENDERWALL_TOP && type != RENDERWALL_M1S && type != RENDERWALL_BOTTOM,
 			nativeFog, true, fogColor, fogDensity,
 			blendMode, materialFlags, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
 			Colormap.colormap : 0, glowing ? topglowcolor : NULL, glowing ? bottomglowcolor : NULL,
-			glowing ? glowDistances : NULL, &lighting, transparent ? 0.0f : 0.5f, false, 0, 0, projectedFogDensity);
-		vertexcount += 4;
+			glowing ? (splitEdges ? edgeGlowDistances.data() : glowDistances) : NULL,
+			&lighting, transparent ? 0.0f : 0.5f, false, 0, 0, projectedFogDensity,
+			splitEdges ? edgeIndices.data() : NULL, splitEdges ? static_cast<unsigned int>(edgePositions.size() / 3) : 4,
+			splitEdges ? static_cast<unsigned int>(edgeIndices.size()) : 6);
+		vertexcount += splitEdges ? static_cast<int>(edgePositions.size() / 3) : 4;
 		return;
 	}
 #endif

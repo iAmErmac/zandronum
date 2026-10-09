@@ -108,14 +108,15 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0, const float *topGlowColor = 0,
 	const float *bottomGlowColor = 0, const float *glowDistances = 0,
 	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f, bool customBlend = false,
-	int sourceBlend = 0, int destinationBlend = 0, float projectedFogDensity = 0.0f);
+	int sourceBlend = 0, int destinationBlend = 0, float projectedFogDensity = 0.0f,
+	const unsigned int *indices = 0, unsigned int vertexCount = 4, unsigned int indexCount = 6);
 void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *lightData = 0, const unsigned int *lightCounts = 0,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0,
 	const FShaderLightParameters *lighting = 0, float projectedFogDensity = 0.0f,
-	const float *lightPlaneNormal = 0);
+	const float *lightPlaneNormal = 0, float lightPlaneOffset = 0.0f);
 void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
 	const float *texcoords, const float *color, unsigned int texture, bool fog,
 	const float *fogColor, float fogDensity, const FShaderLightParameters *lighting = 0);

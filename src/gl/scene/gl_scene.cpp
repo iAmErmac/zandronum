@@ -451,6 +451,12 @@ void FGLRenderer::CreateScene()
 		gl_drawinfo->drawlists[GLDL_FOGMASKED].Draw(modelPass);
 		gl_GLES_SetMaskedTextureRGB(savedMaskedTextureRGB);
 		gl_drawinfo->DrawUnhandledMissingTextures();
+		if (!gl_dynlight_shader && gl_lights && mLightCount > 0 && !gl_fixedcolormap && gllight == NULL)
+		{
+			// Translucent lighting follows the projected-light failure in the draw order.
+			gl_lights = false;
+			DPrintf("GLES projected light texture unavailable; dynamic lights disabled.\n");
+		}
 		gl_GLES_SetSourceOrder(true);
 		gl_drawinfo->drawlists[GLDL_TRANSLUCENTBORDER].Draw(GLPASS_TRANSLUCENT);
 		gl_drawinfo->drawlists[GLDL_TRANSLUCENT].DrawSorted();

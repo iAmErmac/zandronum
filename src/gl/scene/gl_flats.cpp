@@ -236,6 +236,13 @@ bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 				node=node->nextLight;
 				continue;
 			}
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			if (projected && light->owned && light->target != NULL && !light->target->IsVisibleToPlayer())
+			{
+				node = node->nextLight;
+				continue;
+			}
+#endif
 			iter_dlightf++;
 
 			// we must do the side check here because gl_SetupLight needs the correct plane orientation
@@ -383,6 +390,7 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			gltexture->BindNativeBrightmap(true) : 0;
 		const EGLESBlendMode blendMode = renderstyle == STYLE_Add ? GLES_BLEND_ADD :
 			(alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
+		// Projected light distance stays on the sector plane when geometry is lowered.
 		const float lightPlaneNormal[3] = { FIXED2FLOAT(plane.plane.a), FIXED2FLOAT(plane.plane.c), FIXED2FLOAT(plane.plane.b) };
 		gl_GLES_AddFlat(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(positions.size() / 3), color, alpha, texture,
@@ -396,7 +404,7 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			(gl_GLES_MaskedTextureRGB() ? GLES_MATERIAL_MASK_TEXTURE_RGB : 0),
 			nativeFlatLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeFlatLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
-				Colormap.colormap : 0, &lighting, projectedFogDensity, lightPlaneNormal);
+				Colormap.colormap : 0, &lighting, projectedFogDensity, lightPlaneNormal, -dz * lightPlaneNormal[1]);
 		return;
 	}
 #endif

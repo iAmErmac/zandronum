@@ -123,6 +123,7 @@ namespace
 		unsigned int lightNormalCount;
 		unsigned int lightSubtractiveCount;
 		float lightPlaneNormal[3];
+		float lightPlaneOffset;
 		float lightPlaneRight[3], lightPlaneUp[3];
 		// Keep the view association with each batch. Nested portal collection must
 		// not replace the outer scene's view uniforms.
@@ -444,9 +445,10 @@ namespace
 		GLint lightDataSampler;
 		GLint lightDataOffset;
 		GLint lightCounts;
-		GLint lightPlaneNormal, lightPlaneRight, lightPlaneUp;
+		GLint lightPlaneNormal, lightPlaneRight, lightPlaneUp, lightPlaneOffset;
 		GLint projectedLights;
 		GLint projectedFogDensity;
+		GLint projectedAlphaCutoff;
 		GLint dynamicLightSampler;
 		GLint clipPlaneUniform;
 		GLint clipPlaneEnabledUniform;
@@ -485,10 +487,12 @@ namespace
 			value.lightDataOffset = glGetUniformLocation(program, "u_light_offset");
 			value.lightCounts = glGetUniformLocation(program, "u_light_counts");
 			value.lightPlaneNormal = glGetUniformLocation(program, "u_light_plane_normal");
+			value.lightPlaneOffset = glGetUniformLocation(program, "u_light_plane_offset");
 			value.lightPlaneRight = glGetUniformLocation(program, "u_light_plane_right");
 			value.lightPlaneUp = glGetUniformLocation(program, "u_light_plane_up");
 			value.projectedLights = glGetUniformLocation(program, "u_projected_lights");
 			value.projectedFogDensity = glGetUniformLocation(program, "u_projected_fog_density");
+			value.projectedAlphaCutoff = glGetUniformLocation(program, "u_projected_alpha_cutoff");
 			value.dynamicLightSampler = glGetUniformLocation(program, "u_dynamic_light_texture");
 			value.clipPlaneUniform = glGetUniformLocation(program, "u_clip_plane");
 			value.clipPlaneEnabledUniform = glGetUniformLocation(program, "u_clip_plane_enabled");
@@ -528,7 +532,7 @@ namespace
 		GLint effect;
 		GLint time;
 		GLint userTime, desaturation, colormapEnabled, colormapStart, colormapRange;
-		GLint projectedMasked;
+		GLint projectedMaterial;
 		int shaderIndex;
 		float animationTime;
 		bool known;
@@ -604,12 +608,12 @@ namespace
 			uniforms.colormapEnabled = glGetUniformLocation(program, "u_material_colormap");
 			uniforms.colormapStart = glGetUniformLocation(program, "colormapstart");
 			uniforms.colormapRange = glGetUniformLocation(program, "colormaprange");
-			uniforms.projectedMasked = glGetUniformLocation(program, "u_projected_masked_material");
+			uniforms.projectedMaterial = glGetUniformLocation(program, "u_projected_material");
 			found = NativeMaterialUniforms.emplace(program, uniforms).first;
 		}
 		FNativeMaterialUniforms &uniforms = found->second;
-		if (uniforms.projectedMasked >= 0) glUniform1i(uniforms.projectedMasked,
-			batch.masked && !batch.sourceOrdered && !batch.translucent && !batch.hud &&
+		if (uniforms.projectedMaterial >= 0) glUniform1i(uniforms.projectedMaterial,
+			!batch.sourceOrdered && !batch.translucent && !batch.hud &&
 			(batch.materialFlags & GLES_MATERIAL_WORLD_SURFACE) != 0 &&
 			(batch.materialFlags & GLES_MATERIAL_PROJECTED_BASE) != 0 &&
 			(batch.materialFlags & GLES_MATERIAL_PROJECTED_FOG) == 0);
@@ -670,6 +674,8 @@ namespace
 		FNativeDrawUniforms &uniforms = GetNativeDrawUniforms(program);
 		if (uniforms.projectedFogDensity >= 0)
 			glUniform1f(uniforms.projectedFogDensity, batch.projectedFogDensity / 64000.0f);
+		if (uniforms.projectedAlphaCutoff >= 0)
+			glUniform1f(uniforms.projectedAlphaCutoff, std::max(0.0f, std::min(1.0f, static_cast<float>(gl_mask_threshold))));
 		FShaderLightParameters lighting = batch.lighting;
 		if (!batch.hud && lighting.software != 0.0f)
 		{
@@ -872,7 +878,8 @@ namespace
 		if (fragment.find("uniform float u_alpha_cutoff;") == std::string::npos)
 			fragment.insert(fragment.find("void main()"), "uniform float u_alpha_cutoff;\n");
 		const std::string contract =
-			"uniform bool u_projected_masked_material;\n"
+			std::string("uniform bool u_projected_material;\n") +
+			"const bool zandronum_projected_masked = " + (variant == 1 || variant == 4 ? "true;\n" : "false;\n") +
 			"bool zandronum_masked_base = false;\n"
 			"uniform int fogenabled;\n"
 			"#define DOOMLIGHTFACTOR 232.0\n"
@@ -896,30 +903,33 @@ namespace
 		fragment.replace(fragment.find(mainStart), mainStart.size(), mainStart + " zandronum_texcoord[0] = vec4(v_uv, 0.0, 1.0);");
 		const std::string original = "vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a));";
 		fragment.replace(fragment.find(original), original.size(),
-			"vec4 color; if (u_projected_masked_material && !u_material_colormap) { "
+			"vec4 color; if (u_projected_material && !u_material_colormap) { "
+			"color = vec4(zandronum_base_lighting, 1.0); if (zandronum_projected_masked) { "
 			"zandronum_masked_base = true; color = Process(vec4((u_material_flags & 16) != 0 ? v_color.rgb : zandronum_base_lighting, v_color.a)); "
-			"if (color.a <= 0.0 || color.a < u_alpha_cutoff) discard; "
-			"apply_dynamic_lights(clamp(color.rgb, vec3(0.0), vec3(1.0)), lighting, additive); color.rgb = lighting; "
-			"zandronum_masked_base = false; if ((u_material_flags & 64) == 0) { vec4 modulation = Process(vec4(1.0)); "
-			"if (modulation.a <= 0.0 || modulation.a < u_alpha_cutoff) discard; color *= modulation; } "
+			"if (color.a <= 0.0 || color.a < u_alpha_cutoff) discard; zandronum_masked_base = false; } "
+			"zandronum_projected_alpha = clamp(color.a, 0.0, 1.0); apply_dynamic_lights(clamp(color.rgb, vec3(0.0), vec3(1.0)), lighting, additive, zandronum_projected_alpha); color = vec4(lighting, zandronum_projected_alpha); "
+			"if ((u_material_flags & 64) == 0) { vec4 modulation = Process(vec4(1.0)); "
+			"if (zandronum_projected_masked && (modulation.a <= 0.0 || modulation.a < u_alpha_cutoff)) discard; color *= clamp(modulation, vec4(0.0), vec4(1.0)); } "
 			"} else color = Process(vec4((u_material_flags & 16) != 0 ? v_color.rgb : lighting, u_material_colormap ? 1.0 : v_color.a));");
 		const size_t lightCall = fragment.find("apply_dynamic_lights(", fragment.find("void main()"));
 		const size_t lightArguments = lightCall + strlen("apply_dynamic_lights(");
-		const size_t lightEnd = fragment.find(", lighting, additive);", lightArguments);
+		const size_t lightEnd = fragment.find(", lighting, additive, zandronum_projected_alpha);", lightArguments);
 		const std::string baseLighting = fragment.substr(lightArguments, lightEnd - lightArguments);
-		fragment.replace(lightCall, lightEnd + strlen(", lighting, additive);") - lightCall,
-			"vec3 zandronum_base_lighting = " + baseLighting + "; if (u_projected_masked_material && !u_material_colormap) { lighting = zandronum_base_lighting; additive = vec3(0.0); } else apply_dynamic_lights(zandronum_base_lighting, lighting, additive);");
+		fragment.replace(lightCall, lightEnd + strlen(", lighting, additive, zandronum_projected_alpha);") - lightCall,
+			"vec3 zandronum_base_lighting = " + baseLighting + "; if (u_projected_material && !u_material_colormap) { lighting = zandronum_base_lighting; additive = vec3(0.0); } else apply_dynamic_lights(zandronum_base_lighting, lighting, additive, zandronum_projected_alpha);");
 		const std::string redAlpha = "if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; }";
 		const std::string fixedColor = "if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); }";
 		fragment.erase(fragment.find(redAlpha), redAlpha.size());
 		fragment.erase(fragment.find(fixedColor), fixedColor.size());
+		const std::string projectedAlpha = "if (u_projected_lights && !u_material_colormap) color.a = zandronum_projected_alpha * ((u_material_flags & 64) != 0 ? 1.0 : texel.a); ";
+		fragment.erase(fragment.find(projectedAlpha), projectedAlpha.size());
 		const std::string earlyTest = "if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard;";
 		const size_t alphaTest = fragment.find(earlyTest);
 		if (alphaTest != std::string::npos)
 		{
 			fragment.erase(alphaTest, earlyTest.size());
 			fragment.insert(fragment.find("color.rgb += additive;"),
-				"if (!(u_projected_masked_material && !u_material_colormap) && (color.a <= 0.0 || color.a < u_alpha_cutoff)) discard; ");
+				"if (!(u_projected_material && !u_material_colormap) && (color.a <= 0.0 || color.a < u_alpha_cutoff)) discard; ");
 		}
 		const std::string fogAlpha = "(1.0 - fog) * texel.a * 0.75 * v_color.a";
 		const size_t fogLayer = fragment.find(fogAlpha);
@@ -1407,6 +1417,7 @@ namespace
 	static void SetNativeLightPlaneUniforms(const FNativeDrawUniforms &uniforms, const FSceneBatch &batch)
 	{
 		if (uniforms.lightPlaneNormal >= 0) glUniform3fv(uniforms.lightPlaneNormal, 1, batch.lightPlaneNormal);
+		if (uniforms.lightPlaneOffset >= 0) glUniform1f(uniforms.lightPlaneOffset, batch.lightPlaneOffset);
 		if (uniforms.lightPlaneRight >= 0) glUniform3fv(uniforms.lightPlaneRight, 1, batch.lightPlaneRight);
 		if (uniforms.lightPlaneUp >= 0) glUniform3fv(uniforms.lightPlaneUp, 1, batch.lightPlaneUp);
 	}
@@ -1512,6 +1523,7 @@ namespace
 				previous.lightNormalCount == batch.lightNormalCount &&
 				previous.lightSubtractiveCount == batch.lightSubtractiveCount &&
 				previous.lightCount == batch.lightCount &&
+				previous.lightPlaneOffset == batch.lightPlaneOffset &&
 				memcmp(previous.lightPlaneNormal, batch.lightPlaneNormal, sizeof(batch.lightPlaneNormal)) == 0)) &&
 			previousView.clipPlaneEnabled == batchView.clipPlaneEnabled &&
 			memcmp(previous.fogColor, batch.fogColor, sizeof(batch.fogColor)) == 0 &&
@@ -1577,7 +1589,7 @@ namespace
 		PushNativeSceneBatch(batch);
 	}
 
-	static void AddSceneQuad(const FSceneVertex &a, const FSceneVertex &b,
+	static void AddSceneSurface(const FSceneVertex &a, const FSceneVertex &b,
 		const FSceneVertex &c, const FSceneVertex &d, GLuint texture, bool masked, bool fog, bool translucent, bool repeat,
 		EGLESBlendMode blendMode, const float *fogColor, float fogDensity, unsigned int materialFlags,
 		const float *lightData, const unsigned int *lightCounts, GLuint brightmap = 0,
@@ -1585,30 +1597,40 @@ namespace
 		const float *bottomGlowColor = NULL, bool customBlend = false,
 		GLenum sourceBlend = GL_SRC_ALPHA, GLenum destinationBlend = GL_ONE_MINUS_SRC_ALPHA,
 	float alphaCutoff = 0.5f, bool hud = false, const FShaderLightParameters *lighting = NULL,
-	float projectedFogDensity = 0.0f)
+	float projectedFogDensity = 0.0f, const FSceneVertex *vertices = NULL,
+	unsigned int vertexCount = 4, const unsigned int *indices = NULL, unsigned int indexCount = 6)
 	{
-		if (!CanAppendSceneGeometry(4, 6, "quad")) return;
+		if (!CanAppendSceneGeometry(vertexCount, indexCount, "surface")) return;
 		const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
-		Resources.sceneVertices.resize(Resources.sceneVertices.size() + 4);
+		Resources.sceneVertices.resize(Resources.sceneVertices.size() + vertexCount);
 		FSceneVertex *vertexData = Resources.sceneVertices.data() + first;
-		vertexData[0] = a;
-		vertexData[1] = b;
-		vertexData[2] = c;
-		vertexData[3] = d;
+		if (vertices != NULL) std::copy(vertices, vertices + vertexCount, vertexData);
+		else
+		{
+			vertexData[0] = a;
+			vertexData[1] = b;
+			vertexData[2] = c;
+			vertexData[3] = d;
+		}
 		const unsigned int second = first + 1;
 		const unsigned int third = first + 2;
 		const unsigned int fourth = first + 3;
 		const GLsizei firstIndex = static_cast<GLsizei>(Resources.sceneIndices.size());
-		Resources.sceneIndices.resize(Resources.sceneIndices.size() + 6);
+		Resources.sceneIndices.resize(Resources.sceneIndices.size() + indexCount);
 		GLuint *indexData = Resources.sceneIndices.data() + firstIndex;
 		{
 			FScopedProfileTimer timer(Profile.indexEmissionMilliseconds);
-			indexData[0] = first;
-			indexData[1] = second;
-			indexData[2] = third;
-			indexData[3] = third;
-			indexData[4] = fourth;
-			indexData[5] = first;
+			if (indices != NULL)
+				for (unsigned int index = 0; index < indexCount; ++index) indexData[index] = first + indices[index];
+			else
+			{
+				indexData[0] = first;
+				indexData[1] = second;
+				indexData[2] = third;
+				indexData[3] = third;
+				indexData[4] = fourth;
+				indexData[5] = first;
+			}
 		}
 		const float centerX = (a.x + b.x + c.x + d.x) * 0.25f;
 		const float centerY = (a.y + b.y + c.y + d.y) * 0.25f;
@@ -1620,7 +1642,7 @@ namespace
 		CaptureBatchView(batch);
 		if (lighting != NULL) batch.lighting = *lighting;
 		batch.firstIndex = firstIndex;
-		batch.indexCount = 6;
+		batch.indexCount = static_cast<GLsizei>(indexCount);
 		batch.texture = texture;
 		batch.materialEffect = gl_GLESInternalGetMaterialEffect(texture);
 		batch.brightmap = brightmap;
@@ -1674,7 +1696,7 @@ namespace
 		const size_t batchCount = Resources.sceneBatches.size();
 		const bool translucent = masked || blendMode != GLES_BLEND_OPAQUE || a.a < 0.999f ||
 			b.a < 0.999f || c.a < 0.999f || d.a < 0.999f;
-		AddSceneQuad(a, b, c, d, texture, masked, false, translucent, false, blendMode, NULL, 0.0f, materialFlags,
+		AddSceneSurface(a, b, c, d, texture, masked, false, translucent, false, blendMode, NULL, 0.0f, materialFlags,
 			NULL, NULL, brightmap, brightmapDesaturation, NULL, NULL, customBlend, sourceBlend, destinationBlend, alphaCutoff, true);
 		if (Resources.sceneBatches.size() <= batchCount) return;
 		FSceneBatch &batch = Resources.sceneBatches.back();
@@ -1900,9 +1922,11 @@ namespace
 			"uniform highp int u_light_offset;\n"
 			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
+			"uniform float u_light_plane_offset;\n"
 			"uniform vec3 u_light_plane_right, u_light_plane_up;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform float u_projected_fog_density;\n"
+			"uniform float u_projected_alpha_cutoff;\n"
 			"uniform float u_fog_density;\n"
 			"uniform vec3 u_camera_position;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1921,10 +1945,10 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"float projected_fog_distance() { return (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; }\n"
-			"vec3 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * texture(u_dynamic_light_texture, lightUV).rgb * exp(-u_projected_fog_density * projected_fog_distance()); return color * amount; }\n"
-			"vec3 apply_projected_additive(vec3 base) { vec3 color = clamp(base, vec3(0.0), vec3(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec3 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } return color; }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec3 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_sky_depth && color.a < u_alpha_cutoff) discard; color.rgb += additive; if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color.rgb = apply_projected_additive(color.rgb); frag_color = color; }\n";
+			"vec4 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal) + u_light_plane_offset); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec4 lightTexel = texture(u_dynamic_light_texture, lightUV); if (lightTexel.a < u_projected_alpha_cutoff) return vec4(0.0); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * lightTexel.rgb * exp(-u_projected_fog_density * projected_fog_distance()); return vec4(color * amount, lightTexel.a); }\n"
+			"vec4 apply_projected_additive(vec4 base) { vec4 color = clamp(base, vec4(0.0), vec4(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec4 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec4(0.0), vec4(1.0)); } } return color; }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive, inout float zandronum_projected_alpha) { if (u_projected_lights) zandronum_projected_alpha = clamp(zandronum_projected_alpha, 0.0, 1.0); vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec4 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution.rgb : contribution.rgb), vec3(0.0), vec3(1.0)); zandronum_projected_alpha = clamp(zandronum_projected_alpha + (kind == 1 ? -contribution.a : contribution.a), 0.0, 1.0); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); vec3 lighting; vec3 additive; float zandronum_projected_alpha = 1.0; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive, zandronum_projected_alpha); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_sky_depth && color.a < u_alpha_cutoff) discard; if (u_projected_lights && !u_material_colormap) color.a = zandronum_projected_alpha * ((u_material_flags & 64) != 0 ? 1.0 : texel.a); color.rgb += additive; if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color = apply_projected_additive(color); frag_color = color; }\n";
 		static const char *simpleFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -1960,9 +1984,11 @@ namespace
 			"uniform highp int u_light_offset;\n"
 			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
+			"uniform float u_light_plane_offset;\n"
 			"uniform vec3 u_light_plane_right, u_light_plane_up;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform float u_projected_fog_density;\n"
+			"uniform float u_projected_alpha_cutoff;\n"
 			"uniform float u_fog_density;\n"
 			"uniform vec3 u_camera_position;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -1980,10 +2006,10 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"float projected_fog_distance() { return (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; }\n"
-			"vec3 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * texture(u_dynamic_light_texture, lightUV).rgb * exp(-u_projected_fog_density * projected_fog_distance()); return color * amount; }\n"
-			"vec3 apply_projected_additive(vec3 base) { vec3 color = clamp(base, vec3(0.0), vec3(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec3 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } return color; }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec3 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color.rgb = apply_projected_additive(color.rgb); frag_color = color; }\n";
+			"vec4 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal) + u_light_plane_offset); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec4 lightTexel = texture(u_dynamic_light_texture, lightUV); if (lightTexel.a < u_projected_alpha_cutoff) return vec4(0.0); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * lightTexel.rgb * exp(-u_projected_fog_density * projected_fog_distance()); return vec4(color * amount, lightTexel.a); }\n"
+			"vec4 apply_projected_additive(vec4 base) { vec4 color = clamp(base, vec4(0.0), vec4(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec4 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec4(0.0), vec4(1.0)); } } return color; }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive, inout float zandronum_projected_alpha) { if (u_projected_lights) zandronum_projected_alpha = clamp(zandronum_projected_alpha, 0.0, 1.0); vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec4 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution.rgb : contribution.rgb), vec3(0.0), vec3(1.0)); zandronum_projected_alpha = clamp(zandronum_projected_alpha + (kind == 1 ? -contribution.a : contribution.a), 0.0, 1.0); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; vec3 lighting; vec3 additive; float zandronum_projected_alpha = texel.a * v_color.a; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive, zandronum_projected_alpha); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_projected_lights && !u_material_colormap) color.a = zandronum_projected_alpha * ((u_material_flags & 64) != 0 ? 1.0 : texel.a); color.rgb += additive; if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color = apply_projected_additive(color); frag_color = color; }\n";
 		static const char *fogFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -2012,9 +2038,11 @@ namespace
 			"uniform highp int u_light_offset;\n"
 			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
+			"uniform float u_light_plane_offset;\n"
 			"uniform vec3 u_light_plane_right, u_light_plane_up;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform float u_projected_fog_density;\n"
+			"uniform float u_projected_alpha_cutoff;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
 			"uniform vec4 u_clip_plane;\n"
 			"uniform bool u_clip_plane_enabled;\n"
@@ -2030,10 +2058,10 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"float projected_fog_distance() { return (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; }\n"
-			"vec3 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * texture(u_dynamic_light_texture, lightUV).rgb * exp(-u_projected_fog_density * projected_fog_distance()); return color * amount; }\n"
-			"vec3 apply_projected_additive(vec3 base) { vec3 color = clamp(base, vec3(0.0), vec3(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec3 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } return color; }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec3 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color.rgb = apply_projected_additive(color.rgb); frag_color = color; }\n";
+			"vec4 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal) + u_light_plane_offset); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec4 lightTexel = texture(u_dynamic_light_texture, lightUV); if (lightTexel.a < u_projected_alpha_cutoff) return vec4(0.0); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * lightTexel.rgb * exp(-u_projected_fog_density * projected_fog_distance()); return vec4(color * amount, lightTexel.a); }\n"
+			"vec4 apply_projected_additive(vec4 base) { vec4 color = clamp(base, vec4(0.0), vec4(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec4 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec4(0.0), vec4(1.0)); } } return color; }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive, inout float zandronum_projected_alpha) { if (u_projected_lights) zandronum_projected_alpha = clamp(zandronum_projected_alpha, 0.0, 1.0); vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec4 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution.rgb : contribution.rgb), vec3(0.0), vec3(1.0)); zandronum_projected_alpha = clamp(zandronum_projected_alpha + (kind == 1 ? -contribution.a : contribution.a), 0.0, 1.0); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; float zandronum_projected_alpha = 1.0; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive, zandronum_projected_alpha); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_projected_lights && !u_material_colormap) color.a = zandronum_projected_alpha * ((u_material_flags & 64) != 0 ? 1.0 : texel.a); color.rgb += additive; if ((u_material_flags & 256) != 0) { frag_color = vec4(u_fog_color.rgb, 1.0 - fog); return; } if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color = apply_projected_additive(color); frag_color = color; }\n";
 		static const char *fogMaskedFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -2063,9 +2091,11 @@ namespace
 			"uniform highp int u_light_offset;\n"
 			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
+			"uniform float u_light_plane_offset;\n"
 			"uniform vec3 u_light_plane_right, u_light_plane_up;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform float u_projected_fog_density;\n"
+			"uniform float u_projected_alpha_cutoff;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
 			"uniform vec4 u_clip_plane;\n"
 			"uniform bool u_clip_plane_enabled;\n"
@@ -2081,10 +2111,10 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"float projected_fog_distance() { return (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; }\n"
-			"vec3 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * texture(u_dynamic_light_texture, lightUV).rgb * exp(-u_projected_fog_density * projected_fog_distance()); return color * amount; }\n"
-			"vec3 apply_projected_additive(vec3 base) { vec3 color = clamp(base, vec3(0.0), vec3(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec3 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } return color; }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec3 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color.rgb = apply_projected_additive(color.rgb); frag_color = color; }\n";
+			"vec4 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal) + u_light_plane_offset); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec4 lightTexel = texture(u_dynamic_light_texture, lightUV); if (lightTexel.a < u_projected_alpha_cutoff) return vec4(0.0); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * lightTexel.rgb * exp(-u_projected_fog_density * projected_fog_distance()); return vec4(color * amount, lightTexel.a); }\n"
+			"vec4 apply_projected_additive(vec4 base) { vec4 color = clamp(base, vec4(0.0), vec4(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec4 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec4(0.0), vec4(1.0)); } } return color; }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive, inout float zandronum_projected_alpha) { if (u_projected_lights) zandronum_projected_alpha = clamp(zandronum_projected_alpha, 0.0, 1.0); vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec4 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution.rgb : contribution.rgb), vec3(0.0), vec3(1.0)); zandronum_projected_alpha = clamp(zandronum_projected_alpha + (kind == 1 ? -contribution.a : contribution.a), 0.0, 1.0); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); if ((u_material_flags & 1) != 0 ? texel.a <= 0.0 : texel.a <= 0.0 || texel.a < u_alpha_cutoff) discard; float fogDistance = (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; float fog = clamp(exp(-u_fog_density * fogDistance), 0.0, 1.0); if ((u_material_flags & 262144) != 0) { frag_color = vec4(u_fog_color.rgb, (1.0 - fog) * texel.a * 0.75 * v_color.a); return; } vec3 lighting; vec3 additive; vec3 baseLighting = apply_static_light(v_color.rgb, fogDistance); if (all(equal(u_fog_color.rgb, vec3(0.0)))) baseLighting *= fog; float zandronum_projected_alpha = 1.0; apply_dynamic_lights(apply_glow(baseLighting), lighting, additive, zandronum_projected_alpha); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_projected_lights && !u_material_colormap) color.a = zandronum_projected_alpha * ((u_material_flags & 64) != 0 ? 1.0 : texel.a); color.rgb += additive; if (!u_material_colormap && any(notEqual(u_fog_color.rgb, vec3(0.0)))) color.rgb = mix(u_fog_color.rgb, color.rgb, fog); if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color = apply_projected_additive(color); frag_color = color; }\n";
 		static const char *paletteFragmentSource =
 			"#version 320 es\n"
 			"precision highp float;\n"
@@ -2110,9 +2140,11 @@ namespace
 			"uniform highp int u_light_offset;\n"
 			"uniform highp ivec3 u_light_counts;\n"
 			"uniform vec3 u_light_plane_normal;\n"
+			"uniform float u_light_plane_offset;\n"
 			"uniform vec3 u_light_plane_right, u_light_plane_up;\n"
 			"uniform bool u_projected_lights;\n"
 			"uniform float u_projected_fog_density;\n"
+			"uniform float u_projected_alpha_cutoff;\n"
 			"uniform float u_fog_density;\n"
 			"uniform vec3 u_camera_position;\n"
 			"uniform sampler2D u_dynamic_light_texture;\n"
@@ -2130,10 +2162,10 @@ namespace
 			"vec3 sample_brightmap() { vec3 bright = texture(u_brightmap, v_uv).rgb; float gray = dot(bright, vec3(0.3, 0.56, 0.14)); return mix(bright, vec3(gray), clamp(float(u_brightmap_desaturation) / 31.0, 0.0, 1.0)); }\n"
 			"vec3 apply_glow(vec3 color) { if ((u_material_flags & 65536) == 0) return color; if (u_glow_top_color.a > 0.0 && v_glow_distance.x < u_glow_top_color.a) color += desaturate(u_glow_top_color * (1.0 - v_glow_distance.x / u_glow_top_color.a)).rgb; if (u_glow_bottom_color.a > 0.0 && v_glow_distance.y < u_glow_bottom_color.a) color += desaturate(u_glow_bottom_color * (1.0 - v_glow_distance.y / u_glow_bottom_color.a)).rgb; return min(color, vec3(1.0)); }\n"
 			"float projected_fog_distance() { return (u_material_flags & 8192) != 0 ? max(16.0, distance(v_world_position, u_camera_position)) : v_camera_distance; }\n"
-			"vec3 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal)); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * texture(u_dynamic_light_texture, lightUV).rgb * exp(-u_projected_fog_density * projected_fog_distance()); return color * amount; }\n"
-			"vec3 apply_projected_additive(vec3 base) { vec3 color = clamp(base, vec3(0.0), vec3(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec3 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } return color; }\n"
-			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive) { vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec3 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution : contribution), vec3(0.0), vec3(1.0)); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
-			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } color.rgb += additive; if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color.rgb = apply_projected_additive(color.rgb); frag_color = color; }\n";
+			"vec4 projected_light_contribution(vec4 position, vec3 color) { vec3 delta = v_world_position - position.xyz; float radius = max(position.w, 0.001); float planeDistance = abs(dot(delta, u_light_plane_normal) + u_light_plane_offset); float projectedRadius = max(2.0 * radius - planeDistance, 0.001); vec2 lightUV = vec2(dot(delta, u_light_plane_right), dot(delta, u_light_plane_up)) / projectedRadius + vec2(0.5); vec4 lightTexel = texture(u_dynamic_light_texture, lightUV); if (lightTexel.a < u_projected_alpha_cutoff) return vec4(0.0); vec3 amount = clamp(1.0 - planeDistance / radius, 0.0, 1.0) * lightTexel.rgb * exp(-u_projected_fog_density * projected_fog_distance()); return vec4(color * amount, lightTexel.a); }\n"
+			"vec4 apply_projected_additive(vec4 base) { vec4 color = clamp(base, vec4(0.0), vec4(1.0)); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 position = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 light = texelFetch(u_light_data, ivec2(index % width, index / width), 0); int kind = int(light.w); if (kind >= 2 || (u_material_flags & 16777216) != 0) { vec4 contribution = projected_light_contribution(position, light.rgb); color = clamp(color + (kind == 1 || kind == 3 ? -contribution : contribution), vec4(0.0), vec4(1.0)); } } return color; }\n"
+			"void apply_dynamic_lights(vec3 base, out vec3 lighting, out vec3 additive, inout float zandronum_projected_alpha) { if (u_projected_lights) zandronum_projected_alpha = clamp(zandronum_projected_alpha, 0.0, 1.0); vec3 regular = vec3(0.0); vec3 subtractive = vec3(0.0); vec3 projected = clamp(base, vec3(0.0), vec3(1.0)); additive = vec3(0.0); for (highp int i = 0; i < u_light_counts.z; ++i) { highp int index = (u_light_offset + i) * 2; highp int width = textureSize(u_light_data, 0).x; vec4 lightPosition = texelFetch(u_light_data, ivec2(index % width, index / width), 0); index += 1; vec4 lightColor = texelFetch(u_light_data, ivec2(index % width, index / width), 0); if (u_projected_lights) { int kind = int(lightColor.w); if (kind < 2 && (u_material_flags & 16777216) == 0) { vec4 contribution = projected_light_contribution(lightPosition, lightColor.rgb); projected = clamp(projected + (kind == 1 ? -contribution.rgb : contribution.rgb), vec3(0.0), vec3(1.0)); zandronum_projected_alpha = clamp(zandronum_projected_alpha + (kind == 1 ? -contribution.a : contribution.a), 0.0, 1.0); } } else { vec3 delta = v_world_position - lightPosition.xyz; float radius = max(lightPosition.w, 0.001); float amount = clamp(1.0 - length(delta) / radius, 0.0, 1.0); vec3 contribution = lightColor.rgb * amount; if (i < u_light_counts.x) regular += contribution; else if (i < u_light_counts.y) subtractive += contribution; else additive += contribution; } } lighting = u_projected_lights ? projected : (u_light_counts.z > 0 ? clamp(base + regular - subtractive, vec3(0.0), vec3(1.4)) : base); }\n"
+			"void main() { if (u_clip_plane_enabled && dot(vec4(v_world_position, 1.0), u_clip_plane) < 0.0) discard; vec2 sampleUV = v_uv; if ((u_material_flags & 8) != 0 && ((u_material_flags >> 10) & 7) == 5) sampleUV += vec2(mod(sin(6.28318530718 * (v_uv.y + u_fuzz_time * 2.0)), 0.1), mod(cos(6.28318530718 * (v_uv.x + u_fuzz_time * 2.0)), 0.1)) * 0.1; vec4 texel = u_use_texture ? texture(u_texture, material_uv(sampleUV)) : vec4(1.0); if ((u_material_flags & 4) != 0) texel.a = 1.0; if ((u_material_flags & 2) != 0) texel.rgb = vec3(1.0) - texel.rgb; texel = desaturate(texel); texel.rgb = clamp(texel.rgb, vec3(0.0), vec3(1.0)); vec3 lighting; vec3 additive; float zandronum_projected_alpha = texel.a * v_color.a; apply_dynamic_lights(apply_glow(apply_static_light(v_color.rgb, 0.0)), lighting, additive, zandronum_projected_alpha); if (u_use_brightmap) lighting = min(lighting + sample_brightmap(), vec3(1.0)); if (u_material_colormap) { lighting = vec3(1.0); additive = vec3(0.0); } vec3 base_texel = (u_material_flags & 64) != 0 ? vec3(1.0) : texel.rgb; vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a)); if ((u_material_flags & 1) != 0) { color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); color.rgb = lighting; } if ((u_material_flags & 16) != 0) { color.rgb = u_material_colormap ? vec3(1.0) : v_color.rgb; color.a = texel.a * (u_material_colormap ? 1.0 : v_color.a); } if ((u_material_flags & 8) != 0) { int fuzzType = (u_material_flags >> 10) & 7; vec2 texCoord = v_uv; if (fuzzType == 1 || fuzzType == 6) texCoord = trunc(texCoord * 128.0) / 128.0; float texX; float texY; if (fuzzType <= 2) { texX = texCoord.x / 3.0 + 0.66; texY = 0.34 - texCoord.y / 3.0; } else if (fuzzType <= 5) { texX = sin(texCoord.x * 100.0 + u_fuzz_time * 5.0); texY = cos(texCoord.x * 100.0 + u_fuzz_time * 5.0); } else { texX = sin(mod(texCoord.x * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.x / 4.0; texY = cos(mod(texCoord.y * 100.0 + u_fuzz_time * 5.0, 3.489)) + texCoord.y / 4.0; } float fuzz = mod(u_fuzz_time * 2.0 + ((texX / texY) * 21.0 + (texY / texX) * 13.0), 0.5); if (fuzzType != 4 && fuzzType != 5) color.rgb = vec3(0.0); color.a *= fuzz; } if (u_material_colormap) { float gray = dot(color.rgb, vec3(0.3, 0.56, 0.14)); color = vec4(clamp(colormapstart + gray * colormaprange, vec3(0.0), vec3(1.0)), color.a) * v_color; } if (u_projected_lights && !u_material_colormap) color.a = zandronum_projected_alpha * ((u_material_flags & 64) != 0 ? 1.0 : texel.a); color.rgb += additive; if ((u_material_flags & 524288) != 0) { float edgeWidth = max(fwidth(v_uv.y), 0.0001); float endWidth = max(fwidth(v_uv.x), 0.0001); float coverage = clamp((0.5 + edgeWidth * 0.5 - abs(v_uv.y)) / edgeWidth, 0.0, 1.0) * clamp(0.5 + v_uv.x / endWidth, 0.0, 1.0) * clamp(0.5 + (1.0 - v_uv.x) / endWidth, 0.0, 1.0); if (coverage < 0.4999 || (coverage <= 0.5001 && v_uv.y >= 0.0)) discard; color.a *= coverage; } if (u_projected_lights && !u_material_colormap) color = apply_projected_additive(color); frag_color = color; }\n";
 		NativeMaterialVertexSource = sceneVertexSource;
 		const char *materialSources[] = { sceneFragmentSource, maskedFragmentSource, paletteFragmentSource, fogFragmentSource, fogMaskedFragmentSource };
 		for (int i = 0; i < 5; ++i) NativeMaterialFragmentSources[i] = materialSources[i];
@@ -2630,14 +2662,20 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation,
 	const float *topGlowColor, const float *bottomGlowColor, const float *glowDistances,
 	const FShaderLightParameters *lighting, float alphaCutoff, bool customBlend,
-	int sourceBlend, int destinationBlend, float projectedFogDensity)
+	int sourceBlend, int destinationBlend, float projectedFogDensity,
+	const unsigned int *indices, unsigned int vertexCount, unsigned int indexCount)
 {
-	if (!gl_GLES_CanUseResources() || positions == NULL) return;
+	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 4 ||
+		(indices == NULL && vertexCount != 4)) return;
+	if (!CanAppendSceneGeometry(vertexCount, indices != NULL ? indexCount : 6, "wall")) return;
 	FScopedProfileTimer timer(Profile.wallCollectionMilliseconds);
 	++Resources.sceneWallCount;
 	const float white[3] = { 1.0f, 1.0f, 1.0f };
 	const float *rgb = color != NULL ? color : white;
-	FSceneVertex vertices[4];
+	FSceneVertex corners[4];
+	std::vector<FSceneVertex> meshVertices;
+	if (vertexCount > 4) meshVertices.resize(vertexCount);
+	FSceneVertex *vertices = vertexCount > 4 ? meshVertices.data() : corners;
 	const bool sphereMap = (materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0;
 	float sphereNormal[3] = {};
 	if (sphereMap)
@@ -2660,7 +2698,7 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 			}
 		}
 	}
-	for (int i = 0; i < 4; ++i)
+	for (unsigned int i = 0; i < vertexCount; ++i)
 	{
 		vertices[i].x = positions[i * 3 + 0];
 		vertices[i].y = positions[i * 3 + 1];
@@ -2703,17 +2741,18 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 		vertices[i].glowTopDistance = glowDistances != NULL ? glowDistances[i * 2 + 0] : 0.0f;
 		vertices[i].glowBottomDistance = glowDistances != NULL ? glowDistances[i * 2 + 1] : 0.0f;
 	}
-	AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, fog, alpha < 0.999f, repeat,
+	AddSceneSurface(vertices[0], vertices[1], vertices[2], vertices[3], texture, masked, fog, alpha < 0.999f, repeat,
 		blendMode, fogColor, fogDensity, materialFlags, lightData, lightCounts, brightmap,
 		brightmapDesaturation, topGlowColor, bottomGlowColor, customBlend, static_cast<GLenum>(sourceBlend),
-		static_cast<GLenum>(destinationBlend), alphaCutoff, false, lighting, projectedFogDensity);
+		static_cast<GLenum>(destinationBlend), alphaCutoff, false, lighting, projectedFogDensity,
+		vertices, vertexCount, indices, indices != NULL ? indexCount : 6);
 }
 
 void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
 	const float *lightData, const unsigned int *lightCounts, unsigned int brightmap, int brightmapDesaturation,
-	const FShaderLightParameters *lighting, float projectedFogDensity, const float *lightPlaneNormal)
+	const FShaderLightParameters *lighting, float projectedFogDensity, const float *lightPlaneNormal, float lightPlaneOffset)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || vertexCount < 3) return;
 	FScopedProfileTimer timer(Profile.flatCollectionMilliseconds);
@@ -2781,6 +2820,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 		batch.cameraTexture = (textureFlags & GLES_TEXTURE_FLAG_FRAMEBUFFER) != 0;
 		batch.palette = (textureFlags & GLES_TEXTURE_FLAG_PALETTE) != 0;
 		batch.flat = true;
+		batch.lightPlaneOffset = lightPlaneOffset;
 		batch.materialFlags = materialFlags;
 		batch.blendMode = blendMode;
 		CopyNativeLightData(batch, lightData, lightCounts);
@@ -2982,7 +3022,7 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 	const bool fogLayer = fog && fogColor != NULL &&
 		(fogColor[0] != 0.0f || fogColor[1] != 0.0f || fogColor[2] != 0.0f) &&
 		(blendMode == GLES_BLEND_SUBTRACT || blendMode == GLES_BLEND_REVERSE_SUBTRACT);
-	AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture,
+	AddSceneSurface(vertices[0], vertices[1], vertices[2], vertices[3], texture,
 		fogLayer ? false : masked, fog && !fogLayer,
 		alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE, false, blendMode, fogColor, fogDensity, materialFlags, NULL, NULL,
 		brightmap, brightmapDesaturation, NULL, NULL, customBlend,
@@ -2990,7 +3030,7 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 		fogLayer ? 0.0f : alphaCutoff, false, lighting);
 	if (fogLayer)
 	{
-		AddSceneQuad(vertices[0], vertices[1], vertices[2], vertices[3], texture, false, true,
+		AddSceneSurface(vertices[0], vertices[1], vertices[2], vertices[3], texture, false, true,
 			true, false, GLES_BLEND_ALPHA, fogColor, fogDensity, GLES_MATERIAL_SPRITE_FOG_LAYER,
 			NULL, NULL, 0, 0, NULL, NULL, true, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, 0.0f, false);
 	}
@@ -3440,11 +3480,11 @@ static void DrawNativePortalBatch(const FSceneBatch &sourceBatch, GLuint dynamic
 	if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ? 0.0f : batch.alphaCutoff);
 	if (fogColor >= 0) glUniform4f(fogColor, batch.fogColor[0], batch.fogColor[1], batch.fogColor[2], 1.0f);
 	if (fogDensity >= 0) glUniform1f(fogDensity, batch.fogDensity / 64000.0f);
-	const unsigned int lightCount = batch.lightCount;
+	const unsigned int lightCount = gl_lights ? batch.lightCount : 0;
 	if (lightDataSampler >= 0) glUniform1i(lightDataSampler, 3);
 	if (lightDataOffset >= 0) glUniform1i(lightDataOffset, static_cast<GLint>(batch.lightOffset));
-	if (lightCounts >= 0) glUniform3i(lightCounts, static_cast<GLint>(batch.lightNormalCount),
-		static_cast<GLint>(batch.lightSubtractiveCount), static_cast<GLint>(lightCount));
+	if (lightCounts >= 0) glUniform3i(lightCounts, static_cast<GLint>(gl_lights ? batch.lightNormalCount : 0),
+		static_cast<GLint>(gl_lights ? batch.lightSubtractiveCount : 0), static_cast<GLint>(lightCount));
 	SetNativeLightPlaneUniforms(uniforms, batch);
 	const bool projected = dynamicLightTexture != 0 && lightCount > 0 &&
 		(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
@@ -4629,10 +4669,19 @@ void gl_GLES_RenderBootstrap(int width, int height)
 	};
 	const bool renderScene = Resources.sceneReady;
 	GLuint dynamicLightTexture = 0;
-	if (!gl_dynlight_shader && gl_lights && GLRenderer != NULL && GLRenderer->gllight != NULL)
+	if (renderScene && !gl_dynlight_shader && gl_lights && GLRenderer != NULL &&
+		GLRenderer->mLightCount > 0 && !gl_fixedcolormap)
 	{
-		FMaterial *lightMaterial = FMaterial::ValidateTexture(GLRenderer->gllight);
-		if (lightMaterial != NULL) dynamicLightTexture = lightMaterial->BindNative(CM_DEFAULT, 0, false);
+		if (GLRenderer->gllight != NULL)
+		{
+			FMaterial *lightMaterial = FMaterial::ValidateTexture(GLRenderer->gllight);
+			if (lightMaterial != NULL) dynamicLightTexture = lightMaterial->BindNative(CM_DEFAULT, 0, false);
+		}
+		if (dynamicLightTexture == 0)
+		{
+			gl_lights = false;
+			DPrintf("GLES projected light texture unavailable; dynamic lights disabled.\n");
+		}
 	}
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_TRUE);
@@ -4966,9 +5015,9 @@ void gl_GLES_RenderBootstrap(int width, int height)
 			if (clipPlaneUniform >= 0) glUniform4fv(clipPlaneUniform, 1, view.clipPlane);
 			if (clipPlaneEnabledUniform >= 0) glUniform1i(clipPlaneEnabledUniform, view.clipPlaneEnabled ? 1 : 0);
 			if (alphaCutoff >= 0) glUniform1f(alphaCutoff, batch.hud ? 0.0f : batch.alphaCutoff);
-			const unsigned int lightCount = batch.lightCount;
+			const unsigned int lightCount = gl_lights ? batch.lightCount : 0;
 			uploadOpaqueLights(batch, program, lightDataSampler, lightDataOffset, lightCounts,
-				batch.lightNormalCount, batch.lightSubtractiveCount, lightCount);
+				gl_lights ? batch.lightNormalCount : 0, gl_lights ? batch.lightSubtractiveCount : 0, lightCount);
 			SetNativeLightPlaneUniforms(uniforms, batch);
 			const bool useProjectedLights = dynamicLightTexture != 0 && lightCount > 0 &&
 				(batch.lightPlaneNormal[0] != 0.0f || batch.lightPlaneNormal[1] != 0.0f || batch.lightPlaneNormal[2] != 0.0f);
