@@ -48,6 +48,7 @@
 #include "gl/system/gl_cvars.h"
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_scene.h"
 #endif
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/renderer/gl_renderstate.h"
@@ -133,6 +134,10 @@ void GLWall::SetupLights(bool collect)
 	lightdata.Clear();
 	nativeLightCounts[0] = nativeLightCounts[1] = nativeLightCounts[2] = 0;
 	if (!collect) return;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool projected = gl_GLES_IsActive() && !gl_dynlight_shader;
+	unsigned int projectedOrder = 0;
+#endif
 	p.Init(vtx,4);
 
 	if (!p.ValidNormal()) 
@@ -204,7 +209,20 @@ void GLWall::SetupLights(bool collect)
 					}
 					if (outcnt[0]!=4 && outcnt[1]!=4 && outcnt[2]!=4 && outcnt[3]!=4) 
 					{
-						gl_GetLight(p, node->lightsource, Colormap.colormap, true, false, lightdata);
+						bool forceAdditive = false;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+						forceAdditive = projected && (flags & GLWF_FOGGY);
+						const unsigned int previousSizes[3] = { lightdata.arrays[0].Size(), lightdata.arrays[1].Size(), lightdata.arrays[2].Size() };
+#endif
+						if (gl_GetLight(p, node->lightsource, Colormap.colormap, true, forceAdditive, lightdata))
+						{
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+							if (projected)
+								for (unsigned int kind = 0; kind < 3; ++kind)
+									if (lightdata.arrays[kind].Size() > previousSizes[kind])
+										gl_GLESInternalSceneMarkProjectedLight(&lightdata.arrays[kind][previousSizes[kind]], projectedOrder++, kind == 1 && i == 1 ? 3 : kind);
+#endif
+						}
 					}
 				}
 			}
@@ -215,6 +233,10 @@ void GLWall::SetupLights(bool collect)
 	int allNativeLights[3];
 
 	lightdata.Combine(numlights, gl.MaxLights(), allNativeLights);
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (projected && allNativeLights[2] > 0)
+		gl_GLESInternalSceneOrderProjectedLights(&lightdata.arrays[0][0], allNativeLights[2] / 2);
+#endif
 	nativeLightCounts[0] = static_cast<unsigned int>(allNativeLights[0]);
 	nativeLightCounts[1] = static_cast<unsigned int>(allNativeLights[1]);
 	nativeLightCounts[2] = static_cast<unsigned int>(allNativeLights[2]);
@@ -257,14 +279,29 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 	if (gl_GLES_IsActive())
 	{
 		if (light != NULL) return;
-		const FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rellight + getExtraLight(), &Colormap);
+		FColormap lightingColormap = Colormap;
+		const bool unfoggedBase = textured == 3 && (flags & GLWF_FOGGY) && gl_GLES_UsesUntexturedBasePass();
+		if (unfoggedBase) lightingColormap.FadeColor = 0;
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rellight + getExtraLight(), &lightingColormap);
+		if (unfoggedBase)
+		{
+			lighting.factor = 1.0f;
+			lighting.distance = 0.0f;
+		}
 		float color[3];
 		gl_GetLightColor(lightlevel, rellight + getExtraLight(), &Colormap,
 			color + 0, color + 1, color + 2);
 		float fogColor[3];
 		float fogDensity;
 		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap,
-			RenderStyle == STYLE_Add, fogColor, &fogDensity);
+			RenderStyle == STYLE_Add, fogColor, &fogDensity) && !unfoggedBase;
+		float projectedFogDensity = 0.0f;
+		if (!gl_dynlight_shader && gl_lights)
+		{
+			float lightFogColor[3];
+			gl_GetFogParameters((flags & GLWF_FOGGY) ? lightlevel : (255 + lightlevel) >> 1,
+				(flags & GLWF_FOGGY) ? &Colormap : NULL, true, lightFogColor, &projectedFogDensity);
+		}
 		const float positions[12] =
 		{
 			glseg.x1, zbottom[0], glseg.y1,
@@ -281,8 +318,9 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() &&
 			gl_fixedcolormap == CM_DEFAULT && !(flags & GLWF_FOGGY) ?
 			gltexture->BindNativeBrightmap(true) : 0;
+		const bool transparent = textured == 5 && gltexture != NULL && gltexture->GetTransparent();
 		EGLESBlendMode blendMode =
-			(color2 == NULL && alpha < 0.999f) ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
+			(color2 == NULL && (alpha < 0.999f || transparent)) ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE;
 		if (RenderStyle == STYLE_Add) blendMode = GLES_BLEND_ADD;
 		else if (RenderStyle == STYLE_Subtract) blendMode = GLES_BLEND_REVERSE_SUBTRACT;
 		const float glowDistances[8] =
@@ -292,8 +330,23 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			zceil[1] - ztop[1], ztop[1] - zfloor[1],
 			zceil[1] - zbottom[1], zbottom[1] - zfloor[1]
 		};
+		bool projectedBase = false;
+		if (textured == 3 && !gl_dynlight_shader && gl_lights)
+		{
+			projectedBase = gl_forcemultipass;
+			if (!gl_fixedcolormap)
+			{
+				if (seg == NULL || seg->sidedef == NULL) projectedBase = false;
+				else if (!(seg->sidedef->Flags & WALLF_POLYOBJ)) projectedBase = seg->sidedef->lighthead[0] != NULL;
+				else if (sub != NULL) projectedBase = sub->lighthead[0] != NULL;
+			}
+		}
 		const unsigned int materialFlags =
-			((flags & GLT_CLAMPX) ? GLES_MATERIAL_CLAMP_X : 0) |
+			(projectedBase ? GLES_MATERIAL_PROJECTED_BASE : 0) |
+			((flags & GLWF_FOGGY) ? GLES_MATERIAL_PROJECTED_FOG : 0) |
+			(unfoggedBase ? GLES_MATERIAL_INHERIT_FOG : 0) |
+			(gl_GLES_MaskedTextureRGB() ? GLES_MATERIAL_MASK_TEXTURE_RGB : 0) |
+			GLES_MATERIAL_WORLD_SURFACE | ((flags & GLT_CLAMPX) ? GLES_MATERIAL_CLAMP_X : 0) |
 			((flags & GLT_CLAMPY) ? GLES_MATERIAL_CLAMP_Y : 0);
 		gl_GLES_AddWall(positions, texcoords, color, color2 != NULL ? 1.0f : alpha,
 			texture, gltexture != NULL && gltexture->isMasked() &&
@@ -302,7 +355,7 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			blendMode, materialFlags, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
 			Colormap.colormap : 0, glowing ? topglowcolor : NULL, glowing ? bottomglowcolor : NULL,
-			glowing ? glowDistances : NULL, &lighting);
+			glowing ? glowDistances : NULL, &lighting, transparent ? 0.0f : 0.5f, false, 0, 0, projectedFogDensity);
 		vertexcount += 4;
 		return;
 	}
@@ -589,9 +642,23 @@ void GLWall::Draw(int pass)
 	FLightNode * node;
 	int rel;
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive() && pass != GLPASS_TRANSLUCENT)
+	{
+		if (pass == GLPASS_ALL || pass == GLPASS_PLAIN || pass == GLPASS_BASE || pass == GLPASS_BASE_MASKED)
+		{
+			SetupLights(gl_lights && GLRenderer->mLightCount > 0);
+			RenderWall(3, NULL);
+			if ((type != RENDERWALL_FFBLOCK || gltexture != NULL) && seg != NULL &&
+				seg->sidedef != NULL && seg->sidedef->AttachedDecals != NULL)
+				DoDrawDecals();
+		}
+		return;
+	}
+#endif
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive() && pass == GLPASS_TRANSLUCENT)
 	{
-		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
+		SetupLights(false);
 		if (type == RENDERWALL_MIRRORSURFACE) RenderMirrorSurface();
 		else if (type == RENDERWALL_FOGBOUNDARY) RenderFogBoundary();
 		else

@@ -3,6 +3,8 @@
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <limits>
 #include <stdio.h>
 #include <vector>
@@ -31,6 +33,7 @@ namespace
 	std::vector<FSceneLightSelectionCacheEntry> SceneLightSelections;
 	std::vector<size_t> SceneDrawOrders[2];
 	std::vector<const FGLESSceneOrderRecord *> SceneIncludedRecords;
+	std::vector<std::array<float, 8>> SceneProjectedLights;
 
 	void ReportSceneLightFailure(const char *message)
 	{
@@ -85,7 +88,7 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 	for (size_t i = 0; i < recordCount; ++i)
 	{
 		if (records[i].included &&
-			(records[i].hud || records[i].flood || records[i].translucent || records[i].sourceOrdered))
+			(records[i].hud || records[i].flood || records[i].opaqueMasked || records[i].translucent || records[i].sourceOrdered))
 		{
 			requiresOrdering = true;
 			break;
@@ -133,7 +136,9 @@ FGLESSceneDrawOrderView gl_GLESInternalSceneSortBatches(const FGLESSceneOrderRec
 		[](const FGLESSceneOrderRecord *record) { return !record->sourceOrdered; });
 	const auto nonFloodEnd = std::stable_partition(included.begin(), sourceOrderStart,
 		[](const FGLESSceneOrderRecord *record) { return !record->flood; });
-	orderFloodGroup(included.begin(), nonFloodEnd);
+	const auto maskedStart = std::stable_partition(included.begin(), nonFloodEnd,
+		[](const FGLESSceneOrderRecord *record) { return !record->opaqueMasked; });
+	orderFloodGroup(included.begin(), maskedStart);
 	orderFloodGroup(nonFloodEnd, sourceOrderStart);
 	drawOrder->reserve(included.size());
 	for (size_t i = 0; i < included.size(); ++i)
@@ -203,6 +208,36 @@ void gl_GLESInternalSceneClearLights()
 	SceneLightPositionStream.clear();
 	SceneLightColorStream.clear();
 	SceneLightSelections.clear();
+	SceneProjectedLights.clear();
+}
+
+void gl_GLESInternalSceneMarkProjectedLight(float *light, unsigned int order, unsigned int kind)
+{
+	// Preserve light-list order across the category merge, then upload only the kind.
+	const unsigned int key = order * 4 + kind;
+	memcpy(light + 7, &key, sizeof(key));
+}
+
+void gl_GLESInternalSceneOrderProjectedLights(float *lights, unsigned int count)
+{
+	SceneProjectedLights.resize(count);
+	for (unsigned int i = 0; i < count; ++i)
+		memcpy(SceneProjectedLights[i].data(), lights + i * 8, sizeof(float) * 8);
+	std::sort(SceneProjectedLights.begin(), SceneProjectedLights.end(),
+		[](const std::array<float, 8> &a, const std::array<float, 8> &b)
+		{
+			unsigned int first, second;
+			memcpy(&first, a.data() + 7, sizeof(first));
+			memcpy(&second, b.data() + 7, sizeof(second));
+			return first < second;
+		});
+	for (unsigned int i = 0; i < count; ++i)
+	{
+		unsigned int key;
+		memcpy(&key, SceneProjectedLights[i].data() + 7, sizeof(key));
+		SceneProjectedLights[i][7] = static_cast<float>(key & 3);
+		memcpy(lights + i * 8, SceneProjectedLights[i].data(), sizeof(float) * 8);
+	}
 }
 
 bool gl_GLESInternalSceneAppendLights(const float *lightData,

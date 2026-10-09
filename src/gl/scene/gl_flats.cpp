@@ -51,6 +51,7 @@
 #include "gl/system/gl_cvars.h"
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
+#include "gl/system/gl_gles_scene.h"
 #include <algorithm>
 #include <vector>
 #endif
@@ -219,6 +220,10 @@ bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 
 	lightdata.Clear();
 	nativeFlatLightCounts[0] = nativeFlatLightCounts[1] = nativeFlatLightCounts[2] = 0;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	const bool projected = gl_GLES_IsActive() && !gl_dynlight_shader;
+	unsigned int projectedOrder = 0;
+#endif
 	for(int i=0;i<2;i++)
 	{
 		FLightNode * node = sub->lighthead[i];
@@ -243,7 +248,20 @@ bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 			}
 
 			p.Set(plane.plane);
-			gl_GetLight(p, light, Colormap.colormap, false, false, lightdata);
+			bool forceAdditive = false;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+			forceAdditive = projected && foggy;
+			const unsigned int previousSizes[3] = { lightdata.arrays[0].Size(), lightdata.arrays[1].Size(), lightdata.arrays[2].Size() };
+#endif
+			if (gl_GetLight(p, light, Colormap.colormap, false, forceAdditive, lightdata))
+			{
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+				if (projected)
+					for (unsigned int kind = 0; kind < 3; ++kind)
+						if (lightdata.arrays[kind].Size() > previousSizes[kind])
+							gl_GLESInternalSceneMarkProjectedLight(&lightdata.arrays[kind][previousSizes[kind]], projectedOrder++, kind == 1 && i == 1 ? 3 : kind);
+#endif
+			}
 			node = node->nextLight;
 		}
 	}
@@ -252,6 +270,10 @@ bool GLFlat::SetupSubsectorLights(bool lightsapplied, subsector_t * sub)
 	int allNativeLights[3];
 
 	lightdata.Combine(numlights, gl.MaxLights(), allNativeLights);
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (projected && allNativeLights[2] > 0)
+		gl_GLESInternalSceneOrderProjectedLights(&lightdata.arrays[0][0], allNativeLights[2] / 2);
+#endif
 	nativeFlatLightCounts[0] = static_cast<unsigned int>(allNativeLights[0]);
 	nativeFlatLightCounts[1] = static_cast<unsigned int>(allNativeLights[1]);
 	nativeFlatLightCounts[2] = static_cast<unsigned int>(allNativeLights[2]);
@@ -324,12 +346,36 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			texcoords.push_back(v);
 		}
 		if (positions.size() < 9) return;
-		const FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, getExtraLight(), &Colormap);
+		const bool unfoggedBase = foggy && alpha >= 1.f - FLT_EPSILON &&
+			renderstyle == STYLE_Translucent && gl_GLES_UsesUntexturedBasePass();
+		FColormap lightingColormap = Colormap;
+		if (unfoggedBase) lightingColormap.FadeColor = 0;
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, getExtraLight(), &lightingColormap);
+		if (unfoggedBase)
+		{
+			lighting.factor = 1.0f;
+			lighting.distance = 0.0f;
+		}
 		float color[3];
 		gl_GetLightColor(lightlevel, getExtraLight(), &Colormap, color + 0, color + 1, color + 2);
 		float fogColor[3];
 		float fogDensity;
 		gl_GetFogParameters(lightlevel, &Colormap, false, fogColor, &fogDensity);
+		float projectedFogDensity = 0.0f;
+		if (!gl_dynlight_shader && gl_lights)
+		{
+			float lightFogColor[3];
+			gl_GetFogParameters(foggy ? lightlevel : (255 + lightlevel) >> 1,
+				&Colormap, true, lightFogColor, &projectedFogDensity);
+		}
+		bool projectedBase = false;
+		if (!gl_dynlight_shader && gl_lights)
+		{
+			projectedBase = gl_forcemultipass;
+			if (!gl_fixedcolormap && GLRenderer->mLightCount > 0 && sector != NULL)
+				for (int i = 0; i < sector->subsectorcount; ++i)
+					if (sector->subsectors[i]->lighthead[0] != NULL) projectedBase = true;
+		}
 		const unsigned int texture = gltexture != NULL ? gltexture->BindNative(Colormap.colormap, 0, true) : 0;
 		if (gltexture != NULL && texture == 0) return;
 		const unsigned int brightmap = gltexture != NULL && gl_BrightmapsActive() &&
@@ -337,14 +383,20 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			gltexture->BindNativeBrightmap(true) : 0;
 		const EGLESBlendMode blendMode = renderstyle == STYLE_Add ? GLES_BLEND_ADD :
 			(alpha < 0.999f ? GLES_BLEND_ALPHA : GLES_BLEND_OPAQUE);
+		const float lightPlaneNormal[3] = { FIXED2FLOAT(plane.plane.a), FIXED2FLOAT(plane.plane.c), FIXED2FLOAT(plane.plane.b) };
 		gl_GLES_AddFlat(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(positions.size() / 3), color, alpha, texture,
 			gltexture != NULL && gltexture->isMasked() &&
 				((renderflags & SSRF_RENDER3DPLANES) || stack || blendMode != GLES_BLEND_OPAQUE),
-			fogDensity > 0.0f, true, fogColor, fogDensity,
-			blendMode, 0, nativeFlatLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeFlatLightCounts,
+			fogDensity > 0.0f && !unfoggedBase, true, fogColor, fogDensity,
+			blendMode, GLES_MATERIAL_WORLD_SURFACE |
+			(projectedBase ? GLES_MATERIAL_PROJECTED_BASE : 0) |
+			(foggy ? GLES_MATERIAL_PROJECTED_FOG : 0) |
+			(unfoggedBase ? GLES_MATERIAL_INHERIT_FOG : 0) |
+			(gl_GLES_MaskedTextureRGB() ? GLES_MATERIAL_MASK_TEXTURE_RGB : 0),
+			nativeFlatLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeFlatLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
-			Colormap.colormap : 0, &lighting);
+				Colormap.colormap : 0, &lighting, projectedFogDensity, lightPlaneNormal);
 		return;
 	}
 #endif
@@ -376,7 +428,7 @@ void GLFlat::DrawSubsectors(int pass, bool istrans)
 	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		const bool collectLights = gl_lights && GLRenderer->mLightCount > 0;
+		const bool collectLights = !istrans && gl_lights && GLRenderer->mLightCount > 0;
 		if (sub != NULL)
 		{
 			if (collectLights) SetupSubsectorLights(false, sub);
@@ -621,6 +673,11 @@ inline void GLFlat::PutFlat(bool fog)
 		}
 		if (gltexture != NULL)
 			foggy = !gl_fixedcolormap && (gl_CheckFog(&Colormap, lightlevel) || (level.flags & LEVEL_HASFADETABLE));
+		if (gltexture != NULL && gltexture->isMasked() && ((renderflags & SSRF_RENDER3DPLANES) || stack))
+		{
+			gl_drawinfo->drawlists[foggy ? GLDL_FOGMASKED : GLDL_MASKED].AddFlat(this);
+			return;
+		}
 		if (gl_GLES_IsFlatCollectionDeferred())
 		{
 			NativeDeferredFlatTasks.push_back(*this);
@@ -783,8 +840,7 @@ void GLFlat::ProcessSector(sector_t * frontsector)
 		#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 			if (!gl_GLES_IsActive() || gl_GLES_IsFlatCollectionDeferred())
 				gl_drawinfo->AddFloorStack(sector);
-#endif
-#if !defined(__ANDROID__)
+		#else
 			gl_drawinfo->AddFloorStack(sector);
 		#endif
 			alpha = frontsector->GetAlpha(sector_t::floor)/65536.0f;

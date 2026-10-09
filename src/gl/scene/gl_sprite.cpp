@@ -151,11 +151,9 @@ void GLSprite::Draw(int pass)
 		float nativeShadowCutoff = 0.0f;
 		if (nativeShadow)
 		{
-			const float shadowLightLevel = lighting.level;
 			lighting = FShaderLightParameters();
 			if (glset.lightmode == 8)
 			{
-				lighting.level = shadowLightLevel;
 				lighting.software = 1.0f;
 			}
 			gl_GetShadowParameters(lightlevel, &nativeColormap,
@@ -286,6 +284,7 @@ void GLSprite::Draw(int pass)
 			nativeFog, texture, fogColor, fogDensity,
 			nativeBlend,
 			(nativeFuzz ? GLES_MATERIAL_FUZZ | (static_cast<unsigned int>(gl_fuzztype) << GLES_MATERIAL_FUZZ_SHIFT) : 0) |
+			(nativeShadow ? GLES_MATERIAL_INHERIT_LIGHT : 0) |
 			((RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
 			((RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0), brightmap,
 			(Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ? Colormap.colormap : 0,
@@ -578,8 +577,7 @@ inline void GLSprite::PutSprite(bool translucent)
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
-		if (list == GLDL_TRANSLUCENT) gl_drawinfo->drawlists[list].AddSprite(this);
-		else Draw(GLPASS_ALL);
+		gl_drawinfo->drawlists[list].AddSprite(this);
 		return;
 	}
 #endif

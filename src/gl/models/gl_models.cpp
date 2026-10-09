@@ -192,11 +192,9 @@ public:
 		float nativeShadowCutoff = 0.0f;
 		if (Sprite->RenderStyle.BlendOp == STYLEOP_Shadow)
 		{
-			const float shadowLightLevel = lighting.level;
 			lighting = FShaderLightParameters();
 			if (glset.lightmode == 8)
 			{
-				lighting.level = shadowLightLevel;
 				lighting.software = 1.0f;
 			}
 			const float dx = FIXED2FLOAT(viewx) - Sprite->x;
@@ -257,7 +255,8 @@ public:
 		gl_GLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
 			indices, indexCount, color, nativeAlpha, Sprite->hw_styleflags != STYLEHW_NoAlphaTest, fog, texture,
 			fogColor, fogDensity, blendMode,
-			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0),
+			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
+			(Sprite->RenderStyle.BlendOp == STYLEOP_Shadow ? GLES_MATERIAL_INHERIT_LIGHT : 0),
 			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
 			(Colormap >= CM_DESAT0 && Colormap <= CM_DESAT31) ? Colormap : 0,
 			!(Sprite->actor->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
@@ -271,6 +270,7 @@ static bool RenderModelNative(GLSprite *spr, int cm)
 {
 	FSpriteModelFrame *smf = spr != NULL ? spr->modelframe : NULL;
 	if (smf == NULL || spr->actor == NULL) return false;
+	gl_GLES_SetMaskedTextureRGB(true);
 	int translation = (smf->flags & MDL_IGNORETRANSLATION) ? 0 : spr->actor->Translation;
 	const float scaleFactorX = FIXED2FLOAT(spr->actor->scaleX) * smf->xscale;
 	const float scaleFactorY = FIXED2FLOAT(spr->actor->scaleX) * smf->yscale;

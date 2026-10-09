@@ -151,6 +151,11 @@ void GLWall::PutWall(bool translucent)
 			gl_drawinfo->drawlists[GLDL_TRANSLUCENT].AddWall(this);
 			return;
 		}
+		if (passflag[type] == 2 && gltexture != NULL && gltexture->isMasked())
+		{
+			gl_drawinfo->drawlists[(flags & GLWF_FOGGY) ? GLDL_FOGMASKED : GLDL_MASKED].AddWall(this);
+			return;
+		}
 		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
 		// Special portal surfaces need their own target; ordinary walls can be
 		// collected directly while the scene is traversed.

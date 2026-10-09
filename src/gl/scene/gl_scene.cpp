@@ -443,6 +443,13 @@ void FGLRenderer::CreateScene()
 		gl_drawinfo->ProcessSectorStacks();
 		gl_GLES_SetFlatCollectionDeferred(false);
 		gl_GLES_EmitFlatTasks();
+		const int modelPass = gl_GLES_UsesUntexturedBasePass() ? GLPASS_BASE : GLPASS_ALL;
+		const bool savedMaskedTextureRGB = gl_GLES_SetMaskedTextureRGB(false);
+		gl_drawinfo->drawlists[GLDL_MASKED].Sort();
+		gl_drawinfo->drawlists[GLDL_MASKED].Draw(modelPass);
+		gl_drawinfo->drawlists[GLDL_FOGMASKED].Sort();
+		gl_drawinfo->drawlists[GLDL_FOGMASKED].Draw(modelPass);
+		gl_GLES_SetMaskedTextureRGB(savedMaskedTextureRGB);
 		gl_drawinfo->DrawUnhandledMissingTextures();
 		gl_GLES_SetSourceOrder(true);
 		gl_drawinfo->drawlists[GLDL_TRANSLUCENTBORDER].Draw(GLPASS_TRANSLUCENT);

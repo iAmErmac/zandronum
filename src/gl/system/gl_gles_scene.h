@@ -5,6 +5,9 @@
 
 #include "gl/system/gl_gles_api.h"
 
+void gl_GLESInternalSceneMarkProjectedLight(float *light, unsigned int order, unsigned int kind);
+void gl_GLESInternalSceneOrderProjectedLights(float *lights, unsigned int count);
+
 struct FGLESSceneOrderRecord
 {
 	size_t batchIndex;
@@ -13,6 +16,7 @@ struct FGLESSceneOrderRecord
 	bool hud;
 	bool flood;
 	bool flat;
+	bool opaqueMasked;
 	bool translucent;
 	bool decal;
 	float sortDepth;

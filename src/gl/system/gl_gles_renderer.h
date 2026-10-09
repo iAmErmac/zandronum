@@ -62,7 +62,13 @@ enum EGLESMaterialFlags
 	GLES_MATERIAL_GLOW = 65536,
 	GLES_MATERIAL_MIRROR_DECAL = 131072,
 	GLES_MATERIAL_SPRITE_FOG_LAYER = 262144,
-	GLES_MATERIAL_SMOOTH_LINE = 524288
+	GLES_MATERIAL_SMOOTH_LINE = 524288,
+	GLES_MATERIAL_INHERIT_LIGHT = 1048576,
+	GLES_MATERIAL_WORLD_SURFACE = 2097152,
+	GLES_MATERIAL_MASK_TEXTURE_RGB = 4194304,
+	GLES_MATERIAL_INHERIT_FOG = 8388608,
+	GLES_MATERIAL_PROJECTED_FOG = 16777216,
+	GLES_MATERIAL_PROJECTED_BASE = 33554432
 };
 
 enum EGLESPrimitiveMode
@@ -102,13 +108,14 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0, const float *topGlowColor = 0,
 	const float *bottomGlowColor = 0, const float *glowDistances = 0,
 	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f, bool customBlend = false,
-	int sourceBlend = 0, int destinationBlend = 0);
+	int sourceBlend = 0, int destinationBlend = 0, float projectedFogDensity = 0.0f);
 void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const float *color, float alpha, unsigned int texture, bool masked, bool fog, bool repeat,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
 	unsigned int materialFlags = 0, const float *lightData = 0, const unsigned int *lightCounts = 0,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0,
-	const FShaderLightParameters *lighting = 0);
+	const FShaderLightParameters *lighting = 0, float projectedFogDensity = 0.0f,
+	const float *lightPlaneNormal = 0);
 void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
 	const float *texcoords, const float *color, unsigned int texture, bool fog,
 	const float *fogColor, float fogDensity, const FShaderLightParameters *lighting = 0);
@@ -192,5 +199,8 @@ void gl_GLES_DestroyFlatBufferObjects(unsigned int vbo, unsigned int vao, unsign
 void gl_GLES_BindFlatBuffer(unsigned int vao, unsigned int vbo);
 
 void gl_GLES_SetSourceOrder(bool enabled);
+bool gl_GLES_SetMaskedTextureRGB(bool enabled);
+bool gl_GLES_MaskedTextureRGB();
+bool gl_GLES_UsesUntexturedBasePass();
 
 #endif
