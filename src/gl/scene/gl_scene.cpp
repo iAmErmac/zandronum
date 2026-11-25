@@ -1229,8 +1229,10 @@ void FGLRenderer::RenderView (player_t* player)
 		const float fov = FieldOfView * 360.0f / FINEANGLES;
 		sector_t *viewsector = RenderViewpoint(player->camera, NULL, fov, ratio, fovratio, true, true);
 		#undef RMUL
-		// The weapon is a 2D overlay and must be collected after the world batches.
-		DrawPlayerSprites(viewsector, false);
+		// A primary MODELDEF weapon owns the whole weapon pass; native models
+		// are collected before the ordinary HUD batches.
+		const bool renderHUDModel = gl_IsHUDModelForPlayerAvailable(player->camera->player);
+		DrawPlayerSprites(viewsector, renderHUDModel);
 		DrawTargeterSprites();
 		DrawBlend(viewsector);
 		gl_GLES_EndScene();
@@ -1500,6 +1502,13 @@ int FGLInterface::GetMaxViewPitch(bool down)
 void FGLInterface::ClearBuffer(int color)
 {
 	PalEntry pe = GPalette.BaseColors[color];
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		gl_GLES_SetSceneClearColor(pe.r / 255.f, pe.g / 255.f, pe.b / 255.f);
+		return;
+	}
+#endif
 	glClearColor(pe.r/255.f, pe.g/255.f, pe.b/255.f, 1.f);
 	glClear(GL_COLOR_BUFFER_BIT);
 }
@@ -1572,7 +1581,8 @@ void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, in
 			if (copied)
 				gl_GLES_MarkMaterialFramebufferContent(gltex, CM_DEFAULT, 0, true, true);
 		}
-		tex->SetUpdated();
+		if (copied)
+			tex->SetUpdated();
 		return;
 	}
 #endif

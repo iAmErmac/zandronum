@@ -188,6 +188,7 @@ std::string gl_GLES_LowerMaterialShader(const char *source)
 			if (token == "gl_TexCoord") result += "zandronum_texcoord";
 			else if (token == "gl_Color") result += "v_color";
 			else if (token == "gl_FragColor") result += "frag_color";
+			else if (token == "texture2DProj") result += "textureProj";
 			else if (token == "texture2D") result += "texture";
 			else result += token;
 			continue;

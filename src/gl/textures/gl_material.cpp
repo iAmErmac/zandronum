@@ -933,6 +933,17 @@ void FMaterial::BindPatch(int cm, int translation, int overrideshader)
 //===========================================================================
 void FMaterial::Precache()
 {
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive())
+	{
+		if (!gl_GLES_CanUseResources()) return;
+		const bool repeat = tex->UseType != FTexture::TEX_Sprite &&
+			tex->UseType != FTexture::TEX_SkinSprite &&
+			tex->UseType != FTexture::TEX_Decal;
+		BindNative(CM_DEFAULT, 0, repeat);
+		return;
+	}
+#endif
 	if (tex->UseType==FTexture::TEX_Sprite) 
 	{
 		BindPatch(CM_DEFAULT, 0);
@@ -994,9 +1005,21 @@ unsigned int FMaterial::BindNative(int cm, int translation, bool repeat, bool al
 		return 0;
 	}
 	mBaseLayer->tex->ProcessData(pixels, width, height, !repeat);
-	const unsigned int texture = gl_GLES_BindMaterial(this, pixels, width, height,
+	const int uploadWidth = FHardwareTexture::GetTexDimension(width);
+	const int uploadHeight = FHardwareTexture::GetTexDimension(height);
+	unsigned char *uploadPixels = pixels;
+	if (uploadWidth < width || uploadHeight < height)
+	{
+		const size_t uploadBytes = static_cast<size_t>(uploadWidth) *
+			static_cast<size_t>(uploadHeight) * 4;
+		unsigned char *resizedPixels = new unsigned char[uploadBytes];
+		gl_ResizeTexture(width, height, uploadWidth, uploadHeight, pixels, resizedPixels);
+		delete[] pixels;
+		uploadPixels = resizedPixels;
+	}
+	const unsigned int texture = gl_GLES_BindMaterial(this, uploadPixels, uploadWidth, uploadHeight,
 		repeat, cm, translation, allowhires, !repeat && tex->gl_info.bNoFilter, tex->gl_info.bNoCompress);
-	delete[] pixels;
+	delete[] uploadPixels;
 	gl_GLESInternalSetMaterialEffect(texture, effect, tex->gl_info.shaderspeed, cm);
 	return texture;
 }

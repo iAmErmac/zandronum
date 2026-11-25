@@ -402,6 +402,13 @@ FSpriteModelFrame * gl_FindModelFrame(const PClass * ti, int sprite, int frame, 
 
 void gl_RenderModel(GLSprite * spr, int cm);
 // [BB] HUD weapon model rendering functions.
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+void gl_RenderHUDModelNative(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm,
+	float alpha, unsigned int materialFlags, uint32 style, const float *color);
+#if defined(__ANDROID__)
+bool gl_IsHUDModelForPlayerAvailable (player_t * player);
+#endif
+#endif
 #if !defined(__ANDROID__)
 void gl_RenderHUDModel(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm);
 bool gl_IsHUDModelForPlayerAvailable (player_t * player);

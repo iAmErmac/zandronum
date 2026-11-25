@@ -276,9 +276,9 @@ void GLSprite::Draw(int pass)
 			hw_styleflags == STYLEHW_Solid, nativeFuzz);
 		const bool customBlend = nativeBlend != GLES_BLEND_OPAQUE && nativeBlend != GLES_BLEND_FUZZ;
 		const bool nativeMasked = gltexture != NULL && gltexture->isMasked() &&
-			hw_styleflags != STYLEHW_NoAlphaTest;
+			!gltexture->GetTransparent() && hw_styleflags != STYLEHW_NoAlphaTest;
 		const float nativeAlphaCutoff = nativeMasked ?
-			(nativeShadow ? nativeShadowCutoff / nativeAlpha : nativeAlpha) * gl_mask_sprite_threshold : 0.5f;
+			(nativeShadow ? nativeShadowCutoff : nativeAlpha) * gl_mask_sprite_threshold : 0.5f;
 		gl_GLES_AddSprite(positions, texcoords, color, nativeAlpha,
 			nativeMasked,
 			nativeFog, texture, fogColor, fogDensity,

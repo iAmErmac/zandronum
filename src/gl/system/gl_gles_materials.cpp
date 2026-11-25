@@ -67,6 +67,8 @@ namespace
 
 	std::vector<FGLESMaterialTexture> MaterialTextures;
 	std::unordered_map<FGLESMaterialKey, size_t, FGLESMaterialKeyHash> MaterialTextureIndices;
+	std::unordered_map<const void *, std::vector<FGLESMaterialKey>> MaterialKeysByOwner;
+	std::vector<size_t> FreeMaterialIndices;
 	std::unordered_map<const void *, uint64_t> MaterialRevisions;
 	std::unordered_map<GLuint, unsigned int> MaterialFlagsByTexture;
 	std::unordered_map<GLuint, FGLESMaterialEffect> MaterialEffectsByTexture;
@@ -124,6 +126,16 @@ namespace
 			InvalidateMaterialFlagCache(texture);
 		}
 	}
+
+	void ReleaseMaterialTexture(FGLESMaterialTexture &entry, bool contextAvailable)
+	{
+		if (entry.texture != 0)
+		{
+			RemoveMaterialTextureIndex(entry.texture);
+			if (contextAvailable) glDeleteTextures(1, &entry.texture);
+		}
+		entry = FGLESMaterialTexture{};
+	}
 }
 
 GLuint gl_GLESInternalFindMaterialTexture(const void *key, int colormap, int translation,
@@ -156,6 +168,27 @@ GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, i
 void gl_GLESInternalInvalidateMaterial(const void *key)
 {
 	++MaterialRevisions[key];
+}
+
+void gl_GLESInternalEvictMaterial(const void *key, bool contextAvailable)
+{
+	if (key == nullptr) return;
+	MaterialRevisions.erase(key);
+	const auto owner = MaterialKeysByOwner.find(key);
+	if (owner == MaterialKeysByOwner.end()) return;
+	for (const FGLESMaterialKey &materialKey : owner->second)
+	{
+		const auto entryIndex = MaterialTextureIndices.find(materialKey);
+		if (entryIndex == MaterialTextureIndices.end()) continue;
+		const size_t index = entryIndex->second;
+		if (index < MaterialTextures.size())
+		{
+			ReleaseMaterialTexture(MaterialTextures[index], contextAvailable);
+			FreeMaterialIndices.push_back(index);
+		}
+		MaterialTextureIndices.erase(entryIndex);
+	}
+	MaterialKeysByOwner.erase(owner);
 }
 
 unsigned int gl_GLES_GetTextureFormat(bool fullPrecision)
@@ -204,9 +237,21 @@ GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 		value.height = height;
 		value.repeat = repeat;
 		value.palette = palette;
-		MaterialTextures.push_back(value);
-		MaterialTextureIndices.emplace(materialKey, MaterialTextures.size() - 1);
-		entry = &MaterialTextures.back();
+		size_t index;
+		if (FreeMaterialIndices.empty())
+		{
+			index = MaterialTextures.size();
+			MaterialTextures.push_back(value);
+		}
+		else
+		{
+			index = FreeMaterialIndices.back();
+			FreeMaterialIndices.pop_back();
+			MaterialTextures[index] = value;
+		}
+		MaterialTextureIndices.emplace(materialKey, index);
+		MaterialKeysByOwner[key].push_back(materialKey);
+		entry = &MaterialTextures[index];
 	}
 	entry->revision = MaterialRevision(key);
 	if (entry->width != width || entry->height != height || entry->internalFormat != internalFormat)
@@ -344,6 +389,8 @@ void gl_GLESInternalClearMaterials(bool contextAvailable)
 	if (contextAvailable) gl_GLESInternalDeleteMaterialTextures();
 	MaterialTextures.clear();
 	MaterialTextureIndices.clear();
+	MaterialKeysByOwner.clear();
+	FreeMaterialIndices.clear();
 	MaterialRevisions.clear();
 	MaterialFlagsByTexture.clear();
 	MaterialEffectsByTexture.clear();

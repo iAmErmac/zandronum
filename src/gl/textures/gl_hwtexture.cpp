@@ -96,9 +96,9 @@ struct BoxPrecalc
 	int boxEnd;
 };
 
-static void ResampleBoxPrecalc(TArray<BoxPrecalc>& boxes, int oldDim)
+static void ResampleBoxPrecalc(TArray<BoxPrecalc>& boxes, int oldDim, int newDim)
 {
-	int newDim = boxes.Size();
+	boxes.Resize(newDim);
 	const double scale_factor_1 = double(oldDim) / newDim;
 	const int scale_factor_2 = (int)(scale_factor_1 / 2);
 
@@ -113,7 +113,8 @@ static void ResampleBoxPrecalc(TArray<BoxPrecalc>& boxes, int oldDim)
 	}
 }
 
-static void Resize(int texwidth, int texheight, int width, int height, unsigned char *src_data, unsigned char *dst_data)
+void gl_ResizeTexture(int texwidth, int texheight, int width, int height,
+	const unsigned char *src_data, unsigned char *dst_data)
 {
 
 	// This function implements a simple pre-blur/box averaging method for
@@ -121,11 +122,11 @@ static void Resize(int texwidth, int texheight, int width, int height, unsigned 
 	// down we will need to gather a grid of pixels of the size of the scale
 	// factor in each direction and then do an averaging of the pixels.
 
-	TArray<BoxPrecalc> vPrecalcs(height);
-	TArray<BoxPrecalc> hPrecalcs(width);
+	TArray<BoxPrecalc> vPrecalcs;
+	TArray<BoxPrecalc> hPrecalcs;
 
-	ResampleBoxPrecalc(vPrecalcs, texheight);
-	ResampleBoxPrecalc(hPrecalcs, texwidth);
+	ResampleBoxPrecalc(vPrecalcs, texheight, height);
+	ResampleBoxPrecalc(hPrecalcs, texwidth, width);
 
 	int averaged_pixels, averaged_alpha, src_pixel_index;
 	double sum_r, sum_g, sum_b, sum_a;
@@ -166,11 +167,19 @@ static void Resize(int texwidth, int texheight, int width, int height, unsigned 
 				}
 			}
 
-			// Calculate the average from the sum and number of averaged pixels
-			dst_data[0] = (unsigned char)xs_CRoundToInt(sum_r / averaged_pixels);
-			dst_data[1] = (unsigned char)xs_CRoundToInt(sum_g / averaged_pixels);
-			dst_data[2] = (unsigned char)xs_CRoundToInt(sum_b / averaged_pixels);
-			dst_data[3] = (unsigned char)xs_CRoundToInt(sum_a / averaged_alpha);
+			// Calculate the average from the sum and number of averaged pixels.
+			if (averaged_pixels > 0)
+			{
+				dst_data[0] = (unsigned char)xs_CRoundToInt(sum_r / averaged_pixels);
+				dst_data[1] = (unsigned char)xs_CRoundToInt(sum_g / averaged_pixels);
+				dst_data[2] = (unsigned char)xs_CRoundToInt(sum_b / averaged_pixels);
+			}
+			else
+			{
+				dst_data[0] = dst_data[1] = dst_data[2] = 0;
+			}
+			dst_data[3] = averaged_alpha > 0 ?
+				(unsigned char)xs_CRoundToInt(sum_a / averaged_alpha) : 0;
 			dst_data += 4;
 		}
 	}
@@ -292,7 +301,7 @@ void FHardwareTexture::LoadImage(unsigned char * buffer,int w, int h, unsigned i
 			if (scaledbuffer)
 			{
 				//gluScaleImage(GL_RGBA,w, h,GL_UNSIGNED_BYTE,buffer, rw, rh, GL_UNSIGNED_BYTE,scaledbuffer);
-				::Resize(w,h,rw,rh,buffer,scaledbuffer);
+				gl_ResizeTexture(w,h,rw,rh,buffer,scaledbuffer);
 				deletebuffer=true;
 				buffer=scaledbuffer;
 			}

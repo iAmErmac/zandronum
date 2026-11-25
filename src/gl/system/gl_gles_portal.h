@@ -50,8 +50,9 @@ struct FGLESPortalCompositeList
 };
 
 void gl_GLESInternalPortalBeginFrame();
-bool gl_GLESInternalPortalAcquireFallbackTarget(int width, int height, int *index);
-FGLESTargetDescriptor *gl_GLESInternalPortalGetFallbackTarget(int index);
+FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int height, int requestedSamples,
+	bool offscreen, int *index);
+void gl_GLESInternalPortalReleaseFallbackTarget(bool offscreen, int index);
 bool gl_GLESInternalPortalInitialize();
 void gl_GLESInternalPortalDestroy();
 void gl_GLESInternalPortalContextLost();

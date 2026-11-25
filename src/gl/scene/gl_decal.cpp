@@ -432,6 +432,7 @@ void GLWall::DrawDecal(DBaseDecal *decal)
 		gl_GLES_AddWall(positions, texcoords, color, a, textureHandle, masked,
 			nativeFog, false, fogColor, fogDensity, blendMode,
 			GLES_MATERIAL_DECAL |
+			(decal->RenderStyle.SrcAlpha != STYLEALPHA_One ? GLES_MATERIAL_DECAL_STRICT_ALPHA : 0) |
 			(type == RENDERWALL_MIRRORSURFACE ? GLES_MATERIAL_MIRROR_DECAL : 0) |
 			((decal->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
 			((decal->RenderStyle.Flags & STYLEF_ColorIsFixed) ? GLES_MATERIAL_COLOR_FIXED : 0),

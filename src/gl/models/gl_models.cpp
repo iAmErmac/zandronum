@@ -66,6 +66,7 @@
 #include "gl/renderer/gl_colormap.h"
 #include "gl/renderer/gl_lightdata.h"
 #include "gl/data/gl_data.h"
+#include "gl/shaders/gl_shaderdefs.h"
 #include <math.h>
 #include <vector>
 #endif
@@ -96,6 +97,18 @@ struct FGLESModelScratch
 {
 	std::vector<float> worldPositions;
 	std::vector<float> worldNormals;
+};
+
+struct FGLESModelRenderState
+{
+	AActor *actor;
+	FColormap colormap;
+	FRenderStyle renderStyle;
+	int colormapIndex;
+	float alpha;
+	bool forcedColor;
+	unsigned int materialFlags;
+	float color[3];
 };
 
 class FGLESModelCollector : public FModelNativeCollector
@@ -263,6 +276,119 @@ public:
 			sourceBlend, destinationBlend, &lighting,
 			Sprite->RenderStyle.BlendOp == STYLEOP_Shadow ?
 				nativeShadowCutoff / nativeAlpha * gl_mask_sprite_threshold : gl_mask_sprite_threshold);
+	}
+};
+
+class FGLESHUDModelCollector : public FModelNativeCollector
+{
+	FGLESModelRenderState State;
+	int Translation;
+	Matrix3x4 Transform;
+
+public:
+	FGLESHUDModelCollector(AActor *actor, int colormap, int translation,
+		const Matrix3x4 &transform, const FColormap *nativeColormap,
+		float alpha, unsigned int materialFlags, uint32 style, const float *color)
+		: Translation(translation), Transform(transform)
+	{
+		State = {};
+		State.actor = actor;
+		if (nativeColormap != NULL) State.colormap = *nativeColormap;
+		else State.colormap.Clear();
+		State.colormap.colormap = colormap;
+		State.renderStyle.AsDWORD = style;
+		State.colormapIndex = colormap;
+		State.alpha = alpha;
+		State.forcedColor = color != NULL;
+		if (color != NULL) memcpy(State.color, color, sizeof(State.color));
+		State.materialFlags = materialFlags;
+	}
+
+	void SubmitSurface(const float *positions, const float *texcoords,
+		unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
+		FTexture *skin, const float *normals) override
+	{
+		if (positions == NULL || indices == NULL || skin == NULL || vertexCount == 0 || indexCount < 3)
+			return;
+		FMaterial *material = FMaterial::ValidateTexture(skin);
+		if (material == NULL) return;
+		const unsigned int texture = material->BindNative(State.colormapIndex, Translation, true);
+		const unsigned int brightmap = State.colormapIndex < CM_FIRSTSPECIALCOLORMAP &&
+			gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
+			material->BindNativeBrightmap(true) : 0;
+		if (texture == 0) return;
+		static FGLESModelScratch scratch;
+		std::vector<float> &worldPositions = scratch.worldPositions;
+		std::vector<float> &worldNormals = scratch.worldNormals;
+		worldPositions.resize(vertexCount * 3);
+		if (normals != NULL) worldNormals.resize(vertexCount * 3);
+		else worldNormals.clear();
+		for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
+		{
+			float modelPosition[3] =
+			{
+				positions[vertex * 3 + 0],
+				positions[vertex * 3 + 1],
+				positions[vertex * 3 + 2]
+			};
+			float worldPosition[3];
+			Transform.MultiplyVector(modelPosition, worldPosition);
+			// Model transforms already use the renderer's x/z/y coordinate order.
+			worldPositions[vertex * 3 + 0] = worldPosition[0];
+			worldPositions[vertex * 3 + 1] = worldPosition[1];
+			worldPositions[vertex * 3 + 2] = worldPosition[2];
+			if (normals != NULL)
+			{
+				float worldNormal[3];
+				Transform.MultiplyDirection(normals + vertex * 3, worldNormal);
+				const float length = sqrtf(worldNormal[0] * worldNormal[0] +
+					worldNormal[1] * worldNormal[1] + worldNormal[2] * worldNormal[2]);
+				if (length > 0.0001f)
+				{
+					worldNormals[vertex * 3 + 0] = worldNormal[0] / length;
+					worldNormals[vertex * 3 + 1] = worldNormal[1] / length;
+					worldNormals[vertex * 3 + 2] = worldNormal[2] / length;
+				}
+			}
+		}
+		float color[3];
+		if (State.forcedColor) memcpy(color, State.color, sizeof(color));
+		else gl_GetLightColor(255, 0, &State.colormap,
+			color + 0, color + 1, color + 2);
+		const float nativeAlpha = State.alpha;
+		FShaderLightParameters lighting = {};
+		EGLESBlendMode blendMode = GLES_BLEND_ALPHA;
+		if (State.renderStyle.BlendOp == STYLEOP_Add && State.renderStyle.DestAlpha == STYLEALPHA_One)
+			blendMode = GLES_BLEND_ADD;
+		else if (State.renderStyle.BlendOp == STYLEOP_Sub)
+			blendMode = GLES_BLEND_SUBTRACT;
+		else if (State.renderStyle.BlendOp == STYLEOP_RevSub)
+			blendMode = GLES_BLEND_REVERSE_SUBTRACT;
+		int textureMode = 0;
+		int sourceBlend = GL_SRC_ALPHA;
+		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
+		int blendEquation = GL_FUNC_ADD;
+		gl_GetRenderStyle(State.renderStyle, false, false, &textureMode, &sourceBlend,
+			&destinationBlend, &blendEquation);
+		unsigned int materialFlags = State.materialFlags & ~GLES_MATERIAL_FUZZ;
+		if (textureMode == TM_MASK)
+			materialFlags |= GLES_MATERIAL_COLOR_FIXED;
+		else if (textureMode == TM_INVERT && brightmap == 0 && State.colormapIndex == CM_DEFAULT &&
+			!skin->bWarped && skin->gl_info.shaderindex < FIRST_USER_SHADER)
+			materialFlags |= GLES_MATERIAL_INVERT_TEXTURE;
+		const bool customBlend = blendMode != GLES_BLEND_OPAQUE;
+		gl_GLES_AddModelSurface(&worldPositions[0], texcoords, vertexCount,
+			indices, indexCount, color, nativeAlpha, true, false, texture,
+			NULL, 0.0f, blendMode,
+			materialFlags |
+			((State.renderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
+			(State.renderStyle.BlendOp == STYLEOP_Shadow ? GLES_MATERIAL_INHERIT_LIGHT : 0),
+			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
+			(State.colormapIndex >= CM_DESAT0 && State.colormapIndex <= CM_DESAT31) ? State.colormapIndex : 0,
+			State.actor != NULL && !(State.actor->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
+			sourceBlend, destinationBlend, &lighting,
+			gl_mask_sprite_threshold,
+			true);
 	}
 };
 
@@ -439,6 +565,87 @@ static int FindGFXFile(FString & fn)
 	}
 	return best;
 }
+
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+void gl_RenderHUDModelNative(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm,
+	float alpha, unsigned int materialFlags, uint32 style, const float *color)
+{
+	AActor *playermo = players[consoleplayer].camera;
+	if (playermo == NULL || playermo->player == NULL || playermo->player->ReadyWeapon == NULL ||
+		psp == NULL || psp->state == NULL) return;
+	const PClass *weaponType = playermo->player->ReadyWeapon->GetClass();
+	FSpriteModelFrame *smf = gl_FindModelFrame(weaponType, psp->state->sprite,
+		psp->state->GetFrame(), false);
+	if (smf == NULL) return;
+	if (style == 0) style = playermo->RenderStyle.AsDWORD;
+	FColormap colormap;
+	colormap.Clear();
+	colormap.colormap = cm;
+	Matrix3x4 transform;
+	transform.MakeIdentity();
+	transform.Scale(smf->xscale, smf->zscale, smf->yscale);
+	transform.Translate(smf->xoffset / smf->xscale, smf->zoffset / smf->zscale,
+		smf->yoffset / smf->yscale);
+	transform.Rotate(0, 1, 0, FIXED2FLOAT(ofsx) / 4.0f);
+	transform.Rotate(1, 0, 0, -FIXED2FLOAT(ofsy - WEAPONTOP) / 4.0f);
+	transform.Rotate(0, 1, 0, 90.0f);
+	transform.Rotate(0, 1, 0, -ANGLE_TO_FLOAT(smf->angleoffset));
+	transform.Rotate(0, 0, 1, smf->pitchoffset);
+	transform.Rotate(1, 0, 0, -smf->rolloffset);
+
+	FSpriteModelFrame *smfNext = NULL;
+	double inter = 0.0;
+	if (gl_interpolate_model_frames && !(smf->flags & MDL_NOINTERPOLATION))
+	{
+		const FState *curState = psp->state;
+		const FState *nextState = curState->GetNextState();
+		if (curState != nextState && nextState != NULL && curState->Tics > 0)
+		{
+			float ticFraction = 0.0f;
+			if (ConsoleState == c_up && menuactive != MENU_On && !(level.flags2 & LEVEL2_FROZEN))
+				ticFraction = FIXED2FLOAT(I_GetTimeFrac(NULL));
+			inter = static_cast<double>(curState->Tics - psp->tics + ticFraction) /
+				static_cast<double>(curState->Tics);
+			if (curState->Tics < psp->tics)
+				inter = 0.0;
+			else
+			{
+				if (smf->flags & MDL_INTERPOLATEDOUBLEDFRAMES)
+				{
+					const FState *prevState = curState - 1;
+					if (weaponType->ActorInfo->OwnsState(prevState) &&
+						curState->sprite == prevState->sprite && curState->Frame == prevState->Frame)
+						inter = inter / 2.0 + 0.5;
+					if (curState->sprite == nextState->sprite && curState->Frame == nextState->Frame)
+					{
+						inter /= 2.0;
+						nextState = nextState->GetNextState();
+					}
+				}
+				if (inter != 0.0 && nextState != NULL)
+					smfNext = gl_FindModelFrame(weaponType, nextState->sprite,
+						nextState->GetFrame(), false);
+			}
+		}
+	}
+	const int translation = 0;
+	FGLESHUDModelCollector collector(playermo, cm, translation, transform, &colormap,
+		alpha, materialFlags, style, color);
+	for (int modelIndex = 0; modelIndex < MAX_MODELS_PER_FRAME; ++modelIndex)
+	{
+		FModel *model = smf->models[modelIndex];
+		if (model == NULL) continue;
+		model->PushSpriteMDLFrame(smf, modelIndex);
+		int frame2 = -1;
+		if (smfNext != NULL && smfNext->models[modelIndex] == model &&
+			smfNext->modelframes[modelIndex] >= 0 &&
+			smf->modelframes[modelIndex] != smfNext->modelframes[modelIndex])
+			frame2 = smfNext->modelframes[modelIndex];
+		model->RenderFrameNative(smf->skins[modelIndex], smf->modelframes[modelIndex],
+			frame2, inter, cm, translation, &collector);
+	}
+}
+#endif
 
 
 //===========================================================================
@@ -1298,7 +1505,6 @@ void gl_RenderHUDModel(pspdef_t *psp, fixed_t ofsx, fixed_t ofsy, int cm)
 //
 //===========================================================================
 
-#if !defined(__ANDROID__)
 bool gl_IsHUDModelForPlayerAvailable (player_t * player)
 {
 	if ( (player == NULL) || (player->ReadyWeapon == NULL) || (player->psprites[0].state == NULL) )
@@ -1308,7 +1514,6 @@ bool gl_IsHUDModelForPlayerAvailable (player_t * player)
 	FSpriteModelFrame *smf = gl_FindModelFrame(player->ReadyWeapon->GetClass(), state->sprite, state->GetFrame(), false);
 	return ( smf != NULL );
 }
-#endif
 
 //===========================================================================
 //

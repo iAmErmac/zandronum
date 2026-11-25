@@ -79,6 +79,7 @@
 //-----------------------------------------------------------------------------
 
 EXTERN_CVAR(Bool, gl_portals)
+EXTERN_CVAR(Bool, gl_no_skyclear)
 EXTERN_CVAR(Bool, gl_noquery)
 EXTERN_CVAR(Int, r_mirror_recursions)
 
@@ -538,12 +539,14 @@ void GLPortal::EndFrame()
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
+		if (!gl_no_skyclear && !gl_portals)
+			RenderFirstSkyPortal(renderdepth > 0 ? renderdepth - 1 : 0);
 		// Process only this frame's queue; the sentinel preserves an outer target.
 		unsigned int captured = 0;
 		while (portals.Pop(p))
 		{
 			if (p == NULL) break;
-			if (p->RenderNative()) ++captured;
+			if (gl_portals && p->RenderNative()) ++captured;
 			delete p;
 		}
 		if (renderdepth > 0) --renderdepth;
@@ -668,7 +671,28 @@ bool GLPortal::RenderFirstSkyPortal(int recursion)
 
 	if (best)
 	{
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive() && !best->NeedDepthBuffer())
+		{
+			for (int i = portals.Size() - 1; i >= 0; --i)
+			{
+				GLPortal *other = portals[i];
+				if (other == NULL) break;
+				if (other == best || !other->IsSky() || other->NeedDepthBuffer()) continue;
+				for (unsigned int line = 0; line < other->lines.Size(); ++line)
+					best->lines.Push(other->lines[line]);
+			}
+		}
+#endif
 		portals.Delete(bestindex);
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+		{
+			if (best->NeedDepthBuffer()) best->RenderNative();
+			else best->DrawContents();
+		}
+		else
+#endif
 		best->RenderPortal(false, false);
 		delete best;
 		return true;

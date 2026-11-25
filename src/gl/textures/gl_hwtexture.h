@@ -94,4 +94,7 @@ public:
 	void Clean(bool all);
 };
 
+void gl_ResizeTexture(int texwidth, int texheight, int width, int height,
+	const unsigned char *src_data, unsigned char *dst_data);
+
 #endif

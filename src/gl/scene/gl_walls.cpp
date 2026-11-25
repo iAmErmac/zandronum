@@ -65,6 +65,8 @@
 #include "gl/utility/gl_templates.h"
 #include "gl/shaders/gl_shader.h"
 
+EXTERN_CVAR(Bool, gl_portals)
+
 
 //==========================================================================
 //
@@ -159,7 +161,7 @@ void GLWall::PutWall(bool translucent)
 		SetupLights(gl_lights && GLRenderer->mLightCount > 0);
 		// Special portal surfaces need their own target; ordinary walls can be
 		// collected directly while the scene is traversed.
-		if (type == RENDERWALL_SKY)
+		if (type == RENDERWALL_SKY && gl_portals)
 		{
 			if (sky != NULL && sky->texture[0] != NULL)
 			{
@@ -188,7 +190,7 @@ void GLWall::PutWall(bool translucent)
 				DoDrawDecals();
 			}
 		}
-		else if (type != RENDERWALL_SKYBOX && type != RENDERWALL_MIRROR &&
+		else if (type != RENDERWALL_SKY && type != RENDERWALL_SKYBOX && type != RENDERWALL_MIRROR &&
 			type != RENDERWALL_SECTORSTACK && type != RENDERWALL_PLANEMIRROR && type != RENDERWALL_HORIZON)
 		{
 			// Unsupported portal types keep their source surface until a native

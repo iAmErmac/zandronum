@@ -37,6 +37,7 @@ GLuint gl_GLESInternalFindMaterialTexture(const void *key, int colormap, int tra
 GLuint gl_GLESInternalFindStaticMaterialTexture(const void *key, int colormap, int translation,
 	bool repeat, bool allowhires);
 void gl_GLESInternalInvalidateMaterial(const void *key);
+void gl_GLESInternalEvictMaterial(const void *key, bool contextAvailable);
 GLuint gl_GLESInternalBindMaterial(bool resourcesAvailable, const void *key,
 	const unsigned char *pixels, int width, int height, bool repeat, int colormap,
 	int translation, bool allowhires, bool palette, bool noFilter = false, bool noCompression = false);

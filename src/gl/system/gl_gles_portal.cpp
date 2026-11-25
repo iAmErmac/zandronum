@@ -49,6 +49,22 @@ namespace
 		FGLESSkyPrimitiveRange skyboxFaces[6];
 	};
 
+	struct FPortalFallbackTarget
+	{
+		FGLESTargetDescriptor surface;
+		int requestedWidth;
+		int requestedHeight;
+		int requestedSamples;
+		bool allocationFailed;
+	};
+
+	struct FPortalFallbackPool
+	{
+		std::deque<FPortalFallbackTarget> targets;
+		size_t targetsInUse;
+		bool allocationFailureReported;
+	};
+
 	struct FPortalResources
 	{
 		GLuint compositeProgram;
@@ -58,9 +74,7 @@ namespace
 		GLint forceFarDepth;
 		GLint solidColor;
 		// Parent surfaces remain referenced while nested captures append targets.
-		std::deque<FGLESTargetDescriptor> fallbackTargets;
-		size_t fallbackTargetsInUse;
-		bool allocationFailureReported;
+		FPortalFallbackPool fallbackPools[2];
 		FSkyGeometry sky;
 		std::vector<FSkyVertex> skyVertices;
 		std::vector<GLushort> skyIndices;
@@ -530,39 +544,61 @@ FGLESSkyPrimitiveRange gl_GLESInternalPortalSkyboxFace(int face)
 
 void gl_GLESInternalPortalBeginFrame()
 {
-	Portal.fallbackTargetsInUse = 0;
+	for (FPortalFallbackPool &pool : Portal.fallbackPools)
+	{
+		pool.targetsInUse = 0;
+		for (FPortalFallbackTarget &target : pool.targets)
+			target.allocationFailed = false;
+	}
 }
 
-bool gl_GLESInternalPortalAcquireFallbackTarget(int width, int height, int *index)
+FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int height, int requestedSamples,
+	bool offscreen, int *index)
 {
 	if (index == nullptr || width <= 0 || height <= 0 || !gl_GLES_HasContext())
-		return false;
-	const size_t targetIndex = Portal.fallbackTargetsInUse++;
-	if (targetIndex >= Portal.fallbackTargets.size())
-		Portal.fallbackTargets.resize(targetIndex + 1);
-	FGLESTargetDescriptor &target = Portal.fallbackTargets[targetIndex];
-	if (target.framebuffer == 0 || target.renderWidth != width || target.renderHeight != height)
+		return nullptr;
+	FPortalFallbackPool &pool = Portal.fallbackPools[offscreen ? 1 : 0];
+	const int samples = std::max(requestedSamples, 1);
+	const size_t targetIndex = pool.targetsInUse;
+	if (targetIndex >= pool.targets.size())
+		pool.targets.resize(targetIndex + 1);
+	FPortalFallbackTarget &entry = pool.targets[targetIndex];
+	const bool sameRequest = entry.requestedWidth == width && entry.requestedHeight == height &&
+		entry.requestedSamples == samples;
+	if (sameRequest && entry.allocationFailed)
 	{
-		if (!gl_GLES_CreateRenderTarget(&target, width, height, 1))
+		return nullptr;
+	}
+	if (!sameRequest)
+	{
+		entry.requestedWidth = width;
+		entry.requestedHeight = height;
+		entry.requestedSamples = samples;
+		entry.allocationFailed = false;
+	}
+	if (!sameRequest || entry.surface.framebuffer == 0)
+	{
+		if (!gl_GLES_CreateRenderTarget(&entry.surface, width, height, samples))
 		{
-			if (!Portal.allocationFailureReported)
+			entry.allocationFailed = true;
+			if (!pool.allocationFailureReported)
 			{
-				Portal.allocationFailureReported = true;
+				pool.allocationFailureReported = true;
 				gl_GLES_Report("portal", "dedicated capture target allocation failed; this capture will use a black aperture fallback");
 			}
-			*index = static_cast<int>(targetIndex);
-			return false;
+			return nullptr;
 		}
 	}
+	++pool.targetsInUse;
 	*index = static_cast<int>(targetIndex);
-	return true;
+	return &entry.surface;
 }
 
-FGLESTargetDescriptor *gl_GLESInternalPortalGetFallbackTarget(int index)
+void gl_GLESInternalPortalReleaseFallbackTarget(bool offscreen, int index)
 {
-	if (index < 0 || static_cast<size_t>(index) >= Portal.fallbackTargets.size())
-		return nullptr;
-	return &Portal.fallbackTargets[static_cast<size_t>(index)];
+	FPortalFallbackPool &pool = Portal.fallbackPools[offscreen ? 1 : 0];
+	if (index >= 0 && static_cast<size_t>(index) + 1 == pool.targetsInUse)
+		--pool.targetsInUse;
 }
 
 bool gl_GLESInternalPortalInitialize()
@@ -577,11 +613,14 @@ void gl_GLESInternalPortalDestroy()
 		glDeleteProgram(Portal.compositeProgram);
 	Portal.compositeProgram = 0;
 	ResetUniforms();
-	for (FGLESTargetDescriptor &target : Portal.fallbackTargets)
-		gl_GLES_DestroyRenderTarget(&target);
-	Portal.fallbackTargets.clear();
-	Portal.fallbackTargetsInUse = 0;
-	Portal.allocationFailureReported = false;
+	for (FPortalFallbackPool &pool : Portal.fallbackPools)
+	{
+		for (FPortalFallbackTarget &target : pool.targets)
+			gl_GLES_DestroyRenderTarget(&target.surface);
+		pool.targets.clear();
+		pool.targetsInUse = 0;
+		pool.allocationFailureReported = false;
+	}
 }
 
 void gl_GLESInternalPortalContextLost()
@@ -592,9 +631,18 @@ void gl_GLESInternalPortalContextLost()
 	Portal.skyUploadKnown = false;
 	Portal.compositeProgram = 0;
 	ResetUniforms();
-	for (FGLESTargetDescriptor &target : Portal.fallbackTargets)
-		gl_GLES_InvalidateRenderTarget(&target);
-	Portal.fallbackTargetsInUse = 0;
+	for (FPortalFallbackPool &pool : Portal.fallbackPools)
+	{
+		for (FPortalFallbackTarget &target : pool.targets)
+		{
+			gl_GLES_InvalidateRenderTarget(&target.surface);
+			target.requestedWidth = 0;
+			target.requestedHeight = 0;
+			target.requestedSamples = 0;
+			target.allocationFailed = false;
+		}
+		pool.targetsInUse = 0;
+	}
 }
 
 bool gl_GLESInternalPortalComposite(const FGLESPortalComposite &config)

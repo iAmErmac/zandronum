@@ -52,6 +52,10 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/textures/gl_texture.h"
 #include "gl/textures/gl_material.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_internal.h"
+#include "gl/system/gl_gles_renderer.h"
+#endif
 
 //==========================================================================
 //
@@ -343,6 +347,10 @@ void FTexture::PrecacheGL()
 
 void FTexture::UncacheGL()
 {
+	#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	if (gl_GLES_IsActive() && !bHasCanvas && gl_info.Material != NULL)
+		gl_GLESInternalEvictMaterial(gl_info.Material, gl_GLES_CanUseResources());
+	#endif
 	if (gl_info.Material) gl_info.Material->Clean(true); 
 }
 

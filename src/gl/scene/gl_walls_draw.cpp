@@ -389,10 +389,12 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 	if (gl_GLES_IsActive())
 	{
 		if (light != NULL) return;
+		const bool noFog = type == RENDERWALL_M2SNF;
 		FColormap lightingColormap = Colormap;
 		const bool unfoggedBase = textured == 3 && (flags & GLWF_FOGGY) && gl_GLES_UsesUntexturedBasePass();
 		if (unfoggedBase) lightingColormap.FadeColor = 0;
-		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rellight + getExtraLight(), &lightingColormap);
+		FShaderLightParameters lighting = gl_GetShaderLightParameters(lightlevel, rellight + getExtraLight(),
+			noFog ? NULL : &lightingColormap);
 		if (unfoggedBase)
 		{
 			lighting.factor = 1.0f;
@@ -403,8 +405,9 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			color + 0, color + 1, color + 2);
 		float fogColor[3];
 		float fogDensity;
-		const bool nativeFog = gl_GetFogParameters(lightlevel, &Colormap,
-			RenderStyle == STYLE_Add, fogColor, &fogDensity) && !unfoggedBase;
+		const bool nativeFog = gl_GetFogParameters(noFog ? 255 : lightlevel,
+			noFog ? NULL : &Colormap, !noFog && RenderStyle == STYLE_Add,
+			fogColor, &fogDensity) && !unfoggedBase && !noFog;
 		float projectedFogDensity = 0.0f;
 		if (!gl_dynlight_shader && gl_lights)
 		{
@@ -456,6 +459,8 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 			((flags & GLWF_FOGGY) ? GLES_MATERIAL_PROJECTED_FOG : 0) |
 			(unfoggedBase ? GLES_MATERIAL_INHERIT_FOG : 0) |
 			(gl_GLES_MaskedTextureRGB() ? GLES_MATERIAL_MASK_TEXTURE_RGB : 0) |
+			(((flags & GLWF_SKYHACK) && type == RENDERWALL_M2S) || type == RENDERWALL_COLORLAYER ?
+				GLES_MATERIAL_WALL_DEPTH_BIAS : 0) |
 			GLES_MATERIAL_WORLD_SURFACE | ((flags & GLT_CLAMPX) ? GLES_MATERIAL_CLAMP_X : 0) |
 			((flags & GLT_CLAMPY) ? GLES_MATERIAL_CLAMP_Y : 0);
 		std::vector<float> edgePositions, edgeTexcoords, edgeGlowDistances;
@@ -470,14 +475,14 @@ void GLWall::RenderWall(int textured, float * color2, ADynamicLight * light)
 		const bool splitEdges = !edgeIndices.empty();
 		gl_GLES_AddWall(splitEdges ? edgePositions.data() : positions,
 			splitEdges ? edgeTexcoords.data() : texcoords, color, color2 != NULL ? 1.0f : alpha,
-			texture, gltexture != NULL && gltexture->isMasked() &&
+			texture, gltexture != NULL && gltexture->isMasked() && !transparent &&
 				type != RENDERWALL_TOP && type != RENDERWALL_M1S && type != RENDERWALL_BOTTOM,
 			nativeFog, true, fogColor, fogDensity,
 			blendMode, materialFlags, nativeLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
 			Colormap.colormap : 0, glowing ? topglowcolor : NULL, glowing ? bottomglowcolor : NULL,
 			glowing ? (splitEdges ? edgeGlowDistances.data() : glowDistances) : NULL,
-			&lighting, transparent ? 0.0f : 0.5f, false, 0, 0, projectedFogDensity,
+			&lighting, transparent ? 0.0f : gl_mask_threshold * fabsf(alpha), false, 0, 0, projectedFogDensity,
 			splitEdges ? edgeIndices.data() : NULL, splitEdges ? static_cast<unsigned int>(edgePositions.size() / 3) : 4,
 			splitEdges ? static_cast<unsigned int>(edgeIndices.size()) : 6);
 		vertexcount += splitEdges ? static_cast<int>(edgePositions.size() / 3) : 4;

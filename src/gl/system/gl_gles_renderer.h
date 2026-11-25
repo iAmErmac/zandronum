@@ -68,7 +68,9 @@ enum EGLESMaterialFlags
 	GLES_MATERIAL_MASK_TEXTURE_RGB = 4194304,
 	GLES_MATERIAL_INHERIT_FOG = 8388608,
 	GLES_MATERIAL_PROJECTED_FOG = 16777216,
-	GLES_MATERIAL_PROJECTED_BASE = 33554432
+	GLES_MATERIAL_PROJECTED_BASE = 33554432,
+	GLES_MATERIAL_WALL_DEPTH_BIAS = 134217728,
+	GLES_MATERIAL_DECAL_STRICT_ALPHA = 67108864
 };
 
 enum EGLESPrimitiveMode
@@ -92,6 +94,7 @@ void gl_GLES_BeginWipeOverlay();
 void gl_GLES_EndWipeOverlay();
 void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	float cameraYaw, float cameraPitch, float cameraRoll, float fieldOfView, float aspect, float fovRatio);
+void gl_GLES_SetSceneClearColor(float red, float green, float blue);
 void gl_GLES_ClearScene();
 void gl_GLES_SetFlatCollectionDeferred(bool deferred);
 bool gl_GLES_IsFlatCollectionDeferred();
@@ -116,7 +119,7 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 	unsigned int materialFlags = 0, const float *lightData = 0, const unsigned int *lightCounts = 0,
 	unsigned int brightmap = 0, int brightmapDesaturation = 0,
 	const FShaderLightParameters *lighting = 0, float projectedFogDensity = 0.0f,
-	const float *lightPlaneNormal = 0, float lightPlaneOffset = 0.0f);
+	const float *lightPlaneNormal = 0, float lightPlaneOffset = 0.0f, float alphaCutoff = 0.5f);
 void gl_GLES_AddFloodPlane(const float *wallPositions, const float *planePositions,
 	const float *texcoords, const float *color, unsigned int texture, bool fog,
 	const float *fogColor, float fogDensity, const FShaderLightParameters *lighting = 0);
@@ -133,7 +136,8 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int materialFlags = 0, const float *normals = 0, unsigned int brightmap = 0,
 	int brightmapDesaturation = 0, bool cullBackFaces = false, bool customBlend = false,
 	int sourceBlend = 0, int destinationBlend = 0,
-	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f);
+	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f,
+	bool hudModel = false);
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
 	EGLESBlendMode blendMode, unsigned int materialFlags = 0, bool customBlend = false,

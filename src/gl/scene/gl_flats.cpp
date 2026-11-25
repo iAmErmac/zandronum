@@ -404,7 +404,8 @@ void GLFlat::DrawSubsector(subsector_t * sub)
 			(gl_GLES_MaskedTextureRGB() ? GLES_MATERIAL_MASK_TEXTURE_RGB : 0),
 			nativeFlatLightCounts[2] > 0 ? &lightdata.arrays[0][0] : NULL, nativeFlatLightCounts,
 			brightmap, (Colormap.colormap >= CM_DESAT0 && Colormap.colormap <= CM_DESAT31) ?
-				Colormap.colormap : 0, &lighting, projectedFogDensity, lightPlaneNormal, -dz * lightPlaneNormal[1]);
+				Colormap.colormap : 0, &lighting, projectedFogDensity, lightPlaneNormal, -dz * lightPlaneNormal[1],
+				gl_mask_threshold * alpha);
 		return;
 	}
 #endif

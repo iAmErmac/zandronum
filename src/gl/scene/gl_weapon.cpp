@@ -86,13 +86,22 @@ void FGLRenderer::DrawPSprite (player_t * player,pspdef_t *psp,fixed_t sx, fixed
 		FRACUNIT, FRACUNIT*40/51, FRACUNIT*4/7};
 	
 	// [BB] In the HUD model step we just render the model and break out.
-#if !defined(__ANDROID__)
 	if ( hudModelStep )
 	{
+#if defined(__ANDROID__)
+		gl_RenderHUDModelNative(psp, sx, sy, cm_index,
+			nativeAlpha, nativeMaterialFlags, nativeStyle, nativeColor);
+#elif defined(ZANDRONUM_GLES_BACKEND)
+		if (gl_GLES_IsActive())
+			gl_RenderHUDModelNative(psp, sx, sy, cm_index,
+				nativeAlpha, nativeMaterialFlags, nativeStyle, nativeColor);
+		else
+			gl_RenderHUDModel(psp, sx, sy, cm_index);
+#else
 		gl_RenderHUDModel( psp, sx, sy, cm_index );
+#endif
 		return;
 	}
-#endif
 
 	// decide which patch to use
 	bool mirror;
