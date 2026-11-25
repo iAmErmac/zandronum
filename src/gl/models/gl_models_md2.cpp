@@ -384,7 +384,6 @@ struct FNativeMD2Scratch
 {
 	std::vector<float> positions;
 	std::vector<float> texcoords;
-	std::vector<float> normals;
 };
 
 void FDMDModel::BuildNativeCommandStream()
@@ -457,33 +456,25 @@ bool FDMDModel::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 	static FNativeMD2Scratch scratch;
 	std::vector<float> &positions = scratch.positions;
 	std::vector<float> &texcoords = scratch.texcoords;
-	std::vector<float> &normals = scratch.normals;
 	positions.clear();
 	texcoords.clear();
-	normals.clear();
 	positions.reserve(mNativeCommandVertices.Size() * 3);
 	texcoords.reserve(mNativeCommandVertices.Size() * 2);
-	normals.reserve(mNativeCommandVertices.Size() * 3);
 	for (unsigned int vertex = 0; vertex < mNativeCommandVertices.Size(); ++vertex)
 	{
 		const FGLCommandVertex &commandVertex = mNativeCommandVertices[vertex];
 		const FModelVertex &a = firstFrame->vertices[commandVertex.index];
 		const FModelVertex &b = secondFrame->vertices[commandVertex.index];
-		const FModelVertex &normalA = firstFrame->normals[commandVertex.index];
-		const FModelVertex &normalB = secondFrame->normals[commandVertex.index];
 		positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[0] + inter * b.xyz[0]));
 		positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[1] + inter * b.xyz[1]));
 		positions.push_back(static_cast<float>((1.0 - inter) * a.xyz[2] + inter * b.xyz[2]));
-		normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[0] + inter * normalB.xyz[0]));
-		normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[1] + inter * normalB.xyz[1]));
-		normals.push_back(static_cast<float>((1.0 - inter) * normalA.xyz[2] + inter * normalB.xyz[2]));
 		texcoords.push_back(commandVertex.s);
 		texcoords.push_back(commandVertex.t);
 	}
 	if (mNativeCommandIndices.Size() == 0) return false;
 	collector->SubmitSurface(&positions[0], &texcoords[0],
 		static_cast<unsigned int>(positions.size() / 3), &mNativeCommandIndices[0],
-		static_cast<unsigned int>(mNativeCommandIndices.Size()), skin, &normals[0]);
+		static_cast<unsigned int>(mNativeCommandIndices.Size()), skin);
 	return true;
 }
 #endif

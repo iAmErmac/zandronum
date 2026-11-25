@@ -12,6 +12,7 @@
 #endif
 #include <chrono>
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <math.h>
 #include <stdint.h>
@@ -70,7 +71,6 @@ namespace
 	struct FSceneVertex
 	{
 		GLfloat x, y, z;
-		GLfloat nx, ny, nz;
 		GLfloat u, v;
 		GLfloat r, g, b, a;
 		GLfloat glowTopDistance, glowBottomDistance;
@@ -2188,8 +2188,7 @@ namespace
 			"layout(location = 0) in vec3 a_position;\n"
 			"layout(location = 1) in vec2 a_uv;\n"
 			"layout(location = 2) in vec4 a_color;\n"
-			"layout(location = 3) in vec3 a_normal;\n"
-			"layout(location = 4) in vec2 a_secondary;\n"
+			"layout(location = 3) in vec2 a_secondary;\n"
 			"out vec2 v_uv;\n"
 			"out vec4 v_color;\n"
 			"out vec3 v_world_position;\n"
@@ -2550,15 +2549,17 @@ namespace
 		glBindBuffer(GL_ARRAY_BUFFER, Resources.sceneVertexBuffer);
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Resources.sceneIndexBuffer);
 		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(0));
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex),
+			reinterpret_cast<const void *>(offsetof(FSceneVertex, x)));
 		glEnableVertexAttribArray(1);
-		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(6 * sizeof(GLfloat)));
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex),
+			reinterpret_cast<const void *>(offsetof(FSceneVertex, u)));
 		glEnableVertexAttribArray(2);
-		glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(8 * sizeof(GLfloat)));
+		glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex),
+			reinterpret_cast<const void *>(offsetof(FSceneVertex, r)));
 		glEnableVertexAttribArray(3);
-		glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(3 * sizeof(GLfloat)));
-		glEnableVertexAttribArray(4);
-		glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex), reinterpret_cast<const void *>(12 * sizeof(GLfloat)));
+		glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(FSceneVertex),
+			reinterpret_cast<const void *>(offsetof(FSceneVertex, glowTopDistance)));
 		glBindVertexArray(0);
 		BuildCheckerTexture();
 		ConfigureNativeSamplers();
@@ -3115,7 +3116,6 @@ void gl_GLES_AddWall(const float *positions, const float *texcoords,
 		vertices[i].x = positions[i * 3 + 0];
 		vertices[i].y = positions[i * 3 + 1];
 		vertices[i].z = positions[i * 3 + 2];
-		vertices[i].nx = vertices[i].ny = vertices[i].nz = 0.0f;
 		vertices[i].u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
 		vertices[i].v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
 		if (sphereMap)
@@ -3181,7 +3181,6 @@ void gl_GLES_AddFlat(const float *positions, const float *texcoords,
 		vertex.x = positions[i * 3 + 0];
 		vertex.y = positions[i * 3 + 1];
 		vertex.z = positions[i * 3 + 2];
-		vertex.nx = vertex.ny = vertex.nz = 0.0f;
 		vertex.u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
 		vertex.v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
 		vertex.r = rgb[0];
@@ -3365,7 +3364,6 @@ void gl_GLES_AddHUDPrimitive(const float *positions, const float *texcoords,
 		vertex.x = positions[i * 3 + 0];
 		vertex.y = positions[i * 3 + 1];
 		vertex.z = positions[i * 3 + 2];
-		vertex.nx = vertex.ny = vertex.nz = 0.0f;
 		vertex.u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
 		vertex.v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
 		vertex.r = rgb[0];
@@ -3424,7 +3422,6 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 		vertices[i].x = positions[i * 3 + 0];
 		vertices[i].y = positions[i * 3 + 1];
 		vertices[i].z = positions[i * 3 + 2];
-		vertices[i].nx = vertices[i].ny = vertices[i].nz = 0.0f;
 		vertices[i].u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
 		vertices[i].v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
 		vertices[i].r = rgb[0];
@@ -3454,12 +3451,14 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode, unsigned int materialFlags,
-	const float *normals, unsigned int brightmap, int brightmapDesaturation, bool cullBackFaces,
+	unsigned int brightmap, int brightmapDesaturation, bool cullBackFaces,
 	bool customBlend, int sourceBlend, int destinationBlend,
-	const FShaderLightParameters *lighting, float alphaCutoff, bool hudModel)
+	const FShaderLightParameters *lighting, float alphaCutoff, bool hudModel,
+	bool voxelQuads)
 {
 	if (!gl_GLES_CanUseResources() || positions == NULL || indices == NULL ||
-		vertexCount == 0 || indexCount < 3 || (indexCount % 3) != 0) return;
+		vertexCount == 0 || indexCount < 3 || (indexCount % 3) != 0 ||
+		(voxelQuads && (indexCount % 6) != 0)) return;
 	FScopedProfileTimer timer(Profile.modelCollectionMilliseconds);
 	const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
 	if (!CanAppendSceneGeometry(vertexCount, indexCount, "model surface")) return;
@@ -3473,9 +3472,6 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 		value.x = positions[vertex * 3 + 0];
 		value.y = positions[vertex * 3 + 1];
 		value.z = positions[vertex * 3 + 2];
-		value.nx = normals != NULL ? normals[vertex * 3 + 0] : 0.0f;
-		value.ny = normals != NULL ? normals[vertex * 3 + 1] : 0.0f;
-		value.nz = normals != NULL ? normals[vertex * 3 + 2] : 0.0f;
 		value.u = texcoords != NULL ? texcoords[vertex * 2 + 0] : 0.0f;
 		value.v = texcoords != NULL ? texcoords[vertex * 2 + 1] : 0.0f;
 		value.r = rgb[0];
@@ -3493,13 +3489,38 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	float centerX = 0.0f;
 	float centerY = 0.0f;
 	float centerZ = 0.0f;
-	for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
+	unsigned int occurrenceCount = vertexCount;
+	if (voxelQuads)
 	{
-		centerX += positions[vertex * 3 + 0];
-		centerY += positions[vertex * 3 + 1];
-		centerZ += positions[vertex * 3 + 2];
+		const unsigned int quadCount = indexCount / 6;
+		occurrenceCount = quadCount * 4;
+		for (unsigned int quad = 0; quad < quadCount; ++quad)
+		{
+			const unsigned int base = quad * 6;
+			const unsigned int corners[4] =
+			{
+				indices[base + 0], indices[base + 1],
+				indices[base + 2], indices[base + 5]
+			};
+			for (unsigned int corner = 0; corner < 4; ++corner)
+			{
+				const unsigned int vertex = corners[corner];
+				centerX += positions[vertex * 3 + 0];
+				centerY += positions[vertex * 3 + 1];
+				centerZ += positions[vertex * 3 + 2];
+			}
+		}
 	}
-	const float inverseCount = 1.0f / static_cast<float>(vertexCount);
+	else
+	{
+		for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
+		{
+			centerX += positions[vertex * 3 + 0];
+			centerY += positions[vertex * 3 + 1];
+			centerZ += positions[vertex * 3 + 2];
+		}
+	}
+	const float inverseCount = 1.0f / static_cast<float>(occurrenceCount);
 	centerX *= inverseCount;
 	centerY *= inverseCount;
 	centerZ *= inverseCount;
@@ -3558,7 +3579,6 @@ void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 		vertices[i].x = positions[i * 3 + 0];
 		vertices[i].y = positions[i * 3 + 1];
 		vertices[i].z = positions[i * 3 + 2];
-		vertices[i].nx = vertices[i].ny = vertices[i].nz = 0.0f;
 		vertices[i].u = texcoords != NULL ? texcoords[i * 2 + 0] : 0.0f;
 		vertices[i].v = texcoords != NULL ? texcoords[i * 2 + 1] : 0.0f;
 		vertices[i].r = rgb[0];

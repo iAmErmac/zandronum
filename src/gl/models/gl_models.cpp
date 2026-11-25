@@ -93,12 +93,6 @@ extern TDeletingArray<FVoxelDef *> VoxelDefs;
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 float gl_RollAgainstAngleHelper(const AActor *actor);
 
-struct FGLESModelScratch
-{
-	std::vector<float> worldPositions;
-	std::vector<float> worldNormals;
-};
-
 struct FGLESModelRenderState
 {
 	AActor *actor;
@@ -125,7 +119,7 @@ public:
 
 	void SubmitSurface(const float *positions, const float *texcoords,
 		unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
-		FTexture *skin, const float *normals) override
+		FTexture *skin, bool voxelQuads) override
 	{
 		if (positions == NULL || indices == NULL || skin == NULL || vertexCount == 0 || indexCount < 3)
 			return;
@@ -139,12 +133,8 @@ public:
 			gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			material->BindNativeBrightmap(true) : 0;
 		if (texture == 0) return;
-		static FGLESModelScratch scratch;
-		std::vector<float> &worldPositions = scratch.worldPositions;
-		std::vector<float> &worldNormals = scratch.worldNormals;
+		static std::vector<float> worldPositions;
 		worldPositions.resize(vertexCount * 3);
-		if (normals != NULL) worldNormals.resize(vertexCount * 3);
-		else worldNormals.clear();
 		for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
 		{
 			float modelPosition[3] =
@@ -159,19 +149,6 @@ public:
 			worldPositions[vertex * 3 + 0] = worldPosition[0];
 			worldPositions[vertex * 3 + 1] = worldPosition[1];
 			worldPositions[vertex * 3 + 2] = worldPosition[2];
-			if (normals != NULL)
-			{
-				float worldNormal[3];
-				Transform.MultiplyDirection(normals + vertex * 3, worldNormal);
-				const float length = sqrtf(worldNormal[0] * worldNormal[0] +
-					worldNormal[1] * worldNormal[1] + worldNormal[2] * worldNormal[2]);
-				if (length > 0.0001f)
-				{
-					worldNormals[vertex * 3 + 0] = worldNormal[0] / length;
-					worldNormals[vertex * 3 + 1] = worldNormal[1] / length;
-					worldNormals[vertex * 3 + 2] = worldNormal[2] / length;
-				}
-			}
 		}
 		FColormap nativeColormap = Sprite->Colormap;
 		if (gl_spritebrightfog && Sprite->fullbright) nativeColormap.FadeColor = 0;
@@ -270,12 +247,13 @@ public:
 			fogColor, fogDensity, blendMode,
 			((Sprite->RenderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
 			(Sprite->RenderStyle.BlendOp == STYLEOP_Shadow ? GLES_MATERIAL_INHERIT_LIGHT : 0),
-			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
+			brightmap,
 			(Colormap >= CM_DESAT0 && Colormap <= CM_DESAT31) ? Colormap : 0,
 			!(Sprite->actor->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
 			sourceBlend, destinationBlend, &lighting,
 			Sprite->RenderStyle.BlendOp == STYLEOP_Shadow ?
-				nativeShadowCutoff / nativeAlpha * gl_mask_sprite_threshold : gl_mask_sprite_threshold);
+				nativeShadowCutoff / nativeAlpha * gl_mask_sprite_threshold : gl_mask_sprite_threshold,
+			false, voxelQuads);
 	}
 };
 
@@ -306,7 +284,7 @@ public:
 
 	void SubmitSurface(const float *positions, const float *texcoords,
 		unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
-		FTexture *skin, const float *normals) override
+		FTexture *skin, bool voxelQuads) override
 	{
 		if (positions == NULL || indices == NULL || skin == NULL || vertexCount == 0 || indexCount < 3)
 			return;
@@ -317,12 +295,8 @@ public:
 			gl_BrightmapsActive() && gl_fixedcolormap == CM_DEFAULT ?
 			material->BindNativeBrightmap(true) : 0;
 		if (texture == 0) return;
-		static FGLESModelScratch scratch;
-		std::vector<float> &worldPositions = scratch.worldPositions;
-		std::vector<float> &worldNormals = scratch.worldNormals;
+		static std::vector<float> worldPositions;
 		worldPositions.resize(vertexCount * 3);
-		if (normals != NULL) worldNormals.resize(vertexCount * 3);
-		else worldNormals.clear();
 		for (unsigned int vertex = 0; vertex < vertexCount; ++vertex)
 		{
 			float modelPosition[3] =
@@ -337,19 +311,6 @@ public:
 			worldPositions[vertex * 3 + 0] = worldPosition[0];
 			worldPositions[vertex * 3 + 1] = worldPosition[1];
 			worldPositions[vertex * 3 + 2] = worldPosition[2];
-			if (normals != NULL)
-			{
-				float worldNormal[3];
-				Transform.MultiplyDirection(normals + vertex * 3, worldNormal);
-				const float length = sqrtf(worldNormal[0] * worldNormal[0] +
-					worldNormal[1] * worldNormal[1] + worldNormal[2] * worldNormal[2]);
-				if (length > 0.0001f)
-				{
-					worldNormals[vertex * 3 + 0] = worldNormal[0] / length;
-					worldNormals[vertex * 3 + 1] = worldNormal[1] / length;
-					worldNormals[vertex * 3 + 2] = worldNormal[2] / length;
-				}
-			}
 		}
 		float color[3];
 		if (State.forcedColor) memcpy(color, State.color, sizeof(color));
@@ -383,12 +344,12 @@ public:
 			materialFlags |
 			((State.renderStyle.Flags & STYLEF_RedIsAlpha) ? GLES_MATERIAL_RED_IS_ALPHA : 0) |
 			(State.renderStyle.BlendOp == STYLEOP_Shadow ? GLES_MATERIAL_INHERIT_LIGHT : 0),
-			worldNormals.empty() ? NULL : &worldNormals[0], brightmap,
+			brightmap,
 			(State.colormapIndex >= CM_DESAT0 && State.colormapIndex <= CM_DESAT31) ? State.colormapIndex : 0,
 			State.actor != NULL && !(State.actor->RenderStyle == LegacyRenderStyles[STYLE_Normal]), customBlend,
 			sourceBlend, destinationBlend, &lighting,
 			gl_mask_sprite_threshold,
-			true);
+			true, voxelQuads);
 	}
 };
 

@@ -60,6 +60,8 @@
 #include "gl/utility/gl_convert.h"
 #include "gl/renderer/gl_renderstate.h"
 
+#include <limits>
+
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 #include "gl/system/gl_gles_renderer.h"
 #endif
@@ -310,8 +312,13 @@ FVoxelModel::FVoxelModel(FVoxel *voxel, bool owned)
 	mVoxel = voxel;
 	mOwningVoxel = owned;
 	mVBO = NULL;
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+	mNativeGeometryBuilt = false;
+#endif
 	mPalette = new FVoxelTexture(voxel);
+#if !defined(__ANDROID__)
 	Initialize();
+#endif
 }
 
 //===========================================================================
@@ -456,47 +463,37 @@ void FVoxelModel::Initialize()
 			}
 		}
 	}
-#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-	BuildNativeGeometry();
-#endif
 }
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
-static void CalculateNativeVoxelNormal(const FVoxelVertex &a, const FVoxelVertex &b,
-	const FVoxelVertex &c, float normal[3])
-{
-	const float edge1[3] = { b.x - a.x, b.y - a.y, b.z - a.z };
-	const float edge2[3] = { c.x - a.x, c.y - a.y, c.z - a.z };
-	normal[0] = edge1[1] * edge2[2] - edge1[2] * edge2[1];
-	normal[1] = edge1[2] * edge2[0] - edge1[0] * edge2[2];
-	normal[2] = edge1[0] * edge2[1] - edge1[1] * edge2[0];
-	const float length = sqrtf(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
-	if (length > 0.0001f)
-	{
-		normal[0] /= length;
-		normal[1] /= length;
-		normal[2] /= length;
-	}
-	else
-	{
-		normal[0] = 0.0f;
-		normal[1] = 0.0f;
-		normal[2] = 1.0f;
-	}
-}
-
 void FVoxelModel::BuildNativeGeometry()
 {
 	mNativePositions.Clear();
 	mNativeTexcoords.Clear();
-	mNativeNormals.Clear();
 	mNativeIndices.Clear();
-	const unsigned int quadCount = mIndices.Size() / 4;
-	if (quadCount == 0) return;
-	mNativePositions.Resize(quadCount * 12);
-	mNativeTexcoords.Resize(quadCount * 8);
-	mNativeNormals.Resize(quadCount * 12);
+	const unsigned int vertexCount = static_cast<unsigned int>(mVertices.Size());
+	const unsigned int indexCount = static_cast<unsigned int>(mIndices.Size());
+	if (vertexCount == 0 || indexCount < 4 || (indexCount % 4) != 0) return;
+	const unsigned int quadCount = indexCount / 4;
+	for (unsigned int index = 0; index < indexCount; ++index)
+	{
+		const unsigned int vertexIndex = mIndices[index];
+		if (vertexIndex >= vertexCount) return;
+	}
+	const unsigned int maxSize = std::numeric_limits<unsigned int>::max();
+	if (vertexCount > maxSize / 3 || quadCount > maxSize / 6) return;
+	mNativePositions.Resize(vertexCount * 3);
+	mNativeTexcoords.Resize(vertexCount * 2);
 	mNativeIndices.Resize(quadCount * 6);
+	for (unsigned int vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
+	{
+		const FVoxelVertex &vertex = mVertices[vertexIndex];
+		mNativePositions[vertexIndex * 3 + 0] = vertex.x;
+		mNativePositions[vertexIndex * 3 + 1] = vertex.y;
+		mNativePositions[vertexIndex * 3 + 2] = vertex.z;
+		mNativeTexcoords[vertexIndex * 2 + 0] = vertex.u;
+		mNativeTexcoords[vertexIndex * 2 + 1] = vertex.v;
+	}
 	for (unsigned int quad = 0; quad < quadCount; ++quad)
 	{
 		const unsigned int input = quad * 4;
@@ -504,43 +501,13 @@ void FVoxelModel::BuildNativeGeometry()
 		const unsigned int b = mIndices[input + 1];
 		const unsigned int c = mIndices[input + 2];
 		const unsigned int d = mIndices[input + 3];
-		if (a >= mVertices.Size() || b >= mVertices.Size() ||
-			c >= mVertices.Size() || d >= mVertices.Size())
-		{
-			mNativePositions.Clear();
-			mNativeTexcoords.Clear();
-			mNativeNormals.Clear();
-			mNativeIndices.Clear();
-			return;
-		}
-		const FVoxelVertex *corners[4] =
-		{
-			&mVertices[a], &mVertices[b], &mVertices[c], &mVertices[d]
-		};
-		float normal[3];
-		CalculateNativeVoxelNormal(*corners[0], *corners[1], *corners[2], normal);
-		const unsigned int firstVertex = quad * 4;
-		for (unsigned int corner = 0; corner < 4; ++corner)
-		{
-			const FVoxelVertex &vertex = *corners[corner];
-			const unsigned int positionOffset = (firstVertex + corner) * 3;
-			const unsigned int textureOffset = (firstVertex + corner) * 2;
-			mNativePositions[positionOffset + 0] = vertex.x;
-			mNativePositions[positionOffset + 1] = vertex.y;
-			mNativePositions[positionOffset + 2] = vertex.z;
-			mNativeTexcoords[textureOffset + 0] = vertex.u;
-			mNativeTexcoords[textureOffset + 1] = vertex.v;
-			mNativeNormals[positionOffset + 0] = normal[0];
-			mNativeNormals[positionOffset + 1] = normal[1];
-			mNativeNormals[positionOffset + 2] = normal[2];
-		}
 		const unsigned int indexOffset = quad * 6;
-		mNativeIndices[indexOffset + 0] = firstVertex + 0;
-		mNativeIndices[indexOffset + 1] = firstVertex + 1;
-		mNativeIndices[indexOffset + 2] = firstVertex + 2;
-		mNativeIndices[indexOffset + 3] = firstVertex + 0;
-		mNativeIndices[indexOffset + 4] = firstVertex + 2;
-		mNativeIndices[indexOffset + 5] = firstVertex + 3;
+		mNativeIndices[indexOffset + 0] = a;
+		mNativeIndices[indexOffset + 1] = b;
+		mNativeIndices[indexOffset + 2] = c;
+		mNativeIndices[indexOffset + 3] = a;
+		mNativeIndices[indexOffset + 4] = c;
+		mNativeIndices[indexOffset + 5] = d;
 	}
 #if defined(__ANDROID__)
 	mVertices.Clear();
@@ -659,14 +626,23 @@ void FVoxelModel::RenderFrameInterpolated(FTexture * skin, int frame, int frame2
 bool FVoxelModel::RenderFrameNative(FTexture *skin, int frame, int frame2, double inter,
 	int cm, int translation, FModelNativeCollector *collector)
 {
-	if (collector == NULL || mNativePositions.Size() == 0 ||
-		mNativeTexcoords.Size() == 0 || mNativeNormals.Size() == 0 ||
+	if (collector == NULL) return false;
+	if (!mNativeGeometryBuilt)
+	{
+	#if defined(__ANDROID__)
+		Initialize();
+	#endif
+		BuildNativeGeometry();
+		mNativeGeometryBuilt = true;
+	}
+	if (mNativePositions.Size() == 0 ||
+		mNativeTexcoords.Size() == 0 ||
 		mNativeIndices.Size() < 6)
 		return false;
 	collector->SubmitSurface(&mNativePositions[0], &mNativeTexcoords[0],
 		static_cast<unsigned int>(mNativePositions.Size() / 3), &mNativeIndices[0],
 		static_cast<unsigned int>(mNativeIndices.Size()), skin != NULL ? skin : mPalette,
-		&mNativeNormals[0]);
+		true);
 	return true;
 }
 #endif

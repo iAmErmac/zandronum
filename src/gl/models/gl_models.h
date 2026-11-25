@@ -29,7 +29,7 @@ public:
 	virtual ~FModelNativeCollector() {}
 	virtual void SubmitSurface(const float *positions, const float *texcoords,
 		unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
-		FTexture *skin, const float *normals = NULL) = 0;
+		FTexture *skin, bool voxelQuads = false) = 0;
 };
 #endif
 
@@ -323,8 +323,8 @@ protected:
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	TArray<float> mNativePositions;
 	TArray<float> mNativeTexcoords;
-	TArray<float> mNativeNormals;
 	TArray<unsigned int> mNativeIndices;
+	bool mNativeGeometryBuilt;
 	void BuildNativeGeometry();
 #endif
 	

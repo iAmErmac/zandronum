@@ -133,11 +133,11 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	unsigned int vertexCount, const unsigned int *indices, unsigned int indexCount,
 	const float *color, float alpha, bool masked, bool fog, unsigned int texture,
 	const float *fogColor, float fogDensity, EGLESBlendMode blendMode,
-	unsigned int materialFlags = 0, const float *normals = 0, unsigned int brightmap = 0,
+	unsigned int materialFlags = 0, unsigned int brightmap = 0,
 	int brightmapDesaturation = 0, bool cullBackFaces = false, bool customBlend = false,
 	int sourceBlend = 0, int destinationBlend = 0,
 	const FShaderLightParameters *lighting = 0, float alphaCutoff = 0.5f,
-	bool hudModel = false);
+	bool hudModel = false, bool voxelQuads = false);
 void gl_GLES_AddHUDQuad(const float *positions, const float *texcoords,
 	const float *color, float alpha, bool masked, unsigned int texture,
 	EGLESBlendMode blendMode, unsigned int materialFlags = 0, bool customBlend = false,

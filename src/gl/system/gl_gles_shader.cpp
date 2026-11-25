@@ -149,8 +149,7 @@ GLuint gl_GLES_LinkProgram(const char *vertexSource, const char *fragmentSource,
 		gles.BindAttribLocation(program, 0, "a_position");
 		gles.BindAttribLocation(program, 1, "a_uv");
 		gles.BindAttribLocation(program, 2, "a_color");
-		gles.BindAttribLocation(program, 3, "a_normal");
-		gles.BindAttribLocation(program, 4, "a_secondary");
+		gles.BindAttribLocation(program, 3, "a_secondary");
 	}
 	gles.LinkProgram(program);
 	GLint linked = GL_FALSE;

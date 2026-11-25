@@ -330,7 +330,6 @@ struct FNativeMD3Scratch
 {
 	std::vector<float> positions;
 	std::vector<float> texcoords;
-	std::vector<float> normals;
 };
 
 bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, double inter,
@@ -376,13 +375,10 @@ bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 		}
 		std::vector<float> &positions = scratch.positions;
 		std::vector<float> &texcoords = scratch.texcoords;
-		std::vector<float> &normals = scratch.normals;
 		positions.clear();
 		texcoords.clear();
-		normals.clear();
 		positions.reserve(surface->numVertices * 3);
 		texcoords.reserve(surface->numVertices * 2);
-		normals.reserve(surface->numVertices * 3);
 		MD3Vertex *firstFrame = surface->vertices + frameno * surface->numVertices;
 		MD3Vertex *secondFrame = surface->vertices + frameno2 * surface->numVertices;
 		for (int vertex = 0; vertex < surface->numVertices; ++vertex)
@@ -396,19 +392,12 @@ bool FMD3Model::RenderFrameNative(FTexture *skin, int frameno, int frameno2, dou
 			positions.push_back(x);
 			positions.push_back(z);
 			positions.push_back(y);
-			const float nx = static_cast<float>((1.0 - inter) * a.nx + inter * b.nx);
-			const float ny = static_cast<float>((1.0 - inter) * a.ny + inter * b.ny);
-			const float nz = static_cast<float>((1.0 - inter) * a.nz + inter * b.nz);
-			// MD3 uses the same axis swap for normals as it does for positions.
-			normals.push_back(nx);
-			normals.push_back(nz);
-			normals.push_back(ny);
 			texcoords.push_back(surface->texcoords[vertex].s);
 			texcoords.push_back(surface->texcoords[vertex].t);
 		}
 		collector->SubmitSurface(&positions[0], &texcoords[0],
 			static_cast<unsigned int>(positions.size() / 3), &surface->nativeIndices[0],
-			static_cast<unsigned int>(surface->nativeIndices.Size()), surfaceSkin, &normals[0]);
+			static_cast<unsigned int>(surface->nativeIndices.Size()), surfaceSkin);
 		submitted = true;
 	}
 	return submitted;
