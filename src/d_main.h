@@ -42,7 +42,7 @@ struct CRestartException
 	char dummy;
 };
 
-void D_DoomMain (void);
+void D_DoomMain (const char *baseArchive = nullptr);
 
 
 void D_Display ();

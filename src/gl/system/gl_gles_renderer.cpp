@@ -101,6 +101,7 @@ namespace
 		bool cameraTexture;
 		bool palette;
 		bool flat;
+		bool sprite;
 		bool hud;
 		bool hudModel;
 		bool wipeOverlay;
@@ -627,6 +628,19 @@ namespace
 		return NativeWorldTextureMode(batch) == NATIVE_WORLD_MASKED ? flags | GLES_MATERIAL_COLOR_FIXED : flags;
 	}
 
+	static FGLESMaterialEffect NativeEffectiveMaterialEffect(const FSceneBatch &batch, unsigned int materialFlags)
+	{
+		FGLESMaterialEffect effect = batch.materialEffect;
+		if ((materialFlags & GLES_MATERIAL_FUZZ) != 0)
+		{
+			effect.shaderIndex = 0;
+			effect.speed = 0.0f;
+		}
+		if ((materialFlags & (GLES_MATERIAL_COLOR_FIXED | GLES_MATERIAL_SPHERE_MAP)) != 0)
+			effect.colormap = CM_DEFAULT;
+		return effect;
+	}
+
 	static void SetNativeMaterialUniforms(GLuint program, const FSceneBatch &batch)
 	{
 		auto found = NativeMaterialUniforms.find(program);
@@ -650,14 +664,7 @@ namespace
 			(batch.materialFlags & GLES_MATERIAL_PROJECTED_BASE) != 0 &&
 			(batch.materialFlags & GLES_MATERIAL_PROJECTED_FOG) == 0);
 		const unsigned int materialFlags = NativeMaterialFlags(batch);
-		FGLESMaterialEffect effect = batch.materialEffect;
-		if ((materialFlags & GLES_MATERIAL_FUZZ) != 0)
-		{
-			effect.shaderIndex = 0;
-			effect.speed = 0.0f;
-		}
-		if ((materialFlags & (GLES_MATERIAL_COLOR_FIXED | GLES_MATERIAL_SPHERE_MAP)) != 0)
-			effect.colormap = CM_DEFAULT;
+		FGLESMaterialEffect effect = NativeEffectiveMaterialEffect(batch, materialFlags);
 		unsigned int timerVariant = ((materialFlags & GLES_MATERIAL_GLOW) != 0 ? 1 : 0) |
 			(effect.colormap >= CM_DESAT1 && effect.colormap <= CM_DESAT31 ? 2 : 0) |
 			(batch.lightCount > 0 ? 4 : 0) | (glset.lightmode & 8);
@@ -968,10 +975,22 @@ namespace
 	static GLuint ResolveNativeMaterialProgram(GLuint base, const FSceneBatch &batch)
 	{
 		if (NativeWorldTextureMode(batch) == NATIVE_WORLD_UNTEXTURED) return base;
-		const FGLESMaterialEffect effect = batch.materialEffect;
-		if (effect.shaderIndex < FIRST_USER_SHADER || (batch.materialFlags & GLES_MATERIAL_FUZZ) != 0) return base;
+		if (batch.materialEffect.shaderIndex < FIRST_USER_SHADER) return base;
+		const unsigned int materialFlags = NativeMaterialFlags(batch);
+		const FGLESMaterialEffect effect = NativeEffectiveMaterialEffect(batch, materialFlags);
+		if (effect.shaderIndex < FIRST_USER_SHADER) return base;
 		const unsigned int variant = batch.fog ? (batch.masked ? 4 : 3) : (batch.masked ? 1 : (batch.palette ? 2 : 0));
-		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 5 + variant;
+		const bool specialColormap = effect.colormap >= CM_FIRSTSPECIALCOLORMAP && effect.colormap < CM_MAXCOLORMAP;
+		const bool fogLayerProgram = effect.colormap == CM_FOGLAYER || (materialFlags & GLES_MATERIAL_SPRITE_FOG_LAYER) != 0;
+		const bool ordinaryMaterial = !specialColormap && !fogLayerProgram;
+		const bool noGlow = !ordinaryMaterial || (materialFlags & GLES_MATERIAL_GLOW) == 0;
+		const bool desaturated = effect.colormap >= CM_DESAT1 && effect.colormap <= CM_DESAT31;
+		const bool noDesaturate = ordinaryMaterial && !desaturated;
+		const bool softLight = ordinaryMaterial && (glset.lightmode & 8) != 0;
+		const unsigned int macroVariant = (noGlow ? 1u : 0u) | (noDesaturate ? 2u : 0u);
+		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 40 +
+			macroVariant * 10 +
+			(softLight ? 5 : 0) + variant;
 		const auto found = NativeUserPrograms.find(key);
 		if (found != NativeUserPrograms.end()) return found->second;
 		if (NativeUserShaderFailures.find(key) != NativeUserShaderFailures.end()) return base;
@@ -1012,7 +1031,11 @@ namespace
 			"#define dlightcolor u_sprite_light\n"
 			"vec4 getLightColor(float fogdist, float fogfactor) { vec3 color = apply_static_light(v_color.rgb, fogdist); if (fogenabled > 0) color *= fogfactor; return vec4(apply_glow(color), v_color.a); }\n"
 			"vec4 applyFog(vec4 color, float factor) { return vec4(mix(u_fog_color.rgb, color.rgb, factor), color.a); }\n"
-			"vec4 getTexel(vec2 coords) { vec4 value = u_use_texture ? texture(u_texture, coords) : vec4(1.0); if ((u_material_flags & 4) != 0) value.a = 1.0; if (zandronum_masked_base || (u_material_flags & (16 | 64)) != 0) value.rgb = vec3(1.0); return desaturate(value); }\n";
+			"vec4 getTexel(vec2 coords) { vec4 value = u_use_texture ? texture(u_texture, coords) : vec4(1.0); if ((u_material_flags & 4) != 0) value.a = 1.0; if (zandronum_masked_base || (u_material_flags & (16 | 64)) != 0) value.rgb = vec3(1.0); return desaturate(value); }\n" +
+			(softLight ?
+				"#define SOFTLIGHT\n"
+				"float R_DoomLightingEquation(float light, float dist) { float L = light * 63.0 / 31.0; float min_L = clamp(36.0 / 31.0 - L, 0.0, 1.0); if (dist < 0.0001) dist = 0.0001; float scale = 1.0 / dist; float index = (59.0 / 31.0 - L) - (scale * 232.0 / 31.0 - 232.0 / 31.0); return clamp(index, min_L, 1.0); }\n"
+				: "");
 		const std::string mainStart = "void main() {";
 		fragment.replace(fragment.find(mainStart), mainStart.size(), mainStart + " zandronum_texcoord[0] = vec4(v_uv, 0.0, 1.0);");
 		const std::string original = "vec4 color = vec4(base_texel * lighting, texel.a * (u_material_colormap ? 1.0 : v_color.a));";
@@ -1049,7 +1072,10 @@ namespace
 		const size_t fogLayer = fragment.find(fogAlpha);
 		if (fogLayer != std::string::npos)
 			fragment.replace(fogLayer, fogAlpha.size(), "(1.0 - fog) * Process(vec4(1.0)).a * 0.75 * v_color.a");
-		fragment.insert(fragment.find("void main()"), contract + gl_GLES_LowerMaterialShader(data.GetString().GetChars()) + "\n");
+		const std::string macroDefines = std::string(noGlow ? "#define NO_GLOW\n" : "") +
+			(noDesaturate ? "#define NO_DESATURATE\n" : "");
+		fragment.insert(fragment.find("void main()"), contract + macroDefines +
+			gl_GLES_LowerMaterialShader(data.GetString().GetChars()) + "\n");
 		char log[1024] = {};
 		const GLuint program = gl_GLES_LinkProgram(NativeMaterialVertexSource.c_str(), fragment.c_str(),
 			path, log, sizeof(log), true);
@@ -1641,6 +1667,7 @@ namespace
 			previous.materialEffect.colormap == batch.materialEffect.colormap && previous.brightmap == batch.brightmap &&
 			previous.brightmapDesaturation == batch.brightmapDesaturation &&
 			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.sprite == batch.sprite &&
 			previous.cameraTexture == batch.cameraTexture &&
 			previous.repeat == batch.repeat && previous.palette == batch.palette &&
 			previous.materialFlags == batch.materialFlags && previous.blendMode == batch.blendMode &&
@@ -1666,6 +1693,12 @@ namespace
 	}
 
 	static bool IsNativeDecal(const FSceneBatch &batch);
+
+	static bool IsNativeOpaqueMaskedSprite(const FSceneBatch &batch)
+	{
+		return batch.sprite && batch.sourceOrdered && batch.masked && !batch.translucent &&
+			!batch.hud && !batch.hudModel && !batch.model && !IsNativeDecal(batch);
+	}
 
 	static bool IsNativeLateCoalesceCandidate(const FSceneBatch &batch)
 	{
@@ -1696,6 +1729,7 @@ namespace
 			previous.brightmap == batch.brightmap &&
 			previous.brightmapDesaturation == batch.brightmapDesaturation &&
 			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.sprite == batch.sprite &&
 			previous.translucent == batch.translucent && previous.sourceOrdered == batch.sourceOrdered &&
 			previous.repeat == batch.repeat && previous.cameraTexture == batch.cameraTexture &&
 			previous.palette == batch.palette && previous.flat == batch.flat &&
@@ -1786,7 +1820,8 @@ namespace
 		GLenum sourceBlend = GL_SRC_ALPHA, GLenum destinationBlend = GL_ONE_MINUS_SRC_ALPHA,
 	float alphaCutoff = 0.5f, bool hud = false, const FShaderLightParameters *lighting = NULL,
 	float projectedFogDensity = 0.0f, const FSceneVertex *vertices = NULL,
-	unsigned int vertexCount = 4, const unsigned int *indices = NULL, unsigned int indexCount = 6)
+	unsigned int vertexCount = 4, const unsigned int *indices = NULL, unsigned int indexCount = 6,
+	bool sprite = false)
 	{
 		if (!CanAppendSceneGeometry(vertexCount, indexCount, "surface")) return;
 		const unsigned int first = static_cast<unsigned int>(Resources.sceneVertices.size());
@@ -1848,6 +1883,7 @@ namespace
 		batch.sourceBlend = sourceBlend;
 		batch.destinationBlend = destinationBlend;
 		batch.alphaCutoff = ClampUnit(alphaCutoff);
+		batch.sprite = sprite;
 		batch.hud = hud;
 		if (lightData != NULL && lightCounts != NULL)
 			CopyNativeLightData(batch, lightData, lightCounts);
@@ -3332,7 +3368,7 @@ void gl_GLES_AddSprite(const float *positions, const float *texcoords,
 		alpha < 0.999f || blendMode != GLES_BLEND_OPAQUE, false, blendMode, fogColor, fogDensity, materialFlags, NULL, NULL,
 		brightmap, brightmapDesaturation, NULL, NULL, customBlend,
 		static_cast<GLenum>(sourceBlend), static_cast<GLenum>(destinationBlend),
-		fogLayer ? 0.0f : alphaCutoff, false, lighting);
+		fogLayer ? 0.0f : alphaCutoff, false, lighting, 0.0f, NULL, 4, NULL, 6, true);
 	if (fogLayer)
 	{
 		AddSceneSurface(vertices[0], vertices[1], vertices[2], vertices[3], texture, false, true,
@@ -3562,6 +3598,7 @@ struct FNativeRenderStateCache
 	GLenum frontFace;
 	GLuint staticUniformProgram;
 	bool staticUniformsKnown;
+	bool mirrorEnvironmentSubmitted;
 };
 
 static void ApplyNativeBlendState(FNativeRenderStateCache &cache, bool enabled,
@@ -3694,8 +3731,10 @@ static void DrawNativePortalBatch(const FSceneBatch &sourceBatch, GLuint dynamic
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 	}
 	const bool depthEnabled = !batch.hud || batch.hudModel;
-	const GLenum depthFunction = batch.model || batch.sourceOrdered || batch.translucent ||
+	GLenum depthFunction = batch.model || batch.sourceOrdered || batch.translucent ||
 		IsNativeDecal(batch) || (batch.materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0 ? GL_LEQUAL : GL_LESS;
+	if (stateCache.mirrorEnvironmentSubmitted && IsNativeOpaqueMaskedSprite(batch))
+		depthFunction = GL_LESS;
 	const bool cullEnabled = batch.model && batch.cullBackFaces;
 	if (batch.translucent)
 	{
@@ -3832,6 +3871,8 @@ static void DrawNativePortalBatch(const FSceneBatch &sourceBatch, GLuint dynamic
 	SetNativeDepthBias(batch, true);
 	ProfileDrawElements(batch.primitiveMode, batch.indexCount, NativeSceneIndexType(),
 		NativeSceneIndexOffset(batch.firstIndex));
+	if ((batch.materialFlags & GLES_MATERIAL_SPHERE_MAP) != 0)
+		stateCache.mirrorEnvironmentSubmitted = true;
 	stateCache.staticUniformProgram = program;
 	stateCache.staticUniformsKnown = true;
 	SetNativeDepthBias(batch, false);
@@ -3854,7 +3895,8 @@ static void DrawNativeWipeOverlay(const FGLESTargetDescriptor &target)
 	for (size_t i = 0; i < Resources.sceneBatches.size(); ++i)
 	{
 		const FSceneBatch &batch = Resources.sceneBatches[i];
-		if (batch.wipeOverlay) DrawNativePortalBatch(batch, 0, 0, textureCache, stateCache);
+		if (batch.wipeOverlay)
+			DrawNativePortalBatch(batch, 0, 0, textureCache, stateCache);
 	}
 	glBindVertexArray(0);
 	glDisable(GL_BLEND);
@@ -5358,7 +5400,8 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				}
 			}
 			if (merged) drawBatch = &coalescedBatch;
-			DrawNativePortalBatch(*drawBatch, dynamicLightTexture, 0, overlayTextureCache, overlayStateCache);
+			DrawNativePortalBatch(*drawBatch, dynamicLightTexture, 0, overlayTextureCache,
+				overlayStateCache);
 		}
 		if (Profile.active)
 			Profile.overlayMilliseconds += ProfileMilliseconds(overlayStart);

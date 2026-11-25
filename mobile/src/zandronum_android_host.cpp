@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <unistd.h>
@@ -22,7 +23,7 @@
 #include "gl/system/gl_gles_targets.h"
 #include "zandronum_android_input.h"
 
-extern int main_android(int argc, char **argv);
+extern int main_android(int argc, char **argv, const char *baseArchive);
 extern void S_SetSoundPaused(int active);
 extern void I_SetDisplayRefreshRate(int refreshHz);
 
@@ -270,7 +271,7 @@ namespace
 		}
 	}
 
-	void RunEngine()
+	void RunEngine(std::string baseArchivePath)
 	{
 		std::unique_lock<std::mutex> lock(HostMutex);
 		HostCondition.wait(lock, [] { return SurfaceReady || Stopping; });
@@ -315,7 +316,7 @@ namespace
 		std::vector<char *> args;
 		char program[] = "zandronum";
 		args.push_back(program);
-		main_android(static_cast<int>(args.size()), args.data());
+		main_android(static_cast<int>(args.size()), args.data(), baseArchivePath.c_str());
 
 		DestroyContext();
 		std::lock_guard<std::mutex> finalLock(HostMutex);
@@ -479,7 +480,7 @@ void Zandronum_AndroidHost_SetPaused(bool paused)
 	HostCondition.notify_all();
 }
 
-void Zandronum_AndroidHost_Start()
+void Zandronum_AndroidHost_Start(std::string baseArchivePath)
 {
 	std::thread finishedThread;
 	{
@@ -514,7 +515,7 @@ void Zandronum_AndroidHost_Start()
 		Stopping = false;
 		Paused = false;
 		AppliedPause = false;
-		GameThread = std::thread(RunEngine);
+		GameThread = std::thread(RunEngine, std::move(baseArchivePath));
 	}
 	if (staleWindow != nullptr)
 		ANativeWindow_release(staleWindow);
@@ -620,11 +621,17 @@ void Zandronum_AndroidHost_SurfaceDestroyed()
 	HostCondition.notify_all();
 }
 
-extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeStart(JNIEnv *env, jobject activity)
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeStart(
+	JNIEnv *env, jobject activity, jstring baseArchivePath)
 {
-	if (!IsCurrentActivity(env, activity))
+	if (!IsCurrentActivity(env, activity) || baseArchivePath == nullptr)
 		return;
-	Zandronum_AndroidHost_Start();
+	const char *path = env->GetStringUTFChars(baseArchivePath, nullptr);
+	if (path == nullptr)
+		return;
+	std::string ownedPath(path);
+	env->ReleaseStringUTFChars(baseArchivePath, path);
+	Zandronum_AndroidHost_Start(std::move(ownedPath));
 }
 
 extern "C" ZANDRONUM_JNI_EXPORT jboolean Java_com_ermac_zandromeda_GLES3JNIActivity_nativeAudioInit(

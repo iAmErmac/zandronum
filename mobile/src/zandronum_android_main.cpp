@@ -52,7 +52,7 @@ static void STACK_ARGS NewFailure()
 	I_FatalError("Failed to allocate memory from system heap");
 }
 
-int main_android(int argc, char **argv)
+int main_android(int argc, char **argv, const char *baseArchive)
 {
 	setlocale(LC_ALL, "C");
 	Args = new DArgs(argc, argv);
@@ -70,7 +70,7 @@ int main_android(int argc, char **argv)
 	try
 	{
 		C_InitConsole(80 * 8, 25 * 8, false);
-		D_DoomMain();
+		D_DoomMain(baseArchive);
 	}
 	catch (class CDoomError &error)
 	{

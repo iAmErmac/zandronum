@@ -3026,7 +3026,7 @@ static void FinalGC()
 //
 //==========================================================================
 
-void D_DoomMain (void)
+void D_DoomMain (const char *baseArchive)
 {
 	int p;
 	const char *v;
@@ -3054,7 +3054,10 @@ void D_DoomMain (void)
 	// [RH] Make sure zdoom.pk3 is always loaded,
 	// as it contains magic stuff we need.
 
-	wad = BaseFileSearch (BASEWAD, NULL, true);
+	if (baseArchive != NULL)
+		wad = DirEntryExists(baseArchive) ? baseArchive : NULL;
+	else
+		wad = BaseFileSearch (BASEWAD, NULL, true);
 	if (wad == NULL)
 	{
 		I_FatalError ("Cannot find " BASEWAD);

@@ -539,22 +539,41 @@ void GLPortal::EndFrame()
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
 	{
+		const bool reportPortalInfo = gl_portalinfo;
+		if (reportPortalInfo)
+		{
+			Printf("%sPortal view depth = %d\n%s{\n", indent.GetChars(), renderdepth, indent.GetChars());
+			indent += "  ";
+		}
+		bool earlySkySelected = false;
 		if (!gl_no_skyclear && !gl_portals)
-			RenderFirstSkyPortal(renderdepth > 0 ? renderdepth - 1 : 0);
+			earlySkySelected = RenderFirstSkyPortal(renderdepth > 0 ? renderdepth - 1 : 0);
+		if (reportPortalInfo)
+		{
+			const char *const skyResult = !gl_no_skyclear && !gl_portals ?
+				(earlySkySelected ? "selected" : "none") : "disabled";
+			Printf("%sEarly sky: %s\n", indent.GetChars(), skyResult);
+		}
 		// Process only this frame's queue; the sentinel preserves an outer target.
-		unsigned int captured = 0;
 		while (portals.Pop(p))
 		{
 			if (p == NULL) break;
-			if (gl_portals && p->RenderNative()) ++captured;
+			const bool nativeCaptured = gl_portals && p->RenderNative();
+			if (reportPortalInfo)
+			{
+				const char *const result = !gl_portals ? "skipped (portals disabled)" :
+					nativeCaptured ? "captured" : "not captured";
+				Printf("%sProcessing %s, view depth = %d, result = %s\n",
+					indent.GetChars(), p->GetName(), renderdepth, result);
+			}
 			delete p;
 		}
 		if (renderdepth > 0) --renderdepth;
-		static bool capturedLogWritten = false;
-		if (developer && captured > 0 && !capturedLogWritten)
+		if (reportPortalInfo)
 		{
-			DPrintf("GLES captured %u portal target(s).\n", captured);
-			capturedLogWritten = true;
+			indent.Truncate(long(indent.Len() - 2));
+			Printf("%s}\n", indent.GetChars());
+			if (portals.Size() == 0) gl_portalinfo = false;
 		}
 		return;
 	}

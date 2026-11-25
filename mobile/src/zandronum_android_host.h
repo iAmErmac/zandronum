@@ -15,7 +15,7 @@ void Zandronum_AndroidHost_ProcessSurfaceState();
 int Zandronum_AndroidHost_GetWidth();
 int Zandronum_AndroidHost_GetHeight();
 void Zandronum_AndroidHost_SetPaused(bool paused);
-void Zandronum_AndroidHost_Start();
+void Zandronum_AndroidHost_Start(std::string baseArchivePath);
 void Zandronum_AndroidHost_Stop();
 void Zandronum_AndroidHost_RequestQuit();
 void Zandronum_AndroidHost_CloseAudioJni();
