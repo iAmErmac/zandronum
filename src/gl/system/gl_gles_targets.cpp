@@ -18,7 +18,7 @@ namespace
 		return gles.CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 	}
 
-	void DeleteCandidate(const FGLESProcTable &gles, FGLESTargetDescriptor &target)
+	void DeleteTarget(const FGLESProcTable &gles, FGLESTargetDescriptor &target)
 	{
 		if (target.msaaDepthStencilAttachment != 0)
 			gles.DeleteRenderbuffers(1, &target.msaaDepthStencilAttachment);
@@ -40,7 +40,7 @@ namespace
 	{
 		target.renderWidth = width;
 		target.renderHeight = height;
-		target.sampleCount = samples > 1 ? samples : 1;
+		target.sampleCount = 1;
 
 		gles.GenTextures(1, &target.colorAttachment);
 		gles.BindTexture(GL_TEXTURE_2D, target.colorAttachment);
@@ -60,27 +60,18 @@ namespace
 		gles.RenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
 		gles.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
 			GL_RENDERBUFFER, target.resolveDepthStencilAttachment);
-		if (!IsComplete(gles) || gles.GetError() != GL_NO_ERROR)
-		{
-			DeleteCandidate(gles, target);
+		const bool resolveComplete = IsComplete(gles);
+		const GLenum resolveError = gles.GetError();
+		if (!resolveComplete || resolveError != GL_NO_ERROR)
 			return false;
-		}
 
 		if (samples <= 1)
 		{
 			target.framebuffer = target.resolveFramebuffer;
 			target.depthStencilAttachment = target.resolveDepthStencilAttachment;
-			gles.BindRenderbuffer(GL_RENDERBUFFER, 0);
-			gles.BindFramebuffer(GL_FRAMEBUFFER, 0);
 			return true;
 		}
 
-		if (!gl_GLES_GetContextInfo().hasMultisample ||
-			gles.RenderbufferStorageMultisample == nullptr || gles.BlitFramebuffer == nullptr)
-		{
-			DeleteCandidate(gles, target);
-			return false;
-		}
 		gles.GenFramebuffers(1, &target.framebuffer);
 		gles.BindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
 		gles.GenRenderbuffers(1, &target.msaaColorAttachment);
@@ -94,15 +85,22 @@ namespace
 			width, height);
 		gles.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
 			GL_RENDERBUFFER, target.msaaDepthStencilAttachment);
-		if (!IsComplete(gles) || gles.GetError() != GL_NO_ERROR)
-		{
-			DeleteCandidate(gles, target);
+		const bool msaaComplete = IsComplete(gles);
+		const GLenum msaaError = gles.GetError();
+		if (!msaaComplete || msaaError != GL_NO_ERROR)
 			return false;
-		}
+		GLint colorSamples = 0;
+		GLint depthSamples = 0;
+		gles.BindRenderbuffer(GL_RENDERBUFFER, target.msaaColorAttachment);
+		gles.GetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &colorSamples);
+		gles.BindRenderbuffer(GL_RENDERBUFFER, target.msaaDepthStencilAttachment);
+		gles.GetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &depthSamples);
+		if (gles.GetError() != GL_NO_ERROR || colorSamples <= 1 ||
+			colorSamples != depthSamples)
+			return false;
 
 		target.depthStencilAttachment = target.msaaDepthStencilAttachment;
-		gles.BindRenderbuffer(GL_RENDERBUFFER, 0);
-		gles.BindFramebuffer(GL_FRAMEBUFFER, 0);
+		target.sampleCount = colorSamples;
 		return true;
 	}
 }
@@ -122,71 +120,81 @@ bool gl_GLES_CreateRenderTarget(FGLESTargetDescriptor *target, int width, int he
 	gles.GetIntegerv(GL_RENDERBUFFER_BINDING, &previousRenderbuffer);
 	gles.GetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
 	gles.GetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-	const GLuint oldFramebuffer = target->framebuffer;
-	const GLuint oldResolveFramebuffer = target->resolveFramebuffer;
-	const GLuint oldColorAttachment = target->colorAttachment;
-	const GLuint oldDepthStencilAttachment = target->depthStencilAttachment;
-	const GLuint oldResolveDepthStencilAttachment = target->resolveDepthStencilAttachment;
-	const GLuint oldMsaaDepthStencilAttachment = target->msaaDepthStencilAttachment;
-	const bool hostOwnsPresentation = target->hostOwnsPresentation;
-	const bool targetWasBound = previousDrawFramebuffer == static_cast<GLint>(oldFramebuffer) ||
-		previousReadFramebuffer == static_cast<GLint>(oldFramebuffer) ||
-		previousDrawFramebuffer == static_cast<GLint>(oldResolveFramebuffer) ||
-		previousReadFramebuffer == static_cast<GLint>(oldResolveFramebuffer);
-	if (previousTexture == static_cast<GLint>(oldColorAttachment)) previousTexture = 0;
-	if (previousRenderbuffer == static_cast<GLint>(oldDepthStencilAttachment) ||
-		previousRenderbuffer == static_cast<GLint>(oldResolveDepthStencilAttachment) ||
-		previousRenderbuffer == static_cast<GLint>(oldMsaaDepthStencilAttachment))
-		previousRenderbuffer = 0;
-	gl_GLES_DestroyRenderTarget(target);
-	if (targetWasBound)
+	FGLESTargetDescriptor oldTarget = *target;
+	const bool drawWasFramebuffer = oldTarget.framebuffer != 0 &&
+		previousDrawFramebuffer == static_cast<GLint>(oldTarget.framebuffer);
+	const bool drawWasResolve = oldTarget.resolveFramebuffer != 0 &&
+		previousDrawFramebuffer == static_cast<GLint>(oldTarget.resolveFramebuffer);
+	const bool readWasFramebuffer = oldTarget.framebuffer != 0 &&
+		previousReadFramebuffer == static_cast<GLint>(oldTarget.framebuffer);
+	const bool readWasResolve = oldTarget.resolveFramebuffer != 0 &&
+		previousReadFramebuffer == static_cast<GLint>(oldTarget.resolveFramebuffer);
+	const bool renderbufferWasDrawDepth = oldTarget.depthStencilAttachment != 0 &&
+		previousRenderbuffer ==
+		static_cast<GLint>(oldTarget.depthStencilAttachment);
+	const bool renderbufferWasResolveDepth = oldTarget.resolveDepthStencilAttachment != 0 &&
+		previousRenderbuffer ==
+		static_cast<GLint>(oldTarget.resolveDepthStencilAttachment);
+	const bool renderbufferWasMsaaColor = oldTarget.msaaColorAttachment != 0 &&
+		previousRenderbuffer ==
+		static_cast<GLint>(oldTarget.msaaColorAttachment);
+	const bool textureWasTarget = oldTarget.colorAttachment != 0 &&
+		previousTexture == static_cast<GLint>(oldTarget.colorAttachment);
+	const bool hostOwnsPresentation = oldTarget.hostOwnsPresentation;
+	auto restoreState = [&](const FGLESTargetDescriptor &replacement)
 	{
-		previousDrawFramebuffer = 0;
-		previousReadFramebuffer = 0;
-	}
-	auto restoreState = [&]()
-	{
-		gles.BindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
-		gles.BindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
-		gles.BindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previousRenderbuffer));
+		GLuint drawFramebuffer = static_cast<GLuint>(previousDrawFramebuffer);
+		GLuint readFramebuffer = static_cast<GLuint>(previousReadFramebuffer);
+		GLuint renderbuffer = static_cast<GLuint>(previousRenderbuffer);
+		GLuint texture = static_cast<GLuint>(previousTexture);
+		if (drawWasFramebuffer) drawFramebuffer = replacement.framebuffer;
+		else if (drawWasResolve) drawFramebuffer = replacement.resolveFramebuffer;
+		if (readWasFramebuffer) readFramebuffer = replacement.framebuffer;
+		else if (readWasResolve) readFramebuffer = replacement.resolveFramebuffer;
+		if (renderbufferWasDrawDepth) renderbuffer = replacement.depthStencilAttachment;
+		else if (renderbufferWasResolveDepth) renderbuffer = replacement.resolveDepthStencilAttachment;
+		else if (renderbufferWasMsaaColor) renderbuffer = replacement.msaaColorAttachment;
+		if (textureWasTarget) texture = replacement.colorAttachment;
+		gles.BindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+		gles.BindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+		gles.BindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 		gles.ActiveTexture(static_cast<GLenum>(previousActiveTexture));
-		gles.BindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+		gles.BindTexture(GL_TEXTURE_2D, texture);
 	};
 
-	GLint maxSamples = 1;
-	gles.GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
-	if (maxSamples < 1) maxSamples = 1;
-	const int requested = std::max(requestedSamples, 0);
-	int candidates[8] = {};
-	int candidateCount = 0;
-	if (requested > 1)
+	int samples = 1;
+	if (requestedSamples > 1 && gl_GLES_GetContextInfo().hasMultisample)
 	{
-		int sample = std::min(requested, static_cast<int>(maxSamples));
-		while (sample > 1 && candidateCount < 8)
-		{
-			candidates[candidateCount++] = sample;
-			const int nextSample = sample > 2 ? std::max(2, sample / 2) : 1;
-			if (nextSample == sample) break;
-			sample = nextSample;
-		}
+		GLint maxSamples = 1;
+		gles.GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+		samples = std::max(1, std::min(requestedSamples, static_cast<int>(maxSamples)));
 	}
-	candidates[candidateCount++] = 1;
 
-	for (int index = 0; index < candidateCount; ++index)
+	for (;;)
 	{
 		ClearErrors(gles);
 		FGLESTargetDescriptor candidate = {};
-		if (!BuildCandidate(gles, candidate, width, height, candidates[index])) continue;
-		candidate.hostOwnsPresentation = hostOwnsPresentation;
-		*target = candidate;
-		restoreState();
-		return true;
+		if (BuildCandidate(gles, candidate, width, height, samples))
+		{
+			candidate.hostOwnsPresentation = hostOwnsPresentation;
+			DeleteTarget(gles, oldTarget);
+			*target = candidate;
+			restoreState(*target);
+			return true;
+		}
+		DeleteTarget(gles, candidate);
+		if (samples == 1) break;
+		samples = samples > 2 ? std::max(2, samples / 2) : 1;
 	}
 
-	restoreState();
-	char message[256];
-	snprintf(message, sizeof(message), "render target allocation failed at %dx%d", width, height);
-	gl_GLES_Report("target", message);
+	ClearErrors(gles);
+	restoreState(oldTarget);
+	if (gl_GLES_IsProfileEnabled())
+	{
+		char message[96];
+		snprintf(message, sizeof(message), "render target allocation failed at %dx%d", width, height);
+		gl_GLES_Report("target", message);
+	}
 	return false;
 }
 
@@ -198,20 +206,7 @@ void gl_GLES_DestroyRenderTarget(FGLESTargetDescriptor *target)
 		*target = {};
 		return;
 	}
-	const FGLESProcTable &gles = gl_GLES_GetProcTable();
-	if (target->msaaDepthStencilAttachment != 0)
-		gles.DeleteRenderbuffers(1, &target->msaaDepthStencilAttachment);
-	if (target->msaaColorAttachment != 0)
-		gles.DeleteRenderbuffers(1, &target->msaaColorAttachment);
-	if (target->resolveDepthStencilAttachment != 0)
-		gles.DeleteRenderbuffers(1, &target->resolveDepthStencilAttachment);
-	if (target->resolveFramebuffer != 0)
-		gles.DeleteFramebuffers(1, &target->resolveFramebuffer);
-	if (target->colorAttachment != 0)
-		gles.DeleteTextures(1, &target->colorAttachment);
-	if (target->framebuffer != 0 && target->framebuffer != target->resolveFramebuffer)
-		gles.DeleteFramebuffers(1, &target->framebuffer);
-	*target = {};
+	DeleteTarget(gl_GLES_GetProcTable(), *target);
 }
 
 void gl_GLES_InvalidateRenderTarget(FGLESTargetDescriptor *target)

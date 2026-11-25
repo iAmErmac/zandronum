@@ -130,6 +130,9 @@ typedef ptrdiff_t GLsizeiptr;
 #ifndef GL_MAX_SAMPLES
 #define GL_MAX_SAMPLES 0x8D57
 #endif
+#ifndef GL_RENDERBUFFER_SAMPLES
+#define GL_RENDERBUFFER_SAMPLES 0x8CAB
+#endif
 #ifndef GL_FRAMEBUFFER_COMPLETE
 #define GL_FRAMEBUFFER_COMPLETE 0x8CD5
 #endif
@@ -227,6 +230,7 @@ using FGLESCheckFramebufferStatus = GLenum (APIENTRY *)(GLenum);
 using FGLESGenRenderbuffers = void (APIENTRY *)(GLsizei, GLuint *);
 using FGLESDeleteRenderbuffers = void (APIENTRY *)(GLsizei, const GLuint *);
 using FGLESBindRenderbuffer = void (APIENTRY *)(GLenum, GLuint);
+using FGLESGetRenderbufferParameteriv = void (APIENTRY *)(GLenum, GLenum, GLint *);
 using FGLESRenderbufferStorage = void (APIENTRY *)(GLenum, GLenum, GLsizei, GLsizei);
 using FGLESRenderbufferStorageMultisample = void (APIENTRY *)(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
 using FGLESFramebufferRenderbuffer = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint);
@@ -317,6 +321,7 @@ struct FGLESProcTable
 	FGLESGenRenderbuffers GenRenderbuffers;
 	FGLESDeleteRenderbuffers DeleteRenderbuffers;
 	FGLESBindRenderbuffer BindRenderbuffer;
+	FGLESGetRenderbufferParameteriv GetRenderbufferParameteriv;
 	FGLESRenderbufferStorage RenderbufferStorage;
 	FGLESRenderbufferStorageMultisample RenderbufferStorageMultisample;
 	FGLESFramebufferRenderbuffer FramebufferRenderbuffer;

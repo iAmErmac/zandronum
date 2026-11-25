@@ -183,7 +183,7 @@ namespace
 		info.hasDepthStencil = true;
 		info.hasDepthClamp = !isGLES || ExtensionPresent("GL_EXT_depth_clamp");
 		info.hasMultisample = Procedures.RenderbufferStorageMultisample != nullptr &&
-			Procedures.BlitFramebuffer != nullptr;
+			Procedures.BlitFramebuffer != nullptr && Procedures.GetRenderbufferParameteriv != nullptr;
 		info.hasDebugLabels = ExtensionPresent("GL_KHR_debug") || ExtensionPresent("GL_ARB_debug_output");
 		info.hasAnisotropicFiltering = ExtensionPresent("GL_EXT_texture_filter_anisotropic") ||
 			ExtensionPresent("GL_ARB_texture_filter_anisotropic");
@@ -222,6 +222,7 @@ namespace
 		LOAD_GLES_PROCEDURE(GenRenderbuffers);
 		LOAD_GLES_PROCEDURE(DeleteRenderbuffers);
 		LOAD_GLES_PROCEDURE(BindRenderbuffer);
+		LOAD_GLES_PROCEDURE(GetRenderbufferParameteriv);
 		LOAD_GLES_PROCEDURE(RenderbufferStorage);
 		LOAD_GLES_PROCEDURE(RenderbufferStorageMultisample);
 		LOAD_GLES_PROCEDURE(FramebufferRenderbuffer);
@@ -320,6 +321,7 @@ namespace
 		Procedures.GenRenderbuffers = &glGenRenderbuffers;
 		Procedures.DeleteRenderbuffers = &glDeleteRenderbuffers;
 		Procedures.BindRenderbuffer = &glBindRenderbuffer;
+		Procedures.GetRenderbufferParameteriv = &glGetRenderbufferParameteriv;
 		Procedures.RenderbufferStorage = &glRenderbufferStorage;
 		Procedures.RenderbufferStorageMultisample = &glRenderbufferStorageMultisample;
 		Procedures.FramebufferRenderbuffer = &glFramebufferRenderbuffer;

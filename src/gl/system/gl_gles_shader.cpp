@@ -196,7 +196,7 @@ namespace
 	}
 }
 
-bool gl_GLES_LowerMaterialShader(const char *source, bool dynamicLights, std::string &result)
+bool gl_GLES_LowerMaterialShader(const char *source, bool dynamicLights, int lightCapacity, std::string &result)
 {
 	result.clear();
 	if (source == nullptr) return false;
@@ -228,7 +228,25 @@ bool gl_GLES_LowerMaterialShader(const char *source, bool dynamicLights, std::st
 			const std::string token(source + first, offset - first);
 			if (dynamicLights && token == "lights")
 			{
-				const size_t opening = SkipShaderTrivia(source, length, offset);
+				const size_t member = SkipShaderTrivia(source, length, offset);
+				if (member < length && source[member] == '.')
+				{
+					const size_t method = SkipShaderTrivia(source, length, member + 1);
+					static const char lengthName[] = "length";
+					const size_t lengthNameSize = sizeof(lengthName) - 1;
+					if (method + lengthNameSize > length ||
+						strncmp(source + method, lengthName, lengthNameSize) != 0 ||
+						(method + lengthNameSize < length && IsShaderIdentifierCharacter(source[method + lengthNameSize])))
+						return false;
+					const size_t opening = SkipShaderTrivia(source, length, method + lengthNameSize);
+					if (opening >= length || source[opening] != '(') return false;
+					const size_t closing = SkipShaderTrivia(source, length, opening + 1);
+					if (closing >= length || source[closing] != ')') return false;
+					result += std::to_string(lightCapacity);
+					offset = closing + 1;
+					continue;
+				}
+				const size_t opening = member;
 				if (opening >= length || source[opening] != '[') return false;
 				result += "zandronum_light";
 				pendingOpening = opening;

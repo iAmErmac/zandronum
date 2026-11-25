@@ -597,7 +597,9 @@ FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int
 		FPortalFallbackTarget &candidate = depth.choices[choice];
 		const bool sameRequest = candidate.requestedWidth == width &&
 			candidate.requestedHeight == height && candidate.requestedSamples == samples;
-		if (sameRequest && candidate.surface.framebuffer != 0)
+		const bool surfaceMatches = candidate.surface.framebuffer != 0 &&
+			candidate.surface.renderWidth == width && candidate.surface.renderHeight == height;
+		if (sameRequest && surfaceMatches && !candidate.allocationFailed)
 		{
 			entry = &candidate;
 			break;
@@ -624,6 +626,8 @@ FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int
 	}
 	const bool sameRequest = entry->requestedWidth == width && entry->requestedHeight == height &&
 		entry->requestedSamples == samples;
+	const bool surfaceMatches = entry->surface.framebuffer != 0 &&
+		entry->surface.renderWidth == width && entry->surface.renderHeight == height;
 	if (!sameRequest)
 	{
 		entry->requestedWidth = width;
@@ -631,7 +635,7 @@ FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int
 		entry->requestedSamples = samples;
 		entry->allocationFailed = false;
 	}
-	if (!sameRequest || entry->surface.framebuffer == 0)
+	if (!sameRequest || !surfaceMatches)
 	{
 		if (!gl_GLES_CreateRenderTarget(&entry->surface, width, height, samples))
 		{

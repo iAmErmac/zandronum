@@ -349,6 +349,10 @@ namespace
 		float sceneClearColor[3];
 		bool ready;
 		bool framebufferWarningLogged;
+		bool sceneSampleMismatchReported;
+		unsigned int sceneResizeRetryFrame;
+		int sceneResizeRetryWidth;
+		int sceneResizeRetryHeight;
 	};
 
 	static FGLESNativeCapabilities Capabilities = {};
@@ -989,9 +993,11 @@ namespace
 		const bool noDesaturate = ordinaryMaterial && !desaturated;
 		const bool softLight = ordinaryMaterial && (glset.lightmode & 8) != 0;
 		const bool dynamicLights = ordinaryMaterial && gl_lights && gl_dynlight_shader && batch.lightCount > 0;
+		const int nativeLightCapacity = gl.MaxLights();
+		const bool maxLights128 = dynamicLights && nativeLightCapacity == 128;
 		const unsigned int macroVariant = (noGlow ? 1u : 0u) | (noDesaturate ? 2u : 0u) |
-			(dynamicLights ? 4u : 0u);
-		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 80 +
+			(dynamicLights ? 4u : 0u) | (maxLights128 ? 8u : 0u);
+		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 160 +
 			macroVariant * 10 +
 			(softLight ? 5 : 0) + variant;
 		const auto found = NativeUserPrograms.find(key);
@@ -1034,7 +1040,8 @@ namespace
 			"#define dlightcolor u_sprite_light\n" +
 			(dynamicLights ?
 				std::string("#define zandronum_lightrange min(u_light_counts * 2, ivec3(") +
-					std::to_string(gl.MaxLights()) + "))\n#define lightrange zandronum_lightrange\n"
+					std::to_string(nativeLightCapacity) + "))\n#define lightrange zandronum_lightrange\n" +
+					(maxLights128 ? "#define MAXLIGHTS128\n" : "") +
 				"highp vec4 zandronum_light(int index) { if (index < 0 || index >= zandronum_lightrange.z) return vec4(0.0); highp int texel = (u_light_offset + index / 2) * 2 + index % 2; highp int width = textureSize(u_light_data, 0).x; return texelFetch(u_light_data, ivec2(texel % width, texel / width), 0); }\n"
 				: std::string()) +
 			"vec4 getLightColor(float fogdist, float fogfactor) { vec3 color = apply_static_light(v_color.rgb, fogdist); if (fogenabled > 0) color *= fogfactor; return vec4(apply_glow(color), v_color.a); }\n"
@@ -1084,9 +1091,12 @@ namespace
 			(noDesaturate ? "#define NO_DESATURATE\n" : "") +
 			(dynamicLights ? "#define DYNLIGHT\n" : "");
 		std::string loweredShader;
-		if (!gl_GLES_LowerMaterialShader(data.GetString().GetChars(), dynamicLights, loweredShader))
+		if (!gl_GLES_LowerMaterialShader(data.GetString().GetChars(), dynamicLights,
+			nativeLightCapacity, loweredShader))
 		{
 			NativeUserShaderFailures.insert(key);
+			Printf("Zandronum GLES material shader '%s' disabled for variant %u: unsupported light-array syntax\n",
+				path, key);
 			return base;
 		}
 		fragment.insert(fragment.find("void main()"), contract + macroDefines +
@@ -1201,6 +1211,10 @@ namespace
 		Resources.wipeOverlayTarget = {};
 		Resources.cameraTarget = {};
 		Resources.cameraSecondaryTarget = {};
+		Resources.sceneSampleMismatchReported = false;
+		Resources.sceneResizeRetryFrame = 0;
+		Resources.sceneResizeRetryWidth = 0;
+		Resources.sceneResizeRetryHeight = 0;
 		Resources.sceneClearColorSet = false;
 		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
@@ -1286,6 +1300,10 @@ namespace
 		gl_GLES_InvalidateRenderTarget(&Resources.wipeOverlayTarget);
 		gl_GLES_InvalidateRenderTarget(&Resources.cameraTarget);
 		gl_GLES_InvalidateRenderTarget(&Resources.cameraSecondaryTarget);
+		Resources.sceneSampleMismatchReported = false;
+		Resources.sceneResizeRetryFrame = 0;
+		Resources.sceneResizeRetryWidth = 0;
+		Resources.sceneResizeRetryHeight = 0;
 		Resources.viewContract = {};
 		NativeActiveTarget = NULL;
 		NativeOffscreenRender = false;
@@ -1432,6 +1450,46 @@ namespace
 			return false;
 		}
 		Resources.sceneTarget.hostOwnsPresentation = true;
+		if (developer)
+			DPrintf("Zandronum GLES scene target %dx%d MSAA requested %d negotiated %d.\n",
+				width, height, requestedSamples, Resources.sceneTarget.sampleCount);
+		if (requestedSamples > 1 && Resources.sceneTarget.sampleCount != requestedSamples &&
+			!Resources.sceneSampleMismatchReported)
+		{
+			Resources.sceneSampleMismatchReported = true;
+			if (!developer)
+			{
+				char message[128];
+				snprintf(message, sizeof(message), "scene MSAA requested %d, negotiated %d",
+					requestedSamples, Resources.sceneTarget.sampleCount);
+				gl_GLES_Report("target", message);
+			}
+		}
+		return true;
+	}
+
+	static bool GetScenePresentConfig(FGLESPresentConfig &present)
+	{
+		if (!gl_GLES_GetHostTarget(&present.presentationTarget)) return false;
+		present.target = Resources.sceneTarget;
+		present.wipe = gl_GLESInternalWipeGetBindings();
+		present.sceneSampler = Resources.sceneSamplers[3];
+		present.stateWidth = present.presentationTarget.renderWidth;
+		present.stateHeight = present.presentationTarget.renderHeight;
+		present.gamma = static_cast<float>(Gamma);
+		present.brightness = clamp<float>(vid_brightness, -0.8f, 0.8f);
+		present.contrast = clamp<float>(vid_contrast, 0.1f, 3.0f);
+		return true;
+	}
+
+	static bool PresentRetainedSceneTarget()
+	{
+		FGLESPresentConfig present = {};
+		if (!GetScenePresentConfig(present) || !gl_GLESInternalPresent(present)) return false;
+		gl_GLESInternalPublishFrameContract(Resources.frame,
+			static_cast<double>(Resources.frame) / 35.0, present.presentationTarget,
+			Resources.viewContract, Resources.nativeViewArea.valid);
+		++Resources.frame;
 		return true;
 	}
 
@@ -4849,9 +4907,40 @@ void gl_GLES_RenderBootstrap(int width, int height)
 	if (!NativeOffscreenRender &&
 		(Resources.sceneTarget.renderWidth != width || Resources.sceneTarget.renderHeight != height))
 	{
-		gl_GLESInternalWipeDestroy();
-		if (!BuildFramebuffer(width, height))
-		I_FatalError("Zandronum GLES render target could not follow surface size %dx%d.", width, height);
+		const bool havePreviousScene = Resources.frame != 0 &&
+			Resources.sceneTarget.colorAttachment != 0 && Resources.sceneTarget.framebuffer != 0 &&
+			Resources.sceneTarget.resolveFramebuffer != 0 &&
+			Resources.sceneTarget.renderWidth > 0 && Resources.sceneTarget.renderHeight > 0;
+		const bool requestChanged = Resources.sceneResizeRetryWidth != width ||
+			Resources.sceneResizeRetryHeight != height;
+		const bool retryDue = requestChanged || Resources.sceneResizeRetryFrame == 0 ||
+			Resources.frame >= Resources.sceneResizeRetryFrame;
+		if (retryDue && BuildFramebuffer(width, height))
+		{
+			Resources.sceneResizeRetryFrame = 0;
+			Resources.sceneResizeRetryWidth = 0;
+			Resources.sceneResizeRetryHeight = 0;
+			gl_GLESInternalWipeDestroy();
+		}
+		else if (havePreviousScene)
+		{
+			Resources.sceneResizeRetryWidth = width;
+			Resources.sceneResizeRetryHeight = height;
+			if (retryDue) Resources.sceneResizeRetryFrame = Resources.frame + 30;
+			if (!PresentRetainedSceneTarget())
+				I_FatalError("Zandronum GLES retained scene could not be presented at %dx%d.", width, height);
+			return;
+		}
+		else
+		{
+			I_FatalError("Zandronum GLES render target could not follow surface size %dx%d.", width, height);
+		}
+	}
+	else if (!NativeOffscreenRender)
+	{
+		Resources.sceneResizeRetryFrame = 0;
+		Resources.sceneResizeRetryWidth = 0;
+		Resources.sceneResizeRetryHeight = 0;
 	}
 	FGLESTargetDescriptor *activeTarget = NativeActiveTarget != NULL ?
 		NativeActiveTarget : &Resources.sceneTarget;
@@ -5482,20 +5571,18 @@ void gl_GLES_RenderBootstrap(int width, int height)
 	}
 
 	FGLESPresentConfig present = {};
-	if (!gl_GLES_GetHostTarget(&present.presentationTarget))
+	if (!GetScenePresentConfig(present))
 		I_FatalError("Zandronum GLES host did not supply a presentation target.");
-	present.target = Resources.sceneTarget;
-	present.wipe = gl_GLESInternalWipeGetBindings();
-	present.sceneSampler = Resources.sceneSamplers[3];
-	present.stateWidth = present.presentationTarget.renderWidth;
-	present.stateHeight = present.presentationTarget.renderHeight;
-	present.gamma = static_cast<float>(Gamma);
-	present.brightness = clamp<float>(vid_brightness, -0.8f, 0.8f);
-	present.contrast = clamp<float>(vid_contrast, 0.1f, 3.0f);
 	if (HasNativeWipeOverlay() && gl_GLESInternalWipeIsActive())
 	{
-		if (!gl_GLES_CreateRenderTarget(&Resources.wipeOverlayTarget,
-			Resources.sceneTarget.renderWidth, Resources.sceneTarget.renderHeight, 1))
+		const int overlayWidth = Resources.sceneTarget.renderWidth;
+		const int overlayHeight = Resources.sceneTarget.renderHeight;
+		const bool overlayTargetReady = Resources.wipeOverlayTarget.framebuffer != 0 &&
+			Resources.wipeOverlayTarget.renderWidth == overlayWidth &&
+			Resources.wipeOverlayTarget.renderHeight == overlayHeight &&
+			Resources.wipeOverlayTarget.sampleCount == 1;
+		if (!overlayTargetReady && !gl_GLES_CreateRenderTarget(&Resources.wipeOverlayTarget,
+			overlayWidth, overlayHeight, 1))
 			I_FatalError("Zandronum GLES wipe overlay target allocation failed.");
 		FGLESPresentConfig composite = present;
 		composite.presentationTarget = Resources.wipeOverlayTarget;
