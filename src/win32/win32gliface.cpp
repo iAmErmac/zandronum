@@ -683,7 +683,7 @@ bool Win32GLVideo::SetupPixelFormat(bool allowsoftware, int multisample)
 		// [BB] Starting with driver version 314.07, NVIDIA GeForce cards support OpenGL quad buffered
 		// stereo rendering with 3D Vision hardware. Select the corresponding attribute here.
 		const int offset = ( multisample > 0 ) ? 24 : 20;
-		attributes[offset]	=	gl_quadbufferedstereo ? WGL_STEREO_ARB : 0;
+		attributes[offset]	=	(!m_GLES && gl_quadbufferedstereo) ? WGL_STEREO_ARB : 0;
 		attributes[offset+1]	=	true;
 		attributes[offset+2]	=	0;
 		attributes[offset+3]	=	0;

@@ -12,6 +12,7 @@
 #endif
 #include <chrono>
 #include <algorithm>
+#include <limits>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -312,6 +313,7 @@ namespace
 		unsigned int sceneSpriteCount;
 		unsigned int sceneBatchSubmissions;
 		unsigned int sceneOpaqueBatchMerges;
+		unsigned int sceneLateBatchMerges;
 		unsigned int sceneProgramBinds;
 		unsigned int sceneProgramBindSkips;
 		unsigned int sceneTextureBinds;
@@ -1663,6 +1665,64 @@ namespace
 			previous.clipSerial == batch.clipSerial;
 	}
 
+	static bool IsNativeDecal(const FSceneBatch &batch);
+
+	static bool IsNativeLateCoalesceCandidate(const FSceneBatch &batch)
+	{
+		const unsigned int excludedFlags = GLES_MATERIAL_DECAL | GLES_MATERIAL_WALL_DEPTH_BIAS |
+			GLES_MATERIAL_INHERIT_LIGHT | GLES_MATERIAL_INHERIT_FOG;
+		return batch.sourceOrdered && !batch.hud && !batch.hudModel &&
+			!batch.wipeOverlay && !batch.model && !batch.cullBackFaces && !batch.skyMask &&
+			!batch.flood && !batch.portalMask && batch.portalId < 0 && !IsNativeDecal(batch) &&
+			(batch.materialFlags & excludedFlags) == 0 && batch.materialEffect.shaderIndex == 0 &&
+			batch.primitiveMode == GL_TRIANGLES && batch.firstIndex >= 0 && batch.indexCount > 0 &&
+			batch.indexCount % 3 == 0 &&
+			static_cast<size_t>(batch.firstIndex) + static_cast<size_t>(batch.indexCount) <=
+				Resources.sceneIndices.size();
+	}
+
+	static bool CanCoalesceNativeLateBatches(const FSceneBatch &previous, const FSceneBatch &batch)
+	{
+		if (!IsNativeLateCoalesceCandidate(previous) || !IsNativeLateCoalesceCandidate(batch) ||
+			static_cast<size_t>(previous.firstIndex) + static_cast<size_t>(previous.indexCount) !=
+				static_cast<size_t>(batch.firstIndex))
+			return false;
+		const FSceneViewSnapshot &previousView = BatchView(previous);
+		const FSceneViewSnapshot &batchView = BatchView(batch);
+		return previous.texture == batch.texture &&
+			previous.materialEffect.shaderIndex == batch.materialEffect.shaderIndex &&
+			previous.materialEffect.speed == batch.materialEffect.speed &&
+			previous.materialEffect.colormap == batch.materialEffect.colormap &&
+			previous.brightmap == batch.brightmap &&
+			previous.brightmapDesaturation == batch.brightmapDesaturation &&
+			previous.masked == batch.masked && previous.fog == batch.fog &&
+			previous.translucent == batch.translucent && previous.sourceOrdered == batch.sourceOrdered &&
+			previous.repeat == batch.repeat && previous.cameraTexture == batch.cameraTexture &&
+			previous.palette == batch.palette && previous.flat == batch.flat &&
+			previous.materialFlags == batch.materialFlags && previous.blendMode == batch.blendMode &&
+			previous.customBlend == batch.customBlend && previous.sourceBlend == batch.sourceBlend &&
+			previous.destinationBlend == batch.destinationBlend &&
+			previous.alphaCutoff == batch.alphaCutoff &&
+			memcmp(previous.fogColor, batch.fogColor, sizeof(batch.fogColor)) == 0 &&
+			previous.fogDensity == batch.fogDensity &&
+			previous.projectedFogDensity == batch.projectedFogDensity &&
+			memcmp(&previous.lighting, &batch.lighting, sizeof(batch.lighting)) == 0 &&
+			memcmp(previous.glowTopColor, batch.glowTopColor, sizeof(batch.glowTopColor)) == 0 &&
+			memcmp(previous.glowBottomColor, batch.glowBottomColor, sizeof(batch.glowBottomColor)) == 0 &&
+			previous.lightOffset == batch.lightOffset && previous.lightCount == batch.lightCount &&
+			previous.lightNormalCount == batch.lightNormalCount &&
+			previous.lightSubtractiveCount == batch.lightSubtractiveCount &&
+			memcmp(previous.lightPlaneNormal, batch.lightPlaneNormal, sizeof(batch.lightPlaneNormal)) == 0 &&
+			previous.lightPlaneOffset == batch.lightPlaneOffset &&
+			memcmp(previous.lightPlaneRight, batch.lightPlaneRight, sizeof(batch.lightPlaneRight)) == 0 &&
+			memcmp(previous.lightPlaneUp, batch.lightPlaneUp, sizeof(batch.lightPlaneUp)) == 0 &&
+			previous.viewSerial == batch.viewSerial && previous.clipSerial == batch.clipSerial &&
+			previous.viewSnapshot == batch.viewSnapshot &&
+			previousView.clipPlaneEnabled == batchView.clipPlaneEnabled &&
+			memcmp(previousView.viewProjection, batchView.viewProjection, sizeof(previousView.viewProjection)) == 0 &&
+			memcmp(previousView.clipPlane, batchView.clipPlane, sizeof(previousView.clipPlane)) == 0;
+	}
+
 	static void RecordSceneBatchSubmission(const FSceneBatch &batch)
 	{
 		if (!Profile.active && !gl_gles_validate_order) return;
@@ -1787,7 +1847,7 @@ namespace
 		batch.customBlend = customBlend;
 		batch.sourceBlend = sourceBlend;
 		batch.destinationBlend = destinationBlend;
-		batch.alphaCutoff = alphaCutoff;
+		batch.alphaCutoff = ClampUnit(alphaCutoff);
 		batch.hud = hud;
 		if (lightData != NULL && lightCounts != NULL)
 			CopyNativeLightData(batch, lightData, lightCounts);
@@ -2578,6 +2638,7 @@ void gl_GLES_BeginScene(float cameraX, float cameraY, float cameraZ,
 	Resources.sceneBatchSubmissions = 0;
 	Resources.sceneOrderHash = SceneOrderHashOffset;
 	Resources.sceneOpaqueBatchMerges = 0;
+	Resources.sceneLateBatchMerges = 0;
 	Resources.sceneProgramBinds = 0;
 	Resources.sceneProgramBindSkips = 0;
 	Resources.sceneTextureBinds = 0;
@@ -2648,6 +2709,7 @@ void gl_GLES_ClearScene()
 	Resources.sceneBatchSubmissions = 0;
 	Resources.sceneOrderHash = SceneOrderHashOffset;
 	Resources.sceneOpaqueBatchMerges = 0;
+	Resources.sceneLateBatchMerges = 0;
 	Resources.sceneProgramBinds = 0;
 	Resources.sceneProgramBindSkips = 0;
 	Resources.sceneTextureBinds = 0;
@@ -3360,8 +3422,7 @@ void gl_GLES_AddModelSurface(const float *positions, const float *texcoords,
 	batch.customBlend = customBlend;
 	batch.sourceBlend = static_cast<GLenum>(sourceBlend);
 	batch.destinationBlend = static_cast<GLenum>(destinationBlend);
-	batch.alphaCutoff = ClampUnit(alphaCutoff);
-	batch.alphaCutoff *= ClampUnit(alpha);
+	batch.alphaCutoff = ClampUnit(alphaCutoff * ClampUnit(alpha));
 	batch.sortDepth = dx * dx + dy * dy + dz * dz;
 	if (fogColor != NULL)
 	{
@@ -3584,19 +3645,20 @@ static void ApplyNativeCullState(FNativeRenderStateCache &cache, bool enabled,
 static void BindNativePortalTexture(FNativeTextureBindingCache &cache, unsigned int unit,
 	GLuint texture, GLuint sampler)
 {
-	if (!cache.activeUnitKnown || cache.activeUnit != unit)
+	const bool textureChanged = !cache.known[unit] || cache.textures[unit] != texture;
+	if (textureChanged)
 	{
-		glActiveTexture(GL_TEXTURE0 + unit);
-		cache.activeUnit = unit;
-		cache.activeUnitKnown = true;
-		if (Profile.active) ++Profile.portalActiveTextureSets;
-	}
-	else if (Profile.active)
-	{
-		++Profile.portalActiveTextureSkips;
-	}
-	if (!cache.known[unit] || cache.textures[unit] != texture)
+		if (!cache.activeUnitKnown || cache.activeUnit != unit)
+		{
+			glActiveTexture(GL_TEXTURE0 + unit);
+			cache.activeUnit = unit;
+			cache.activeUnitKnown = true;
+			if (Profile.active) ++Profile.portalActiveTextureSets;
+		}
+		else if (Profile.active)
+			++Profile.portalActiveTextureSkips;
 		glBindTexture(GL_TEXTURE_2D, texture);
+	}
 	if (!cache.known[unit] || cache.samplers[unit] != sampler)
 		glBindSampler(unit, sampler);
 	cache.textures[unit] = texture;
@@ -3758,7 +3820,15 @@ static void DrawNativePortalBatch(const FSceneBatch &sourceBatch, GLuint dynamic
 	BindNativePortalTexture(textureCache, 2,
 		projected ? dynamicLightTexture : Resources.checkerTexture,
 		Resources.sceneSamplers[3]);
-	BindNativePortalTexture(textureCache, 0, textureCache.textures[0], textureCache.samplers[0]);
+	if (!textureCache.activeUnitKnown || textureCache.activeUnit != 0)
+	{
+		glActiveTexture(GL_TEXTURE0);
+		textureCache.activeUnit = 0;
+		textureCache.activeUnitKnown = true;
+		if (Profile.active) ++Profile.portalActiveTextureSets;
+	}
+	else if (Profile.active)
+		++Profile.portalActiveTextureSkips;
 	SetNativeDepthBias(batch, true);
 	ProfileDrawElements(batch.primitiveMode, batch.indexCount, NativeSceneIndexType(),
 		NativeSceneIndexOffset(batch.firstIndex));
@@ -5224,10 +5294,10 @@ void gl_GLES_RenderBootstrap(int width, int height)
 		glStencilMask(0xff);
 		glDepthMask(GL_FALSE);
 		glBindVertexArray(Resources.sceneVertexArray);
-	bool hudViewportReady = NativeOffscreenRender;
-	bool hudModelDepthCleared = false;
-	FNativeTextureBindingCache overlayTextureCache = {};
-	FNativeRenderStateCache overlayStateCache = {};
+		bool hudViewportReady = NativeOffscreenRender;
+		bool hudModelDepthCleared = false;
+		FNativeTextureBindingCache overlayTextureCache = {};
+		FNativeRenderStateCache overlayStateCache = {};
 		const auto overlayStart = Profile.active ? std::chrono::steady_clock::now() :
 			std::chrono::steady_clock::time_point();
 		for (size_t orderIndex = 0; orderIndex < drawOrder.count; ++orderIndex)
@@ -5262,7 +5332,33 @@ void gl_GLES_RenderBootstrap(int width, int height)
 				SetNativeHUDViewport(activeTarget->renderWidth, activeTarget->renderHeight);
 				hudViewportReady = true;
 			}
-			DrawNativePortalBatch(batch, dynamicLightTexture, 0, overlayTextureCache, overlayStateCache);
+			const FSceneBatch *drawBatch = &batch;
+			FSceneBatch coalescedBatch = {};
+			bool merged = false;
+			if (!NativeOffscreenRender && IsNativeLateCoalesceCandidate(batch))
+			{
+				while (orderIndex + 1 < drawOrder.count)
+				{
+					const FSceneBatch &nextBatch = Resources.sceneBatches[drawOrder.indices[orderIndex + 1]];
+					const FSceneBatch &previousBatch = merged ? coalescedBatch : batch;
+					if (!CanCoalesceNativeLateBatches(previousBatch, nextBatch) ||
+						static_cast<size_t>(previousBatch.indexCount) >
+							static_cast<size_t>(std::numeric_limits<GLsizei>::max()) -
+							static_cast<size_t>(nextBatch.indexCount))
+						break;
+					if (!merged)
+					{
+						coalescedBatch = batch;
+						merged = true;
+					}
+					coalescedBatch.indexCount += nextBatch.indexCount;
+					++orderIndex;
+					if (Profile.active)
+						++Resources.sceneLateBatchMerges;
+				}
+			}
+			if (merged) drawBatch = &coalescedBatch;
+			DrawNativePortalBatch(*drawBatch, dynamicLightTexture, 0, overlayTextureCache, overlayStateCache);
 		}
 		if (Profile.active)
 			Profile.overlayMilliseconds += ProfileMilliseconds(overlayStart);
@@ -5395,7 +5491,7 @@ void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilli
 			"overlay=%.3f resolve=%.3f present=%.3f cpu=%.3f total=%.3f ms; "
 			"collect_parts=wall:%.3f flat:%.3f sprite:%.3f model:%.3f material:%.3f "
 			"lights:%.3f batches:%.3f indices:%.3f; "
-			"draws=%u tris=%u vertices=%u indices=%u submitted=%u batches=%u simple_draws=%u merges=%u "
+			"draws=%u tris=%u vertices=%u indices=%u submitted=%u batches=%u simple_draws=%u merges=%u late_merges=%u "
 			"walls=%u flats=%u sprites=%u order_hash=%016llx "
 			"portal_targets=%u camera=%u/%u realloc=%u bytes=%zu/%zu index_type=%u resolves=%u readbacks=%u wipes=%u; "
 			"binds=%u/%u tex=%u/%u active_tex=%u/%u samp=%u/%u sky_upload=%u/%u "
@@ -5414,7 +5510,7 @@ void gl_GLES_RecordHostPresentation(double waitMilliseconds, double presentMilli
 			static_cast<unsigned int>(Resources.sceneVertices.size()),
 			static_cast<unsigned int>(Resources.sceneIndices.size()),
 			Resources.sceneBatchSubmissions, static_cast<unsigned int>(Resources.sceneBatches.size()),
-			Profile.simpleShaderDraws, Resources.sceneOpaqueBatchMerges,
+			Profile.simpleShaderDraws, Resources.sceneOpaqueBatchMerges, Resources.sceneLateBatchMerges,
 			Resources.sceneWallCount, Resources.sceneFlatCount, Resources.sceneSpriteCount,
 			static_cast<unsigned long long>(Resources.sceneOrderHash),
 			static_cast<unsigned int>(Resources.portalTargets.size()), Profile.cameraTargetCreates,

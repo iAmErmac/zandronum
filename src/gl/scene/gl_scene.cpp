@@ -1567,6 +1567,7 @@ void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, in
 
 	int width = gltex->TextureWidth(GLUSE_TEXTURE);
 	int height = gltex->TextureHeight(GLUSE_TEXTURE);
+	gl_fixedcolormap = CM_DEFAULT;
 
 #if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
 	if (gl_GLES_IsActive())
@@ -1586,8 +1587,6 @@ void FGLInterface::RenderTextureView (FCanvasTexture *tex, AActor *Viewpoint, in
 		return;
 	}
 #endif
-
-	gl_fixedcolormap=CM_DEFAULT;
 
 	bool usefb;
 

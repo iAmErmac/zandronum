@@ -54,6 +54,9 @@
 #include "doomerrors.h"
 
 #include "optionmenuitems.h"
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+#include "gl/system/gl_gles_renderer.h"
+#endif
 
 void ClearSaveGames();
 
@@ -62,6 +65,49 @@ static FListMenuDescriptor DefaultListMenuSettings;	// contains common settings 
 static FOptionMenuDescriptor DefaultOptionMenuSettings;	// contains common settings for all Option menus
 FOptionMenuSettings OptionSettings;
 FOptionMap OptionValues;
+
+class FRendererMenuOption : public FOptionMenuItemOption
+{
+public:
+	FRendererMenuOption(const char *label, const char *cvar, const char *values, const char *check, int center)
+		: FOptionMenuItemOption(label, cvar, values, check, center)
+	{
+	}
+
+private:
+	static bool NativeGLES()
+	{
+#if defined(__ANDROID__) || defined(ZANDRONUM_GLES_BACKEND)
+		return gl_GLES_IsActive();
+#else
+		return false;
+#endif
+	}
+
+	FName ValuesName() const override
+	{
+		if (mAction == FName("gl_texture_format") && NativeGLES())
+			return FName("GLESTextureFormats");
+		return FOptionMenuItemOption::ValuesName();
+	}
+
+	double DisplayValue(double value) const override
+	{
+		if (mAction != FName("gl_texture_format") || !NativeGLES()) return value;
+		if (value == 3) return 2;
+		return value >= 0 && value <= 2 ? value : 0;
+	}
+
+	const char *FixedValue() const override
+	{
+#if defined(__ANDROID__)
+		if (mAction == FName("vid_vsync")) return "System managed";
+#endif
+		if (NativeGLES() && (mAction == FName("gl_usefb") || mAction == FName("gl_usevbo")))
+			return "On (required)";
+		return NULL;
+	}
+};
 
 static void DeinitMenus()
 {
@@ -689,8 +735,9 @@ static void ParseOptionMenuBody(FScanner &sc, FOptionMenuDescriptor *desc)
 			FOptionMenuItem *it = new FOptionMenuItemSubmenu(label, sc.String);
 			desc->mItems.Push(it);
 		}
-		else if (sc.Compare("Option"))
+		else if (sc.Compare("Option") || sc.Compare("RendererOption"))
 		{
+			const bool rendererOption = sc.Compare("RendererOption");
 			sc.MustGetString();
 			FString label = sc.String;
 			sc.MustGetStringName(",");
@@ -711,7 +758,9 @@ static void ParseOptionMenuBody(FScanner &sc, FOptionMenuDescriptor *desc)
 					center = sc.Number;
 				}
 			}
-			FOptionMenuItem *it = new FOptionMenuItemOption(label, cvar, values, check, center);
+			FOptionMenuItem *it = rendererOption
+				? new FRendererMenuOption(label, cvar, values, check, center)
+				: new FOptionMenuItemOption(label, cvar, values, check, center);
 			desc->mItems.Push(it);
 		}
 		else if (sc.Compare("Command"))

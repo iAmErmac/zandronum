@@ -44,6 +44,13 @@ OptionValue "TextureFormats"
 	7, "S3TC_DXT5"
 }
 
+OptionValue "GLESTextureFormats"
+{
+	0, "RGBA8"
+	1, "RGB5_A1"
+	2, "RGBA4"
+}
+
 OptionValue "Anisotropy"
 {
 	1, "Off"
@@ -143,14 +150,14 @@ OptionMenu "GLTextureGLOptions"
 	Option "Textures enabled",			gl_texture,						"YesNo"
 	Option "Texture Filter mode",		gl_texture_filter,				"FilterModes"
 	Option "Anisotropic filter",		gl_texture_filter_anisotropic,	"Anisotropy"
-	Option "Texture Format",			gl_texture_format,				"TextureFormats"
+	RendererOption "Texture Format",			gl_texture_format,				"TextureFormats"
 	Option "Enable hires textures",		gl_texture_usehires,			"YesNo"
 	Option "High Quality Resize mode",	gl_texture_hqresize,			"HqResizeModes"
 	Option "Resize textures",			gl_texture_hqresize_textures,	"OnOff"
 	Option "Resize sprites",			gl_texture_hqresize_sprites,	"OnOff"
 	Option "Resize fonts",				gl_texture_hqresize_fonts,		"OnOff"
 	Option "Precache GL textures",		gl_precache,					"YesNo"
-	Option "Camera textures offscreen",	gl_usefb,						"OnOff"
+	RendererOption "Camera textures offscreen",	gl_usefb,						"OnOff"
 	Option "Trim sprite edges",			gl_trimsprites,					"OnOff"
 }
 
@@ -186,7 +193,7 @@ OptionMenu "GLPrefOptions"
 	Option "Particle style",			gl_particles_style,				"Particles"
 	Slider "Ambient light level",		gl_light_ambient,				1.0, 255.0, 5.0
 	Option "Rendering quality",			gl_render_precise,				"Precision"
-	Option "Use vertex buffer",			gl_usevbo,						"VBOModes"
+	RendererOption "Use vertex buffer",			gl_usevbo,						"VBOModes"
 	// [BB]
 	Option "Use models",				gl_use_models,					"OnOff"
 }
@@ -224,7 +231,7 @@ OptionMenu "VideoOptions"
 	Slider "Brightness",				"vid_brightness",				-0.8,0.8, 0.05
 	Slider "Contrast",					"vid_contrast",	   				0.1, 3.0, 0.1
 
-	Option "Vertical Sync",				"vid_vsync", "OnOff"
+	RendererOption "Vertical Sync",				"vid_vsync", "OnOff"
 	Option "Blood uses max health",		"blood_fade_usemaxhealth", "OnOff" // [AK]
 	// [TP]
 	Slider "Blood brightness",			"blood_fade_scalar",			0.0, 1.0, 0.05

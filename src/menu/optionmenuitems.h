@@ -136,6 +136,8 @@ protected:
 	FName mValues;	// Entry in OptionValues table
 	FBaseCVar *mGrayCheck;
 	int mCenter;
+	virtual FName ValuesName() const { return mValues; }
+	virtual const char *FixedValue() const { return NULL; }
 public:
 
 	enum
@@ -180,7 +182,8 @@ public:
 		bool grayed = mGrayCheck != NULL && !(mGrayCheck->GetGenericRep(CVAR_Bool).Bool);
 
 		// [TP] Also gray it if we cannot edit this cvar for some other reason.
-		if ( IsDisabled() )
+		const char *fixedValue = FixedValue();
+		if (IsDisabled() || fixedValue != NULL)
 			grayed = true;
 
 		if (mCenter)
@@ -192,8 +195,12 @@ public:
 		int overlay = grayed? MAKEARGB(96,48,0,0) : 0;
 		const char *text;
 		int Selection = GetSelection();
-		FOptionValues **opt = OptionValues.CheckKey(mValues);
-		if (Selection < 0 || opt == NULL || *opt == NULL)
+		FOptionValues **opt = OptionValues.CheckKey(ValuesName());
+		if (fixedValue != NULL)
+		{
+			text = fixedValue;
+		}
+		else if (Selection < 0 || opt == NULL || *opt == NULL)
 		{
 			text = "Unknown";
 		}
@@ -209,7 +216,8 @@ public:
 	//=============================================================================
 	bool MenuEvent (int mkey, bool fromcontroller)
 	{
-		FOptionValues **opt = OptionValues.CheckKey(mValues);
+		if (FixedValue() != NULL) return false;
+		FOptionValues **opt = OptionValues.CheckKey(ValuesName());
 		if (opt != NULL && *opt != NULL && (*opt)->mValues.Size() > 0)
 		{
 			int Selection = GetSelection();
@@ -235,7 +243,7 @@ public:
 	bool Selectable()
 	{
 		// [TP] We also need to check the base class's Selectable
-		return !(mGrayCheck != NULL && !(mGrayCheck->GetGenericRep(CVAR_Bool).Bool))
+		return FixedValue() == NULL && !(mGrayCheck != NULL && !(mGrayCheck->GetGenericRep(CVAR_Bool).Bool))
 			&& FOptionMenuItem::Selectable();
 	}
 };
@@ -250,6 +258,8 @@ class FOptionMenuItemOption : public FOptionMenuItemOptionBase
 {
 	// action is a CVAR
 	FBaseCVar *mCVar;
+protected:
+	virtual double DisplayValue(double value) const { return value; }
 public:
 
 	FOptionMenuItemOption(const char *label, const char *menu, const char *values, const char *graycheck, int center)
@@ -268,19 +278,19 @@ public:
 	int GetSelection()
 	{
 		int Selection = -1;
-		FOptionValues **opt = OptionValues.CheckKey(mValues);
+		FOptionValues **opt = OptionValues.CheckKey(ValuesName());
 		if (opt != NULL && *opt != NULL && mCVar != NULL && (*opt)->mValues.Size() > 0)
 		{
 			if ((*opt)->mValues[0].TextValue.IsEmpty())
 			{
-				UCVarValue cv = mCVar->GetGenericRep(CVAR_Float);
+				const double value = DisplayValue(mCVar->GetGenericRep(CVAR_Float).Float);
 				for(unsigned i = 0; i < (*opt)->mValues.Size(); i++)
 				{ 
 					// [TP]
 					if ( IsOptionSelectable(( *opt )->mValues[i].Value ) == false )
 						continue;
 
-					if (fabs(cv.Float - (*opt)->mValues[i].Value) < FLT_EPSILON)
+					if (fabs(value - (*opt)->mValues[i].Value) < FLT_EPSILON)
 					{
 						Selection = i;
 						break;
@@ -306,7 +316,7 @@ public:
 	void SetSelection(int Selection)
 	{
 		UCVarValue value;
-		FOptionValues **opt = OptionValues.CheckKey(mValues);
+		FOptionValues **opt = OptionValues.CheckKey(ValuesName());
 		if (opt != NULL && *opt != NULL && mCVar != NULL && (*opt)->mValues.Size() > 0)
 		{
 			if ((*opt)->mValues[0].TextValue.IsEmpty())

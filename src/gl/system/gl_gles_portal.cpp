@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <limits>
 #include <math.h>
 #include <stdio.h>
 #include <vector>
@@ -60,8 +61,14 @@ namespace
 
 	struct FPortalFallbackPool
 	{
-		std::deque<FPortalFallbackTarget> targets;
+		struct FDepthTargets
+		{
+			FPortalFallbackTarget choices[2];
+		};
+
+		std::deque<FDepthTargets> targets;
 		size_t targetsInUse;
+		size_t extraAttachmentBytes;
 		bool allocationFailureReported;
 	};
 
@@ -94,6 +101,26 @@ namespace
 	};
 
 	FPortalResources Portal = {};
+	const size_t PortalExtraAttachmentBudget = 2 * 1024 * 1024;
+
+	size_t EstimateRenderTargetBytes(int width, int height, int samples)
+	{
+		if (width <= 0 || height <= 0)
+			return 0;
+		const size_t maxSize = std::numeric_limits<size_t>::max();
+		const size_t sampleAttachments = samples > 1 ? static_cast<size_t>(samples) + 1 : 1;
+		if (sampleAttachments > maxSize / 8)
+			return maxSize;
+		const size_t bytesPerPixel = sampleAttachments * 8;
+		const size_t pixelWidth = static_cast<size_t>(width);
+		const size_t pixelHeight = static_cast<size_t>(height);
+		if (pixelWidth > maxSize / pixelHeight)
+			return maxSize;
+		const size_t pixelCount = pixelWidth * pixelHeight;
+		if (pixelCount > maxSize / bytesPerPixel)
+			return maxSize;
+		return pixelCount * bytesPerPixel;
+	}
 
 	const char *PortalVertexSource =
 		"#version 320 es\n"
@@ -547,8 +574,9 @@ void gl_GLESInternalPortalBeginFrame()
 	for (FPortalFallbackPool &pool : Portal.fallbackPools)
 	{
 		pool.targetsInUse = 0;
-		for (FPortalFallbackTarget &target : pool.targets)
-			target.allocationFailed = false;
+		for (FPortalFallbackPool::FDepthTargets &depth : pool.targets)
+			for (FPortalFallbackTarget &target : depth.choices)
+				target.allocationFailed = false;
 	}
 }
 
@@ -562,25 +590,52 @@ FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int
 	const size_t targetIndex = pool.targetsInUse;
 	if (targetIndex >= pool.targets.size())
 		pool.targets.resize(targetIndex + 1);
-	FPortalFallbackTarget &entry = pool.targets[targetIndex];
-	const bool sameRequest = entry.requestedWidth == width && entry.requestedHeight == height &&
-		entry.requestedSamples == samples;
-	if (sameRequest && entry.allocationFailed)
+	FPortalFallbackPool::FDepthTargets &depth = pool.targets[targetIndex];
+	FPortalFallbackTarget *entry = nullptr;
+	for (int choice = 0; choice < 2; ++choice)
 	{
-		return nullptr;
+		FPortalFallbackTarget &candidate = depth.choices[choice];
+		const bool sameRequest = candidate.requestedWidth == width &&
+			candidate.requestedHeight == height && candidate.requestedSamples == samples;
+		if (sameRequest && candidate.surface.framebuffer != 0)
+		{
+			entry = &candidate;
+			break;
+		}
 	}
+	if (entry == nullptr)
+	{
+		for (int choice = 0; choice < 2; ++choice)
+		{
+			FPortalFallbackTarget &candidate = depth.choices[choice];
+			if (candidate.requestedWidth == width && candidate.requestedHeight == height &&
+				candidate.requestedSamples == samples && candidate.allocationFailed)
+				return nullptr;
+		}
+		entry = &depth.choices[0];
+		if (offscreen && entry->surface.framebuffer != 0 &&
+			depth.choices[1].surface.framebuffer == 0 &&
+			pool.extraAttachmentBytes < PortalExtraAttachmentBudget)
+		{
+			const size_t requestedBytes = EstimateRenderTargetBytes(width, height, samples);
+			if (requestedBytes <= PortalExtraAttachmentBudget - pool.extraAttachmentBytes)
+				entry = &depth.choices[1];
+		}
+	}
+	const bool sameRequest = entry->requestedWidth == width && entry->requestedHeight == height &&
+		entry->requestedSamples == samples;
 	if (!sameRequest)
 	{
-		entry.requestedWidth = width;
-		entry.requestedHeight = height;
-		entry.requestedSamples = samples;
-		entry.allocationFailed = false;
+		entry->requestedWidth = width;
+		entry->requestedHeight = height;
+		entry->requestedSamples = samples;
+		entry->allocationFailed = false;
 	}
-	if (!sameRequest || entry.surface.framebuffer == 0)
+	if (!sameRequest || entry->surface.framebuffer == 0)
 	{
-		if (!gl_GLES_CreateRenderTarget(&entry.surface, width, height, samples))
+		if (!gl_GLES_CreateRenderTarget(&entry->surface, width, height, samples))
 		{
-			entry.allocationFailed = true;
+			entry->allocationFailed = true;
 			if (!pool.allocationFailureReported)
 			{
 				pool.allocationFailureReported = true;
@@ -588,10 +643,13 @@ FGLESTargetDescriptor *gl_GLESInternalPortalAcquireFallbackTarget(int width, int
 			}
 			return nullptr;
 		}
+		if (offscreen && entry == &depth.choices[1])
+			pool.extraAttachmentBytes += EstimateRenderTargetBytes(
+				entry->surface.renderWidth, entry->surface.renderHeight, entry->surface.sampleCount);
 	}
 	++pool.targetsInUse;
 	*index = static_cast<int>(targetIndex);
-	return &entry.surface;
+	return &entry->surface;
 }
 
 void gl_GLESInternalPortalReleaseFallbackTarget(bool offscreen, int index)
@@ -615,10 +673,12 @@ void gl_GLESInternalPortalDestroy()
 	ResetUniforms();
 	for (FPortalFallbackPool &pool : Portal.fallbackPools)
 	{
-		for (FPortalFallbackTarget &target : pool.targets)
-			gl_GLES_DestroyRenderTarget(&target.surface);
+		for (FPortalFallbackPool::FDepthTargets &depth : pool.targets)
+			for (FPortalFallbackTarget &target : depth.choices)
+				gl_GLES_DestroyRenderTarget(&target.surface);
 		pool.targets.clear();
 		pool.targetsInUse = 0;
+		pool.extraAttachmentBytes = 0;
 		pool.allocationFailureReported = false;
 	}
 }
@@ -633,15 +693,19 @@ void gl_GLESInternalPortalContextLost()
 	ResetUniforms();
 	for (FPortalFallbackPool &pool : Portal.fallbackPools)
 	{
-		for (FPortalFallbackTarget &target : pool.targets)
+		for (FPortalFallbackPool::FDepthTargets &depth : pool.targets)
 		{
-			gl_GLES_InvalidateRenderTarget(&target.surface);
-			target.requestedWidth = 0;
-			target.requestedHeight = 0;
-			target.requestedSamples = 0;
-			target.allocationFailed = false;
+			for (FPortalFallbackTarget &target : depth.choices)
+			{
+				gl_GLES_InvalidateRenderTarget(&target.surface);
+				target.requestedWidth = 0;
+				target.requestedHeight = 0;
+				target.requestedSamples = 0;
+				target.allocationFailed = false;
+			}
 		}
 		pool.targetsInUse = 0;
+		pool.extraAttachmentBytes = 0;
 	}
 }
 
