@@ -270,7 +270,11 @@ void GLSprite::Draw(int pass)
 		int sourceBlend = GL_SRC_ALPHA;
 		int destinationBlend = GL_ONE_MINUS_SRC_ALPHA;
 		int blendEquation = GL_FUNC_ADD;
-		gl_GetRenderStyle(RenderStyle, false, false, &textureMode, &sourceBlend,
+		const bool allowColorBlending = pass == GLPASS_TRANSLUCENT &&
+			trans > 1.0f - FLT_EPSILON && gl_usecolorblending &&
+			gl_fixedcolormap < CM_FIRSTSPECIALCOLORMAP && actor != NULL && fullbright &&
+			gltexture != NULL && !gltexture->GetTransparent();
+		gl_GetRenderStyle(RenderStyle, false, allowColorBlending, &textureMode, &sourceBlend,
 			&destinationBlend, &blendEquation);
 		const EGLESBlendMode nativeBlend = GLESSpriteBlend(RenderStyle, nativeAlpha,
 			hw_styleflags == STYLEHW_Solid, nativeFuzz);

@@ -77,6 +77,7 @@
 #endif
 #ifdef __ANDROID__
 #include "zandronum_android_host.h"
+#include "zandronum_android_input.h"
 #endif
 #include "i_sound.h"
 #include "i_video.h"
@@ -316,6 +317,10 @@ void D_ProcessEvents (void)
 		ev = &events[eventtail];
 		if (ev->type == EV_None)
 			continue;
+#ifdef __ANDROID__
+		if (ev->type == EV_AndroidKeyboard && Zandronum_AndroidInput_ConsumeKeyboardEvent(*ev))
+			continue;
+#endif
 		if (ev->type == EV_DeviceChange)
 			UpdateJoystickMenu(I_UpdateDeviceList());
 		if (C_Responder (ev))
@@ -870,7 +875,8 @@ void D_Display ()
 	if (gl_GLES_IsActive())
 	{
 		static bool nativeWipeSoundPaused = false;
-		bool nativeWipeInProgress = gl_GLES_IsWipeInProgress();
+		const bool nativeWipeWasInProgress = gl_GLES_IsWipeInProgress();
+		bool nativeWipeInProgress = nativeWipeWasInProgress;
 		bool nativeWipeDone = false;
 		if (nativeWipeSoundPaused && !nativeWipeInProgress)
 		{
@@ -988,8 +994,9 @@ void D_Display ()
 			POSSESSION_Render();
 			HUD_Render(CLIENTDEMO_IsInFreeSpectateMode() == false ? HUD_GetViewPlayer() : consoleplayer);
 			MEDAL_Render();
-			CHAT_Render();
 		}
+		if (nativeLevelReady)
+			CHAT_Render();
 		if (NETWORK_InClientMode())
 		{
 			FString message;
@@ -1025,6 +1032,25 @@ void D_Display ()
 		}
 		if (snd_drawoutput)
 			GSnd->DrawWaveDebug(snd_drawoutput);
+		// Draw the destination page before capturing it for the wipe.
+		if (!nativeWipeWasInProgress)
+		{
+			switch (gamestate)
+			{
+			case GS_INTERMISSION:
+				WI_Drawer();
+				CHAT_Render();
+				break;
+			case GS_FINALE:
+				F_Drawer();
+				break;
+			case GS_DEMOSCREEN:
+				D_PageDrawer();
+				break;
+			default:
+				break;
+			}
+		}
 		if (nativeWipeInProgress)
 		{
 			screen->WipeEndScreen();
@@ -1033,30 +1059,6 @@ void D_Display ()
 			C_DrawConsole(true);
 			M_Drawer();
 			gl_GLES_EndWipeOverlay();
-		}
-		else if (gamestate == GS_FULLCONSOLE)
-		{
-			C_DrawConsole(true);
-			M_Drawer();
-		}
-		else if (gamestate == GS_INTERMISSION)
-		{
-			WI_Drawer();
-			CHAT_Render();
-			C_DrawConsole(true);
-			M_Drawer();
-		}
-		else if (gamestate == GS_FINALE)
-		{
-			F_Drawer();
-			C_DrawConsole(true);
-			M_Drawer();
-		}
-		else if (gamestate == GS_DEMOSCREEN)
-		{
-			D_PageDrawer();
-			C_DrawConsole(true);
-			M_Drawer();
 		}
 		else
 		{

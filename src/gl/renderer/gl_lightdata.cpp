@@ -209,12 +209,15 @@ void gl_GetRenderStyle(FRenderStyle style, bool drawopaque, bool allowcolorblend
 		blendequation = GL_FUNC_ADD;
 	}
 
+#if defined(__ANDROID__) && defined(__MOBILE__)
+	allowcolorblending = allowcolorblending && gl_GLES_IsActive();
+#endif
+#if !defined(__MOBILE__) || defined(__ANDROID__)
 	if (allowcolorblending && srcblend == GL_SRC_ALPHA && dstblend == GL_ONE && blendequation == GL_FUNC_ADD)
 	{
-#ifndef __MOBILE__
 		srcblend = GL_SRC_COLOR;
-#endif
 	}
+#endif
 
 	*tm = texturemode;
 	*be = blendequation;
@@ -269,7 +272,7 @@ int gl_CalcLightLevel(int lightlevel, int rellight, bool weapon)
 		light = gl_light_ambient;
 		if (rellight<0) rellight>>=1;
 	}
-#ifdef __MOBILE__ // Hook in brightness slider to this also
+#if defined(__MOBILE__) && !defined(__ANDROID__) // Android applies brightness during presentation.
     int brightness = vid_brightness * 255;
     if (light<brightness && glset.lightmode != 8)		// ambient clipping only if not using software lighting model.
     {

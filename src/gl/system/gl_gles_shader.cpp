@@ -4,6 +4,7 @@
 #include <string>
 #include <string.h>
 #include <ctype.h>
+#include <vector>
 
 #include "gl/system/gl_gles_context.h"
 
@@ -165,26 +166,74 @@ GLuint gl_GLES_LinkProgram(const char *vertexSource, const char *fragmentSource,
 	return program;
 }
 
-std::string gl_GLES_LowerMaterialShader(const char *source)
+namespace
 {
-	std::string result;
-	for (size_t offset = 0; source[offset] != '\0';)
+	bool IsShaderIdentifierCharacter(char character)
+	{
+		return isalnum(static_cast<unsigned char>(character)) || character == '_';
+	}
+
+	size_t SkipShaderTrivia(const char *source, size_t length, size_t offset)
+	{
+		for (;;)
+		{
+			while (offset < length && isspace(static_cast<unsigned char>(source[offset]))) ++offset;
+			if (offset + 1 >= length || source[offset] != '/') return offset;
+			if (source[offset + 1] == '/')
+			{
+				offset += 2;
+				while (offset < length && source[offset] != '\n') ++offset;
+			}
+			else if (source[offset + 1] == '*')
+			{
+				offset += 2;
+				while (offset + 1 < length && !(source[offset] == '*' && source[offset + 1] == '/')) ++offset;
+				if (offset + 1 < length) offset += 2;
+				else return length;
+			}
+			else return offset;
+		}
+	}
+}
+
+bool gl_GLES_LowerMaterialShader(const char *source, bool dynamicLights, std::string &result)
+{
+	result.clear();
+	if (source == nullptr) return false;
+	const size_t length = strlen(source);
+	const size_t noPendingOpening = length;
+	size_t pendingOpening = noPendingOpening;
+	std::vector<unsigned char> replacementBrackets;
+	for (size_t offset = 0; offset < length;)
 	{
 		const size_t first = offset;
-		if (source[offset] == '/' && source[offset + 1] == '/')
-		{
-			while (source[offset] != '\0' && source[offset] != '\n') ++offset;
-		}
-		else if (source[offset] == '/' && source[offset + 1] == '*')
+		if (source[offset] == '/' && offset + 1 < length && source[offset + 1] == '/')
 		{
 			offset += 2;
-			while (source[offset] != '\0' && !(source[offset] == '*' && source[offset + 1] == '/')) ++offset;
-			if (source[offset] != '\0') offset += 2;
+			while (offset < length && source[offset] != '\n') ++offset;
+			result.append(source + first, offset - first);
+			continue;
 		}
-		else if (isalpha(static_cast<unsigned char>(source[offset])) || source[offset] == '_')
+		if (source[offset] == '/' && offset + 1 < length && source[offset + 1] == '*')
 		{
-			while (isalnum(static_cast<unsigned char>(source[offset])) || source[offset] == '_') ++offset;
+			offset += 2;
+			while (offset + 1 < length && !(source[offset] == '*' && source[offset + 1] == '/')) ++offset;
+			if (offset + 1 < length) offset += 2;
+			result.append(source + first, offset - first);
+			continue;
+		}
+		if (isalpha(static_cast<unsigned char>(source[offset])) || source[offset] == '_')
+		{
+			while (offset < length && IsShaderIdentifierCharacter(source[offset])) ++offset;
 			const std::string token(source + first, offset - first);
+			if (dynamicLights && token == "lights")
+			{
+				const size_t opening = SkipShaderTrivia(source, length, offset);
+				if (opening >= length || source[opening] != '[') return false;
+				result += "zandronum_light";
+				pendingOpening = opening;
+				continue;
+			}
 			if (token == "gl_TexCoord") result += "zandronum_texcoord";
 			else if (token == "gl_Color") result += "v_color";
 			else if (token == "gl_FragColor") result += "frag_color";
@@ -193,8 +242,28 @@ std::string gl_GLES_LowerMaterialShader(const char *source)
 			else result += token;
 			continue;
 		}
-		else ++offset;
+		if (source[offset] == '[')
+		{
+			const bool replacement = offset == pendingOpening;
+			if (replacement) pendingOpening = noPendingOpening;
+			replacementBrackets.push_back(replacement ? 1 : 0);
+			result += replacement ? '(' : '[';
+			++offset;
+			continue;
+		}
+		if (source[offset] == ']')
+		{
+			const bool replacement = !replacementBrackets.empty() && replacementBrackets.back() != 0;
+			if (!replacementBrackets.empty()) replacementBrackets.pop_back();
+			result += replacement ? ')' : ']';
+			++offset;
+			continue;
+		}
+		++offset;
 		result.append(source + first, offset - first);
 	}
-	return result;
+	if (pendingOpening != noPendingOpening) return false;
+	for (unsigned char replacement : replacementBrackets)
+		if (replacement != 0) return false;
+	return true;
 }

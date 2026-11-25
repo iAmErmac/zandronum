@@ -737,6 +737,12 @@ extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_
 	Zandronum_AndroidInput_Key(static_cast<int>(keycode), pressed != 0);
 }
 
+extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputKeyboardKey(
+	JNIEnv *, jclass, jint keycode, jboolean pressed, jint codepoint, jint metaState, jboolean repeat)
+{
+	Zandronum_AndroidInput_KeyboardKey(keycode, pressed != 0, codepoint, metaState, repeat != 0);
+}
+
 extern "C" ZANDRONUM_JNI_EXPORT void Java_com_ermac_zandromeda_GLES3JNIActivity_nativeInputGuiKey(JNIEnv *, jclass, jint keycode, jboolean pressed)
 {
 	Zandronum_AndroidInput_GuiKey(static_cast<int>(keycode), pressed != 0);

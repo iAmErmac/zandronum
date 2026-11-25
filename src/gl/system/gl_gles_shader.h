@@ -4,7 +4,7 @@
 #include "gl/system/gl_gles_api.h"
 #include <string>
 
-std::string gl_GLES_LowerMaterialShader(const char *source);
+bool gl_GLES_LowerMaterialShader(const char *source, bool dynamicLights, std::string &result);
 
 GLuint gl_GLES_CompileShader(GLenum type, const char *source, const char *label,
 	char *log, int logSize);

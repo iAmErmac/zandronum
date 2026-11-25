@@ -2,9 +2,12 @@
 
 #ifdef __ANDROID__
 
+#include <android/input.h>
+#include <android/keycodes.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <set>
 
 #include "c_console.h"
 #include "c_dispatch.h"
@@ -91,60 +94,184 @@ EXTERN_CVAR(Float, m_pitch)
 EXTERN_CVAR(Float, m_yaw)
 EXTERN_CVAR(Bool, invertmouse)
 
-void Zandronum_AndroidInput_Key(int keycode, bool pressed)
+static event_t TranslateKey(int keycode, bool pressed)
 {
 	int character = 0;
-	int translated = keycode;
-	if (keycode >= 29 && keycode <= 54)
+	int translated = 0;
+	if (keycode >= AKEYCODE_A && keycode <= AKEYCODE_Z)
 	{
-		translated = DIK_A + keycode - 29;
-		character = 'a' + keycode - 29;
+		static constexpr int letterKeys[] = {
+			DIK_A, DIK_B, DIK_C, DIK_D, DIK_E, DIK_F, DIK_G, DIK_H, DIK_I,
+			DIK_J, DIK_K, DIK_L, DIK_M, DIK_N, DIK_O, DIK_P, DIK_Q, DIK_R,
+			DIK_S, DIK_T, DIK_U, DIK_V, DIK_W, DIK_X, DIK_Y, DIK_Z
+		};
+		const int letter = keycode - AKEYCODE_A;
+		translated = letterKeys[letter];
+		character = 'a' + letter;
 	}
-	else if (keycode >= 7 && keycode <= 16)
+	else if (keycode >= AKEYCODE_0 && keycode <= AKEYCODE_9)
 	{
-		const int digit = keycode - 7;
+		const int digit = keycode - AKEYCODE_0;
 		translated = digit == 0 ? DIK_0 : DIK_1 + digit - 1;
 		character = '0' + digit;
 	}
-	else if (keycode >= 145 && keycode <= 152)
+	else if (keycode >= AKEYCODE_NUMPAD_0 && keycode <= AKEYCODE_NUMPAD_9)
 	{
-		static const int numpadKeys[] = {
-			DIK_NUMPAD1, DIK_NUMPAD2, DIK_NUMPAD3, DIK_NUMPAD4,
-			DIK_NUMPAD5, DIK_NUMPAD6, DIK_NUMPAD7, DIK_NUMPAD8
+		static constexpr int numpadKeys[] = {
+			DIK_NUMPAD0, DIK_NUMPAD1, DIK_NUMPAD2, DIK_NUMPAD3, DIK_NUMPAD4,
+			DIK_NUMPAD5, DIK_NUMPAD6, DIK_NUMPAD7, DIK_NUMPAD8, DIK_NUMPAD9
 		};
-		translated = numpadKeys[keycode - 145];
+		translated = numpadKeys[keycode - AKEYCODE_NUMPAD_0];
+	}
+	else if (keycode >= AKEYCODE_F1 && keycode <= AKEYCODE_F10)
+	{
+		translated = DIK_F1 + keycode - AKEYCODE_F1;
 	}
 	else
 	{
 		switch (keycode)
 		{
-		case 4: translated = DIK_ESCAPE; break;
-		case 19: translated = DIK_UP; break;
-		case 20: translated = DIK_DOWN; break;
-		case 21: translated = DIK_LEFT; break;
-		case 22: translated = DIK_RIGHT; break;
-		case 61: translated = DIK_TAB; break;
-		case 62: translated = DIK_SPACE; character = ' '; break;
-		case 66: translated = DIK_RETURN; character = '\r'; break;
-		case 67: translated = DIK_BACK; break;
-		case 92: translated = DIK_PRIOR; break;
-		case 93: translated = DIK_NEXT; break;
-		case 111: translated = DIK_ESCAPE; break;
-		case 112: translated = DIK_DELETE; break;
-		case 113: translated = DIK_LCONTROL; break;
-		case 114: translated = DIK_RCONTROL; break;
-		case 57: translated = DIK_LMENU; break;
-		case 58: translated = DIK_RMENU; break;
-		case 59: translated = DIK_LSHIFT; break;
-		case 60: translated = DIK_RSHIFT; break;
-		case 120: translated = DIK_SYSRQ; break;
-		case 122: translated = DIK_HOME; break;
-		case 123: translated = DIK_END; break;
-		case 124: translated = DIK_INSERT; break;
+		case AKEYCODE_BACK:
+		case AKEYCODE_ESCAPE: translated = DIK_ESCAPE; break;
+		case AKEYCODE_DPAD_UP: translated = DIK_UP; break;
+		case AKEYCODE_DPAD_DOWN: translated = DIK_DOWN; break;
+		case AKEYCODE_DPAD_LEFT: translated = DIK_LEFT; break;
+		case AKEYCODE_DPAD_RIGHT: translated = DIK_RIGHT; break;
+		case AKEYCODE_TAB: translated = DIK_TAB; break;
+		case AKEYCODE_SPACE: translated = DIK_SPACE; character = ' '; break;
+		case AKEYCODE_ENTER: translated = DIK_RETURN; character = '\r'; break;
+		case AKEYCODE_DEL: translated = DIK_BACK; break;
+		case AKEYCODE_FORWARD_DEL: translated = DIK_DELETE; break;
+		case AKEYCODE_PAGE_UP: translated = DIK_PRIOR; break;
+		case AKEYCODE_PAGE_DOWN: translated = DIK_NEXT; break;
+		case AKEYCODE_CTRL_LEFT: translated = DIK_LCONTROL; break;
+		case AKEYCODE_CTRL_RIGHT: translated = DIK_RCONTROL; break;
+		case AKEYCODE_ALT_LEFT: translated = DIK_LMENU; break;
+		case AKEYCODE_ALT_RIGHT: translated = DIK_RMENU; break;
+		case AKEYCODE_SHIFT_LEFT: translated = DIK_LSHIFT; break;
+		case AKEYCODE_SHIFT_RIGHT: translated = DIK_RSHIFT; break;
+		case AKEYCODE_META_LEFT: translated = DIK_LWIN; break;
+		case AKEYCODE_META_RIGHT: translated = DIK_RWIN; break;
+		case AKEYCODE_CAPS_LOCK: translated = DIK_CAPITAL; break;
+		case AKEYCODE_NUM_LOCK: translated = DIK_NUMLOCK; break;
+		case AKEYCODE_SCROLL_LOCK: translated = DIK_SCROLL; break;
+		case AKEYCODE_SYSRQ: translated = DIK_SYSRQ; break;
+		case AKEYCODE_BREAK: translated = DIK_PAUSE; break;
+		case AKEYCODE_MOVE_HOME: translated = DIK_HOME; break;
+		case AKEYCODE_MOVE_END: translated = DIK_END; break;
+		case AKEYCODE_INSERT: translated = DIK_INSERT; break;
+		case AKEYCODE_MENU: translated = DIK_APPS; break;
+		case AKEYCODE_F11: translated = DIK_F11; break;
+		case AKEYCODE_F12: translated = DIK_F12; break;
+		case AKEYCODE_GRAVE: translated = DIK_GRAVE; character = '`'; break;
+		case AKEYCODE_MINUS: translated = DIK_MINUS; character = '-'; break;
+		case AKEYCODE_EQUALS: translated = DIK_EQUALS; character = '='; break;
+		case AKEYCODE_LEFT_BRACKET: translated = DIK_LBRACKET; character = '['; break;
+		case AKEYCODE_RIGHT_BRACKET: translated = DIK_RBRACKET; character = ']'; break;
+		case AKEYCODE_BACKSLASH: translated = DIK_BACKSLASH; character = '\\'; break;
+		case AKEYCODE_SEMICOLON: translated = DIK_SEMICOLON; character = ';'; break;
+		case AKEYCODE_APOSTROPHE: translated = DIK_APOSTROPHE; character = '\''; break;
+		case AKEYCODE_COMMA: translated = DIK_COMMA; character = ','; break;
+		case AKEYCODE_PERIOD: translated = DIK_PERIOD; character = '.'; break;
+		case AKEYCODE_SLASH: translated = DIK_SLASH; character = '/'; break;
+		case AKEYCODE_NUMPAD_DIVIDE: translated = DIK_DIVIDE; break;
+		case AKEYCODE_NUMPAD_MULTIPLY: translated = DIK_MULTIPLY; break;
+		case AKEYCODE_NUMPAD_SUBTRACT: translated = DIK_SUBTRACT; break;
+		case AKEYCODE_NUMPAD_ADD: translated = DIK_ADD; break;
+		case AKEYCODE_NUMPAD_DOT: translated = DIK_DECIMAL; break;
+		case AKEYCODE_NUMPAD_COMMA: translated = DIK_NUMPADCOMMA; break;
+		case AKEYCODE_NUMPAD_ENTER: translated = DIK_NUMPADENTER; character = '\r'; break;
+		case AKEYCODE_NUMPAD_EQUALS: translated = DIK_NUMPAD_EQUALS; break;
 		default: break;
 		}
 	}
-	PostKey(translated, pressed, character);
+	event_t event = {};
+	event.type = pressed ? EV_KeyDown : EV_KeyUp;
+	event.data1 = static_cast<SWORD>(translated);
+	event.data2 = static_cast<SWORD>(character);
+	return event;
+}
+
+void Zandronum_AndroidInput_Key(int keycode, bool pressed)
+{
+	const event_t event = TranslateKey(keycode, pressed);
+	if (event.data1 != 0) D_PostEvent(&event);
+}
+
+void Zandronum_AndroidInput_KeyboardKey(int keycode, bool pressed, int codepoint, int metaState, bool repeat)
+{
+	event_t event = TranslateKey(keycode, pressed);
+	event.type = EV_AndroidKeyboard;
+	event.subtype = pressed ? (repeat ? EV_GUI_KeyRepeat : EV_GUI_KeyDown) : EV_GUI_KeyUp;
+	event.data3 = static_cast<SWORD>((metaState & AMETA_SHIFT_ON ? GKM_SHIFT : 0) |
+		(metaState & AMETA_CTRL_ON ? GKM_CTRL : 0) | (metaState & AMETA_ALT_ON ? GKM_ALT : 0));
+	event.x = codepoint;
+	event.y = keycode;
+	D_PostEvent(&event);
+}
+
+bool Zandronum_AndroidInput_ConsumeKeyboardEvent(event_t &event)
+{
+	// Key releases follow their original press even if chat opened or closed in between.
+	static std::set<int> chatKeys;
+	if (event.subtype == EV_GUI_KeyUp)
+	{
+		if (chatKeys.erase(event.y) != 0 || event.data1 == 0) return true;
+		event.type = EV_KeyUp;
+		return false;
+	}
+
+	const bool chatActive = (gamestate == GS_LEVEL || gamestate == GS_INTERMISSION) && CHAT_GetChatMode();
+	if (event.subtype == EV_GUI_KeyRepeat)
+	{
+		if (!chatActive || chatKeys.find(event.y) == chatKeys.end()) return true;
+	}
+	else if (chatActive)
+	{
+		chatKeys.insert(event.y);
+	}
+	else
+	{
+		if (event.data1 == 0) return true;
+		event.type = EV_KeyDown;
+		return false;
+	}
+
+	int guiKey = event.data2;
+	switch (event.y)
+	{
+	case AKEYCODE_BACK:
+	case AKEYCODE_ESCAPE: guiKey = GK_ESCAPE; break;
+	case AKEYCODE_ENTER:
+	case AKEYCODE_NUMPAD_ENTER: guiKey = GK_RETURN; break;
+	case AKEYCODE_DEL: guiKey = GK_BACKSPACE; break;
+	case AKEYCODE_FORWARD_DEL: guiKey = GK_DEL; break;
+	case AKEYCODE_TAB: guiKey = GK_TAB; break;
+	case AKEYCODE_DPAD_LEFT: guiKey = GK_LEFT; break;
+	case AKEYCODE_DPAD_RIGHT: guiKey = GK_RIGHT; break;
+	case AKEYCODE_DPAD_UP: guiKey = GK_UP; break;
+	case AKEYCODE_DPAD_DOWN: guiKey = GK_DOWN; break;
+	case AKEYCODE_MOVE_HOME: guiKey = GK_HOME; break;
+	case AKEYCODE_MOVE_END: guiKey = GK_END; break;
+	default:
+		if (guiKey >= 'a' && guiKey <= 'z') guiKey += 'A' - 'a';
+		break;
+	}
+
+	event_t gui = {};
+	gui.type = EV_GUI_Event;
+	gui.subtype = event.subtype;
+	gui.data1 = static_cast<SWORD>(guiKey);
+	gui.data3 = event.data3;
+	if (guiKey != 0 && CHAT_Input(&gui)) return true;
+	if (event.x >= ' ' && event.x <= 255 && event.x != 127)
+	{
+		gui.subtype = EV_GUI_Char;
+		gui.data1 = static_cast<SWORD>(event.x);
+		gui.data2 = (event.data3 & GKM_ALT) != 0;
+		CHAT_Input(&gui);
+	}
+	return true;
 }
 
 void Zandronum_AndroidInput_GuiKey(int keycode, bool pressed)

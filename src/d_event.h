@@ -41,6 +41,7 @@ enum EGenericEvent
 	EV_GUI_Event,	// subtype specifies actual event
 	EV_DeviceChange,// a device has been connected or removed
 	EV_AndroidAction,	// data1: semantic action, data2: pressed state
+	EV_AndroidKeyboard,	// physical keyboard event awaiting Android input routing
 };
 
 // Event structure.

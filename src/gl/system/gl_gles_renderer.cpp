@@ -32,6 +32,7 @@
 #include "gl/renderer/gl_renderer.h"
 #include "gl/renderer/gl_colormap.h"
 #include "gl/renderer/gl_lightdata.h"
+#include "gl/system/gl_interface.h"
 #include "gl/utility/gl_geometric.h"
 #include "gl/data/gl_data.h"
 #include "gl/textures/gl_bitmap.h"
@@ -987,8 +988,10 @@ namespace
 		const bool desaturated = effect.colormap >= CM_DESAT1 && effect.colormap <= CM_DESAT31;
 		const bool noDesaturate = ordinaryMaterial && !desaturated;
 		const bool softLight = ordinaryMaterial && (glset.lightmode & 8) != 0;
-		const unsigned int macroVariant = (noGlow ? 1u : 0u) | (noDesaturate ? 2u : 0u);
-		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 40 +
+		const bool dynamicLights = ordinaryMaterial && gl_lights && gl_dynlight_shader && batch.lightCount > 0;
+		const unsigned int macroVariant = (noGlow ? 1u : 0u) | (noDesaturate ? 2u : 0u) |
+			(dynamicLights ? 4u : 0u);
+		const unsigned int key = static_cast<unsigned int>(effect.shaderIndex - FIRST_USER_SHADER) * 80 +
 			macroVariant * 10 +
 			(softLight ? 5 : 0) + variant;
 		const auto found = NativeUserPrograms.find(key);
@@ -1028,7 +1031,12 @@ namespace
 			"#define camerapos u_camera_position\n"
 			"#define pixelpos vec4(v_world_position, v_camera_distance)\n"
 			"#define lightlevel u_static_light.x\n"
-			"#define dlightcolor u_sprite_light\n"
+			"#define dlightcolor u_sprite_light\n" +
+			(dynamicLights ?
+				std::string("#define zandronum_lightrange min(u_light_counts * 2, ivec3(") +
+					std::to_string(gl.MaxLights()) + "))\n#define lightrange zandronum_lightrange\n"
+				"highp vec4 zandronum_light(int index) { if (index < 0 || index >= zandronum_lightrange.z) return vec4(0.0); highp int texel = (u_light_offset + index / 2) * 2 + index % 2; highp int width = textureSize(u_light_data, 0).x; return texelFetch(u_light_data, ivec2(texel % width, texel / width), 0); }\n"
+				: std::string()) +
 			"vec4 getLightColor(float fogdist, float fogfactor) { vec3 color = apply_static_light(v_color.rgb, fogdist); if (fogenabled > 0) color *= fogfactor; return vec4(apply_glow(color), v_color.a); }\n"
 			"vec4 applyFog(vec4 color, float factor) { return vec4(mix(u_fog_color.rgb, color.rgb, factor), color.a); }\n"
 			"vec4 getTexel(vec2 coords) { vec4 value = u_use_texture ? texture(u_texture, coords) : vec4(1.0); if ((u_material_flags & 4) != 0) value.a = 1.0; if (zandronum_masked_base || (u_material_flags & (16 | 64)) != 0) value.rgb = vec3(1.0); return desaturate(value); }\n" +
@@ -1073,9 +1081,16 @@ namespace
 		if (fogLayer != std::string::npos)
 			fragment.replace(fogLayer, fogAlpha.size(), "(1.0 - fog) * Process(vec4(1.0)).a * 0.75 * v_color.a");
 		const std::string macroDefines = std::string(noGlow ? "#define NO_GLOW\n" : "") +
-			(noDesaturate ? "#define NO_DESATURATE\n" : "");
+			(noDesaturate ? "#define NO_DESATURATE\n" : "") +
+			(dynamicLights ? "#define DYNLIGHT\n" : "");
+		std::string loweredShader;
+		if (!gl_GLES_LowerMaterialShader(data.GetString().GetChars(), dynamicLights, loweredShader))
+		{
+			NativeUserShaderFailures.insert(key);
+			return base;
+		}
 		fragment.insert(fragment.find("void main()"), contract + macroDefines +
-			gl_GLES_LowerMaterialShader(data.GetString().GetChars()) + "\n");
+			loweredShader + "\n");
 		char log[1024] = {};
 		const GLuint program = gl_GLES_LinkProgram(NativeMaterialVertexSource.c_str(), fragment.c_str(),
 			path, log, sizeof(log), true);
@@ -1383,10 +1398,10 @@ namespace
 		if (Resources.worldSamplers[0] == 0 || Resources.sceneSamplers[0] == 0) return;
 		int filter = gl_texture_filter;
 		if (filter < 0 || filter >= 6) filter = 0;
-		const float anisotropy = std::max(1.0f, std::min(static_cast<float>(gl_texture_filter_anisotropic),
-			static_cast<float>(Resources.maximumAnisotropy)));
-		if (Resources.textureFilter == filter && Resources.textureAnisotropy == anisotropy) return;
 		const TexFilter_s &settings = TexFilter[filter];
+		const float anisotropy = settings.mipmapping ? std::max(1.0f, std::min(static_cast<float>(gl_texture_filter_anisotropic),
+			static_cast<float>(Resources.maximumAnisotropy))) : 1.0f;
+		if (Resources.textureFilter == filter && Resources.textureAnisotropy == anisotropy) return;
 		for (unsigned int clamp = 0; clamp < 4; ++clamp)
 		{
 			glSamplerParameteri(Resources.worldSamplers[clamp], GL_TEXTURE_MIN_FILTER, settings.minfilter);

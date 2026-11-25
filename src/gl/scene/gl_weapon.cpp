@@ -571,5 +571,5 @@ void FGLRenderer::DrawTargeterSprites()
 
 	// The Targeter's sprites are always drawn normally.
 	for (i=ps_targetcenter, psp = &player->psprites[ps_targetcenter]; i<NUMPSPRITES; i++,psp++)
-		if (psp->state) DrawPSprite (player,psp,psp->sx, psp->sy, CM_DEFAULT, false, 0);
+		if (psp->state) DrawPSprite (player,psp,psp->sx, psp->sy, CM_DEFAULT, false, 0, 1.0f, 0, LegacyRenderStyles[STYLE_Normal].AsDWORD);
 }

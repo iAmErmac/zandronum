@@ -2,7 +2,10 @@
 #define ZANDRONUM_ANDROID_INPUT_H
 
 #ifdef __ANDROID__
+struct event_t;
 void Zandronum_AndroidInput_Key(int keycode, bool pressed);
+void Zandronum_AndroidInput_KeyboardKey(int keycode, bool pressed, int codepoint, int metaState, bool repeat);
+bool Zandronum_AndroidInput_ConsumeKeyboardEvent(event_t &event);
 void Zandronum_AndroidInput_GuiKey(int keycode, bool pressed);
 void Zandronum_AndroidInput_Text(int codepoint);
 void Zandronum_AndroidInput_Pointer(int pointerId, int action, float x, float y);
